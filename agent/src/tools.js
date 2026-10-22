@@ -222,8 +222,24 @@ export async function createToolGateway(fetchFn, library, settings = {}) {
   const mcpHub = createMcpHub(mcpPlatform, { initial: settings.mcp ?? [] });
   await mcpHub.ready;
 
-  function open(ctx) {
-    const token = randomToken();
+  // One MCP token per conversation key. Codex keeps a conversation's thread between turns, and the thread's MCP
+  // config (with its Authorization header) is fixed when the thread starts, so turn 2 still sends turn 1's token.
+  // Reusing the token and pointing it at the new turn's session keeps that thread's tool calls working (a fresh
+  // token per turn made every second Codex turn fail with 401 Unauthorized). A turn still open under the same key
+  // gets a token of its own, so two live turns never share one.
+  /** @type {Map<string, string>} */
+  const keyTokens = new Map();
+  const MAX_KEYS = 500;
+
+  /** @param {any} ctx @param {{ key?: string }} [opts] */
+  function open(ctx, opts = {}) {
+    const kept = opts.key ? keyTokens.get(opts.key) : undefined;
+    const token = kept && !sessions.has(kept) ? kept : randomToken();
+    if (opts.key && !kept) {
+      keyTokens.set(opts.key, token);
+      const oldest = keyTokens.keys().next().value;
+      if (keyTokens.size > MAX_KEYS && oldest !== undefined) keyTokens.delete(oldest);
+    }
     const seen = [];
     /** Finished calls' activity meta, waiting for the engine to attach it to the matching end event. @type {{ tool: string, key: string, meta: import("./domain").ActivityMeta }[]} */
     const metaLog = [];

@@ -94,7 +94,8 @@ export interface ToolSession {
 }
 
 export interface ToolGateway {
-  open(ctx: ToolContext): ToolSession;
+  /** `key` (a conversation) keeps one MCP token across that conversation's turns; see tools.js open(). */
+  open(ctx: ToolContext, opts?: { key?: string }): ToolSession;
   mcpServers: McpHub;
   dispose(): Promise<void>;
 }

@@ -292,3 +292,26 @@ test('searchTally counts search calls and failures; a scholarly search with ever
   assert.equal(tally.failed, 2);
   assert.match(tally.firstError, /library search failed/);
 });
+
+test('a conversation keeps one MCP token across turns, so a pooled Codex thread can still call tools', async () => {
+  const gateway = await createToolGateway(fetch, fakeLibrary(), {});
+  const first = gateway.open(CTX, { key: 'chat-1' });
+  first.close(); // turn 1 ends
+  const second = gateway.open({ ...CTX, audit: 'turn 2' }, { key: 'chat-1' });
+  assert.equal(second.mcp.token, first.mcp.token);
+  assert.equal(gateway._sessionForToken(first.mcp.token), second); // the old token now reaches turn 2's tools
+  const res = await handleMcp(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }), gateway._sessionForToken(first.mcp.token));
+  assert.equal(res.status, 200);
+});
+
+test('other conversations, and a second live turn of the same one, get their own tokens', async () => {
+  const gateway = await createToolGateway(fetch, fakeLibrary(), {});
+  const a = gateway.open(CTX, { key: 'chat-a' });
+  const b = gateway.open(CTX, { key: 'chat-b' });
+  assert.notEqual(a.mcp.token, b.mcp.token);
+  const overlapping = gateway.open(CTX, { key: 'chat-a' }); // chat-a's turn is still open
+  assert.notEqual(overlapping.mcp.token, a.mcp.token);
+  assert.equal(gateway._sessionForToken(a.mcp.token), a);
+  const unkeyed = gateway.open(CTX);
+  assert.notEqual(unkeyed.mcp.token, a.mcp.token);
+});

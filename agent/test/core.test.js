@@ -306,3 +306,12 @@ test('stream(): a failed call gets no meta, and a gateway without takeMeta still
   assert.equal(end.ok, false);
   assert.equal(end.detail, undefined);
 });
+
+test('each turn opens its tools under the conversation key', async () => {
+  const keys = [];
+  const gateway = { ...fakeGateway(), open(ctx, opts) { keys.push(opts?.key); return fakeGateway().open(ctx); } };
+  const providers = new Map([['fake', fakeProvider('fake', [{ type: 'final', text: 'ok', json: null, usage: {} }])]]);
+  const runner = createTurnRunner({ providers, getRoleModel: async () => ({ provider: 'fake', model: null }), gateway, library: noopLibrary, slots: createSlots({ total: 6 }) });
+  await collect(runner.stream('chat', { sessionKey: 'conv-9', instructions: '', history: [], input: 'hi', tools: { scope: { kind: 'library' }, web: 'off', sources: { papers: true, notes: true, scholarly: false, web: false }, audit: 'test' } }, new AbortController().signal));
+  assert.deepEqual(keys, ['conv-9']);
+});

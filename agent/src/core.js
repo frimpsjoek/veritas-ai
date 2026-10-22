@@ -202,7 +202,7 @@ export function createTurnRunner(deps) {
 
     const limits = await getTurnLimits(role);
     const release = await deps.slots.acquire(role, signal);
-    const session = deps.gateway.open(guarded ? { ...req.tools, none: true } : req.tools);
+    const session = deps.gateway.open(guarded ? { ...req.tools, none: true } : req.tools, { key: req.sessionKey });
 
     // A turn's own generation or tool loop must not require a human to notice and hand-cancel it (T7.1:
     // evidence/p7-t71-criterion7-search-latency.txt -- a lead's plan turn streamed text for 16 minutes with no
