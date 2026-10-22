@@ -4,7 +4,7 @@
 with citations you can open, and finds new papers for you, on your own machine.
 
 Built for the [OSI Hackathon 2026](https://scientificintelligence.org/campaigns/osi-hackathon-2026) by team
-Veritas AI.
+Veritas AI: Joseph Frimpong, Oded Asiedu and Huihuo Zheng.
 
 ## What it does
 
