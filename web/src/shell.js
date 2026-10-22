@@ -129,7 +129,10 @@ export function createShell({ host, doc = document, win = /** @type {Window} */ 
 
   // Citations in chat open the paper or note here instead of leaving for Zotero or Obsidian.
   host.setOpenRef(/** @param {any} ref */ (ref) => {
-    if (ref.kind === 'note' && isDocumentPath(ref.path)) { host.openLink(new URL(documentUrl(ref.path), win.location.href).href, { outside: true }); return true; }
+    if (ref.kind === 'note' && isDocumentPath(ref.path)) {
+      if (host.openDocument) host.openDocument(ref.path); else host.openLink(new URL(documentUrl(ref.path), win.location.href).href, { outside: true });
+      return true;
+    }
     if (ref.kind === 'note') { go({ view: 'note', path: ref.path }); return true; }
     if (ref.kind !== 'paper') return false;
     void host.json(`/links?${new URLSearchParams({ path: `@${ref.citekey}` })}`).then(
@@ -210,6 +213,7 @@ export function createShell({ host, doc = document, win = /** @type {Window} */ 
   async function render() {
     const token = ++renderToken;
     browser.close();
+    host.assets.revokeAll(); // the blob URLs of the view being left (note images from another origin)
     route = parseRoute(win.location.hash);
     paintRail();
     root.classList.toggle('is-reading', route.view === 'paper' || route.view === 'note');

@@ -4,6 +4,7 @@
 // (cookie sign-in, no CORS), or, when the app is hosted elsewhere, the one connection.js chose (Bearer token, CORS).
 import { createRemoteRuntime } from '../../agent/src/remote.js';
 import { createFetchApi, createWebTransport } from './transport.js';
+import { createAssets } from './assets.js';
 import { createDialogs } from './dialogs.js';
 import { linkMode, planOpen } from '../../ui/src/links.js';
 
@@ -51,7 +52,7 @@ function citationLabel(item) {
  *   `onOpenRef` lets the shell show a paper or note itself; returning true means it did. The default is a deep link
  *   into Zotero or Obsidian. `base` + `token`: a server on another origin (connection.js), reached with
  *   `Authorization: Bearer`; without them the page talks to the server it came from, with its cookie.
- * @returns {UiHost & { ready: Promise<void>, server: { url: string, sameOrigin: boolean }, json(path: string, method?: "GET" | "POST" | "DELETE" | "PATCH", body?: unknown): Promise<any>, setContext(items: ContextItem[]): void, setOpenRef(fn: ((ref: any) => boolean | void) | null): void, setBrowser(fn: ((url: string) => void) | null): void }}
+ * @returns {UiHost & { ready: Promise<void>, server: { url: string, sameOrigin: boolean }, assets: import('./assets.js').Assets, assetUrl(path: string): string | Promise<string>, openServerFile(route: string, query: Record<string, string>): void, openDocument: ((path: string) => void) | undefined, json(path: string, method?: "GET" | "POST" | "DELETE" | "PATCH", body?: unknown): Promise<any>, setContext(items: ContextItem[]): void, setOpenRef(fn: ((ref: any) => boolean | void) | null): void, setBrowser(fn: ((url: string) => void) | null): void }}
  */
 export function createWebHost(options = {}) {
   const doc = options.doc ?? document;
@@ -75,6 +76,10 @@ export function createWebHost(options = {}) {
     } else if (up && pingTimer) { clearInterval(pingTimer); pingTimer = null; }
   };
   const api = createFetchApi(base, { fetch: options.fetch, token, onReachable: setReachable });
+  const assets = createAssets({ base, token, fetch: options.fetch, URL: win.URL });
+  /** The one place the app opens a window. `keep`: hand back the tab (an empty one, filled once a ticket arrives).
+   *  @param {string} url @param {boolean} [keep] @returns {Window | null} */
+  const openTab = (url, keep = false) => win.open(url, '_blank', keep ? '' : 'noopener');
   const dialogs = createDialogs(doc);
 
   // ---- remembered state: held in memory so prefs.get stays synchronous, written through to the server
@@ -131,6 +136,23 @@ export function createWebHost(options = {}) {
     kind: 'web',
     placement: 'page',
     server: { url: base, sameOrigin: !token },
+    assets,
+    // note images (view-kit.js noteFragment): the plain path on the same origin, a blob URL from elsewhere
+    assetUrl: (path) => (assets.sameOrigin ? path : assets.url(path)),
+    /** Opens a server file (a PDF, an image) in a new tab. The tab is opened during the click, so it is not blocked as
+     *  a popup, and pointed at the file once its ticket is back. */
+    openServerFile(route, query) {
+      if (assets.sameOrigin) { openTab(`${base}${route}?${new URLSearchParams(query)}`); return; }
+      const tab = openTab('', true);
+      assets.frame(route, query).then((url) => {
+        if (tab) { tab.opener = null; tab.location.href = url; } else win.location.assign(url);
+      }, (error) => {
+        tab?.close();
+        host.notice(`Couldn't open the file (${error instanceof Error ? error.message : error}).`);
+      });
+    },
+    // an indexed PDF or image opened from a related or linked row; undefined keeps the plain same-origin link
+    openDocument: token ? (path) => host.openServerFile('/folder-file', { path }) : undefined,
     can: { scopes: true, addToLibrary: true, openInTab: false, notesWithoutServer: false, linksInside: true },
     ready,
     json: (path, method, body) => api.call(path, method, body),
@@ -228,7 +250,7 @@ export function createWebHost(options = {}) {
       try { abs = new URL(url, win.location.href).href; } catch { /* left as given */ }
       const plan = planOpen(abs, opts, { mode: linkMode(host.prefs), hasBrowser: Boolean(browserHook) });
       if (plan === 'scheme') win.location.assign(url);
-      else if (plan === 'outside') win.open(abs, '_blank', 'noopener');
+      else if (plan === 'outside') openTab(abs);
       else browserHook?.(abs);
     },
     setBrowser(fn) { browserHook = fn; },

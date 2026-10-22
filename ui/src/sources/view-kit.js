@@ -48,12 +48,14 @@ export const isNotePath = (path) => /\.(md|markdown|txt)$/i.test(path) && !path.
 export const documentUrl = (path) => `/folder-file?${new URLSearchParams({ path })}`;
 
 /** What a related or linked row does: papers and notes open here; a PDF or image (any folder) opens from the server
- *  in the browser's own viewer.
- *  @param {Window} win @param {(route: WebRoute) => void} go @returns {(ref: { path: string }) => void} */
-export function openRefHandler(win, go) {
+ *  in the browser's own viewer: on the same origin by its plain URL, else through `openDocument` (the web app on
+ *  another origin opens it with a single-use ticket).
+ *  @param {Window} win @param {(route: WebRoute) => void} go @param {((path: string) => void) | undefined} [openDocument]
+ *  @returns {(ref: { path: string }) => void} */
+export function openRefHandler(win, go, openDocument) {
   return (ref) => {
     const route = routeOfPath(ref.path);
-    if (route.view === 'note' && isDocumentPath(ref.path)) win.location.assign(documentUrl(ref.path)); else go(route);
+    if (route.view === 'note' && isDocumentPath(ref.path)) { if (openDocument) openDocument(ref.path); else win.location.assign(documentUrl(ref.path)); } else go(route);
   };
 }
 
@@ -285,9 +287,13 @@ export function linkWikiTargets(markdown, known, notePath = '') {
 /**
  * Makes rendered note HTML safe to show and routes its links in-app: scripts and handlers are removed, `.cite` spans
  * become links to the paper, external links get rel=noopener (the caller routes their clicks with interceptLinks), `.wikilink` spans with no note stay as quiet text.
- * @param {Document} doc @param {string} html @returns {DocumentFragment}
+ * An image from the server (`/file?...`) goes through `host.assetUrl` when the host has one: the web app on another
+ * origin swaps in a blob URL fetched with its token. Without the hook the path stays as it is.
+ * @param {Document} doc @param {string} html
+ * @param {{ assetUrl?: (path: string) => string | Promise<string> } | null} [host]
+ * @returns {DocumentFragment}
  */
-export function noteFragment(doc, html) {
+export function noteFragment(doc, html, host) {
   const template = doc.createElement('template');
   template.innerHTML = html;
   const root = template.content;
@@ -336,6 +342,16 @@ export function noteFragment(doc, html) {
   for (const link of Array.from(root.querySelectorAll('a[href]'))) {
     const href = link.getAttribute('href') ?? '';
     if (/^https?:/i.test(href)) link.setAttribute('rel', 'noopener noreferrer'); // opened by interceptLinks (links.js) on the container
+  }
+  const assetUrl = host?.assetUrl;
+  // The template's images have not loaded yet (its content is inert), so a swapped path is never requested without the token.
+  if (assetUrl) for (const img of /** @type {HTMLImageElement[]} */ (Array.from(root.querySelectorAll('img[src^="/"]')))) {
+    const path = img.getAttribute('src') ?? '';
+    if (path.startsWith('//')) continue;
+    const swapped = assetUrl(path);
+    if (typeof swapped === 'string') { if (swapped !== path) img.setAttribute('src', swapped); continue; }
+    img.removeAttribute('src');
+    swapped.then((url) => img.setAttribute('src', url), () => { img.alt = `Image unavailable${img.alt ? `: ${img.alt}` : ''}`; });
   }
   return root;
 }

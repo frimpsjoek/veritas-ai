@@ -119,7 +119,7 @@ export function createBrowserPanel({ host, doc, win, into }) {
     article.append(h(doc, 'h1', 'sbw-reader-title', page.title));
     if (page.byline) article.append(h(doc, 'p', 'sbw-reader-authors', page.byline));
     const text = h(doc, 'div', 'sbw-prose sbw-note-body');
-    text.append(noteFragment(doc, page.html));
+    text.append(noteFragment(doc, page.html, host));
     // links in the article are relative to the page; the server already made them absolute
     interceptLinks(text, innerHost);
     article.append(text);
@@ -134,11 +134,14 @@ export function createBrowserPanel({ host, doc, win, into }) {
   function pdf(url, title) {
     modeButton.hidden = true;
     // /web/page already fetched this and saw a PDF, so there is no probe; PDF.js reports a later failure through `ready`
-    const src = `${win.location.origin}/web/pdf?${new URLSearchParams({ url })}`;
+    const path = `/web/pdf?${new URLSearchParams({ url })}`;
+    const src = `${host.server.url}${path}`;
     const problem = h(doc, 'p', 'sbw-hint sbw-pdf-problem');
     problem.hidden = true;
     const viewer = PdfViewer(doc, win, {
-      src, title: title || 'PDF', marks: [], openRaw: () => host.openLink(url, { outside: true }),
+      // from another origin PDF.js gets the bytes, fetched with the token (no cookie goes there)
+      src, data: host.server.sameOrigin ? undefined : host.assets.bytes(path),
+      title: title || 'PDF', marks: [], openRaw: () => host.openLink(url, { outside: true }),
       failed: (message) => { problem.textContent = message; problem.hidden = false; },
     });
     body.replaceChildren(viewer.el, problem);

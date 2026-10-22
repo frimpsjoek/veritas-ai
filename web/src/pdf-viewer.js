@@ -53,7 +53,9 @@ function textOffset(layer, range) {
 
 /**
  * @param {Document} doc @param {Window} win
- * @param {{ src: string, title: string, openRaw?: () => void, marks: Mark[], save?: (json: HighlightJSON) => Promise<SaveResult>, failed: (message: string) => void }} o
+ * @param {{ src: string, data?: ArrayBuffer | Promise<ArrayBuffer>, title: string, openRaw?: () => void, marks: Mark[], save?: (json: HighlightJSON) => Promise<SaveResult>, failed: (message: string) => void }} o
+ *   `data`: the PDF's bytes, read instead of `src` (a server on another origin, where PDF.js's own requests carry no
+ *   sign-in); `src` is then only the "Open PDF" link's address.
  * @returns {{ el: HTMLElement, ready: Promise<void> }}
  */
 export function PdfViewer(doc, win, o) {
@@ -265,7 +267,8 @@ export function PdfViewer(doc, win, o) {
 
   const ready = (async () => {
     lib = await loadPdfjs();
-    pdf = await lib.getDocument({ url: o.src, isEvalSupported: false }).promise;
+    const data = o.data ? await o.data : null;
+    pdf = await lib.getDocument(data ? { data: new Uint8Array(data), isEvalSupported: false } : { url: o.src, isEvalSupported: false }).promise;
     const first = (await pdf.getPage(1)).getViewport({ scale: 1 });
     const labels = /** @type {string[] | null} */ (await pdf.getPageLabels().catch(() => null));
     for (let index = 0; index < pdf.numPages; index += 1) {

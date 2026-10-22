@@ -94,7 +94,7 @@ export async function paintNote(into, ctx, route) {
   heading.append(titleNodes(doc, title));
   head.append(heading, h(doc, 'p', 'sbw-reader-venue', folderLabel(route.path)));
   const body = h(doc, 'div', 'sbw-prose sbw-note-body');
-  const fragment = noteFragment(doc, html);
+  const fragment = noteFragment(doc, html, host);
   restoreMath(doc, fragment, formulas, mathNode);
   body.append(fragment);
   interceptLinks(body, host);
@@ -114,7 +114,7 @@ export async function paintNote(into, ctx, route) {
   }
   if (!headings.length) toc.hidden = true;
 
-  const openRef = openRefHandler(win, go);
+  const openRef = openRefHandler(win, go, host.openDocument);
   const resolveTitle = titleResolver(api);
   const related = RelatedPanel(doc, { fetchJSON: api, open: openRef, linked: false });
   const links = LinksPanel(doc, { fetchJSON: api, open: openRef, resolveTitle });

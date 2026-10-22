@@ -37,6 +37,20 @@ export async function probePdf(win, src) {
   }
 }
 
+/**
+ * probePdf's answer for a server on another origin: the whole PDF, fetched with the token, or why it could not be.
+ * @param {import('./assets.js').Assets} assets @param {string} path
+ * @returns {Promise<{ ok: true, data: ArrayBuffer } | { ok: false, message: string }>}
+ */
+export async function pdfBytes(assets, path) {
+  try {
+    return { ok: true, data: await assets.bytes(path) };
+  } catch (error) {
+    const e = /** @type {any} */ (error);
+    return { ok: false, message: e?.status ? String(e.message) : `Couldn't reach the server (${e?.message ?? e}).` };
+  }
+}
+
 /** The parts of /zotero?key= this page reads. @param {any} item */
 export function paperParts(item) {
   const attachments = /** @type {any[]} */ (Array.isArray(item.attachments) ? item.attachments : []);
@@ -166,7 +180,8 @@ export async function paintPaper(into, ctx, route) {
   const pdfSection = addSection('pdf', 'PDF', null);
   if (parts.pdf) {
     const pdf = parts.pdf;
-    const src = `${win.location.origin}/zotero/pdf?${new URLSearchParams({ key: pdf.key })}`;
+    const query = { key: String(pdf.key) };
+    const src = `${host.server.url}/zotero/pdf?${new URLSearchParams(query)}`;
     pdfSection.append(h(doc, 'p', 'sbw-hint', 'Checking the PDF…'));
     const cantShow = (/** @type {string} */ message) => {
       const missing = h(doc, 'div', 'sbw-pdf-missing');
@@ -177,13 +192,16 @@ export async function paintPaper(into, ctx, route) {
       pdfSection.querySelector('.sbw-pdf')?.remove();
       pdfSection.append(missing);
     };
-    void Promise.all([probePdf(win, src), waitingMarks(api, pdf.key)]).then(([result, waiting]) => {
+    // From another origin there is no cookie: the bytes come with the token, and PDF.js reads them instead of the URL.
+    const load = host.server.sameOrigin ? probePdf(win, src) : pdfBytes(host.assets, `/zotero/pdf?${new URLSearchParams(query)}`);
+    void Promise.all([load, waitingMarks(api, pdf.key)]).then(([result, waiting]) => {
       pdfSection.querySelector('.sbw-hint')?.remove();
       if (!result.ok) return cantShow(result.message);
       const problem = h(doc, 'p', 'sbw-hint sbw-pdf-problem');
       problem.hidden = true;
       const viewer = PdfViewer(doc, win, {
-        src, title: pdf.title || 'PDF', openRaw: () => host.openLink(new URL(src, win.location.href).href, { outside: true }), marks: [...savedMarks(pdf), ...waiting],
+        src, data: 'data' in result ? /** @type {ArrayBuffer} */ (result.data) : undefined, title: pdf.title || 'PDF', marks: [...savedMarks(pdf), ...waiting],
+        openRaw: () => { if (host.server.sameOrigin) host.openLink(new URL(src, win.location.href).href, { outside: true }); else host.openServerFile('/zotero/pdf', query); },
         save: (annotation) => api('/zotero/annotate', {}, { method: 'POST', body: { key: pdf.key, annotation } }),
         failed: (message) => { problem.textContent = message; problem.hidden = false; },
       });
@@ -210,7 +228,7 @@ export async function paintPaper(into, ctx, route) {
       section.append(body);
       body.textContent = 'Loading…';
       void api('/render', {}, { method: 'POST', body: { markdown } }).then(
-        (reply) => { body.replaceChildren(noteFragment(doc, String(reply?.html ?? ''))); interceptLinks(body, host); },
+        (reply) => { body.replaceChildren(noteFragment(doc, String(reply?.html ?? ''), host)); interceptLinks(body, host); },
         () => { body.textContent = markdown; },
       );
     }
@@ -218,7 +236,7 @@ export async function paintPaper(into, ctx, route) {
 
   // ---- the panel: Info, Related, Links
   const path = `zotero/${route.key}`;
-  const openRef = openRefHandler(win, go);
+  const openRef = openRefHandler(win, go, host.openDocument);
   const resolveTitle = titleResolver(api);
 
   const info = h(doc, 'div');
