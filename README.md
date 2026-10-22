@@ -27,6 +27,17 @@ Veritas puts the three in one index and makes every answer traceable:
 - **Yours.** The server runs on your Mac; the web app reaches it from your phone over your tailnet. Everything Veritas
   writes is plain Markdown.
 
+## Research personas
+
+[`docs/research-personas/research-persona-knowledge-base.md`](docs/research-personas/research-persona-knowledge-base.md)
+is a structured catalogue of 31 research personas across materials science, chemistry, physics, biology, computer
+science and HPC. Each persona lists its core research areas, typical questions, methods, free tools, key data,
+ranked research directions, routing signals and training examples. Veritas indexes it like any other note, so the
+chat can draw on it today ("which free tools fit a DFT + ML workflow?").
+
+Next: persona agents. The user picks one or more personas (e.g. HPC + computational chemistry) when asking a
+question, and Veritas answers from each angle: its methods, tools, data and next directions.
+
 ## Built during the hackathon (Oct 21-22, 2026)
 
 Veritas grew out of Second Brain, Joseph Frimpong's earlier tool. During the event:
