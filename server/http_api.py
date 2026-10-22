@@ -62,6 +62,7 @@ GET  /web/state   POST /web/state {"prefs"?, "files"?}   the web app's settings 
 GET  /web/page?url=&prefer=reader               the link panel: {mode: frame|reader|pdf|blocked}; a DOI goes to the library
                                                PDF, then an open-access PDF, then the abstract (web_page.py, spec 022)
 GET  /web/pdf?url=                              that PDF streamed with Range (a DOI: the library's or open-access copy)
+POST /web/ticket {"route","query"}             a one-use, 120 s ticket for a frame/PDF/image URL (?ticket=), phase 3
 POST /app/login {"token"}                      sign a browser in: sets the `sb_session` cookie (401 on a wrong token)
 
 Listens on 127.0.0.1 only. The phone reaches it through `tailscale serve`, which forwards tailnet requests to this
@@ -106,6 +107,7 @@ import skills
 import sources
 import paper_figures
 import pdf_route
+import tickets
 import web_origins
 import web_app
 import web_page
@@ -458,6 +460,16 @@ class Handler(BaseHTTPRequestHandler):
     def _allowed(self) -> bool:
         kind = request_class(self.headers)
         self._cors_origin = self.headers.get("Origin") if kind == "app" else None
+        # A frame or PDF.js request of the hosted web app: no token header, a one-use ticket in the URL instead
+        # (tickets.py). Checked before the other-website refusal, because a cross-site frame looks like one.
+        if self.command == "GET":
+            parsed = urlparse(self.path)
+            q = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+            if q.get("ticket") and parsed.path in tickets.ROUTES:
+                if tickets.redeem(q["ticket"], parsed.path, q):
+                    return True
+                self._send(403, {"error": "this link has expired; open it again"})
+                return False
         if kind == "app":
             # Never the loopback pass or the cookie: a listed site still has to prove it holds the token.
             if bearer_ok(self.headers):
@@ -703,6 +715,16 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if self._needs_zotero(route):
                 return
+            if route == "/web/ticket":
+                body = self._body()
+                query = body.get("query") or {}
+                if not isinstance(query, dict):
+                    return self._send(400, {"error": "query is an object"})
+                try:
+                    ticket = tickets.issue(str(body.get("route", "")), query)
+                except ValueError as error:
+                    return self._send(400, {"error": str(error)})
+                return self._send(200, {"ticket": ticket, "expires_in": int(tickets.TTL)})
             if route == "/app/login":
                 if not hmac.compare_digest(str(self._body().get("token", "")).encode(), token().encode()):
                     return self._send(401, {"error": "wrong token"})
