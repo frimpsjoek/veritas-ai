@@ -98,6 +98,13 @@ export async function runBrowserChecks(browser, port, outDir) {
     await page.waitForSelector('.sbw-browser .sbw-pdf-pages canvas', { timeout: 8000 });
     const address = await page.evaluate(() => document.querySelector('.sbw-browser-address')?.textContent ?? '');
     check(`${tag} a DOI opens the open-access PDF, labelled as a preprint`, address === 'Preprint (arXiv) · files.example/paper.pdf', { address });
+    // a web PDF is read only: selecting its text offers no highlight colours (they could not be saved)
+    await page.waitForSelector('.sbw-browser .textLayer span', { timeout: 8000 });
+    await page.evaluate(() => { const span = document.querySelector('.sbw-browser .textLayer span'); const r = document.createRange(); r.selectNodeContents(span); getSelection().removeAllRanges(); getSelection().addRange(r); });
+    await page.waitForTimeout(400);
+    const bar = await page.evaluate(() => { const b = document.querySelector('.sbw-browser .sbw-hl-bar'); return !!b && !b.hidden; });
+    check(`${tag} selecting text in a web PDF offers no highlight bar`, !bar);
+    await page.evaluate(() => getSelection().removeAllRanges());
 
     // the bar: ↗ outside, reload asks again, close and Escape
     await open('https://frame.example/page');

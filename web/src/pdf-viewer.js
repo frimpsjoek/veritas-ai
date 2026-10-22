@@ -53,7 +53,7 @@ function textOffset(layer, range) {
 
 /**
  * @param {Document} doc @param {Window} win
- * @param {{ src: string, title: string, openRaw?: () => void, marks: Mark[], save: (json: HighlightJSON) => Promise<SaveResult>, failed: (message: string) => void }} o
+ * @param {{ src: string, title: string, openRaw?: () => void, marks: Mark[], save?: (json: HighlightJSON) => Promise<SaveResult>, failed: (message: string) => void }} o
  * @returns {{ el: HTMLElement, ready: Promise<void> }}
  */
 export function PdfViewer(doc, win, o) {
@@ -128,13 +128,25 @@ export function PdfViewer(doc, win, o) {
     page.el.classList.add('is-drawn');
   };
 
+  /** Gives a page's pixels back when it is far from view. Safari caps the memory of all canvases on a page (a
+   *  retina page is ~36 MB), and past the cap it draws nothing, so a long PDF went blank after about ten pages. */
+  const release = (/** @type {number} */ index) => {
+    const page = pages[index];
+    if (!page.drawn) return;
+    page.gen++;
+    page.drawn = 0;
+    page.canvas.width = 0;
+    page.canvas.height = 0;
+    page.el.classList.remove('is-drawn');
+  };
+
   const near = new IntersectionObserver((entries) => {
     for (const entry of entries) {
-      if (!entry.isIntersecting) continue;
       const index = Number(/** @type {HTMLElement} */ (entry.target).dataset.pageIndex);
+      if (!entry.isIntersecting) { release(index); continue; }
       render(index).catch((error) => { status.textContent = `Couldn't draw page ${index + 1}: ${error?.message ?? error}`; });
     }
-  }, { rootMargin: '800px 0px' });
+  }, { rootMargin: '1600px 0px' });
 
   /** Sizes every page for the current width (pages not drawn yet take the first page's shape) and draws those in view again. */
   const layout = () => {
@@ -212,6 +224,7 @@ export function PdfViewer(doc, win, o) {
         resized?.disconnect();
         return;
       }
+      if (!o.save) return; // read only (a PDF from the web): selecting text only copies it
       if (tools.contains(doc.activeElement)) return; // typing a comment clears the selection; the bar keeps what it picked
       const found = readSelection();
       if (!found) { if (!tools.hidden) close(); return; }
@@ -240,7 +253,7 @@ export function PdfViewer(doc, win, o) {
     drawMarks(chosen.pageIndex);
     say();
     try {
-      const result = await o.save(json);
+      const result = await /** @type {NonNullable<typeof o.save>} */ (o.save)(json);
       mark.waiting = result.status !== 'added';
     } catch (error) {
       marks.splice(marks.indexOf(mark), 1);

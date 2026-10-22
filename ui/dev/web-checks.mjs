@@ -12,7 +12,8 @@ import { formFromRoutine } from '../src/chat/radar-data.js';
 
 const dist = fileURLToPath(new URL('../../web/dist-web', import.meta.url));
 const WIDTHS = [1280, 700, 360];
-const ROUTES = ['home', 'chat', 'routines', 'projects', 'settings', 'library'];
+// routines again after settings: a hidden Settings page once stayed on screen under it (is-fill beat [hidden])
+const ROUTES = ['home', 'chat', 'routines', 'projects', 'settings', 'routines', 'library'];
 
 /** @param {import("playwright").Browser} browser @param {number} port @param {string} outDir */
 export async function runWebChecks(browser, port, outDir) {
@@ -206,14 +207,16 @@ export async function runWebChecks(browser, port, outDir) {
       await go(page, `#/${route}`);
       const state = await page.evaluate(() => ({
         chats: document.querySelectorAll('.sb-ai').length,
-        pageVisible: !document.querySelector('.sbw-view-page').hidden,
-        chatVisible: !document.querySelector('.sbw-view-chat').hidden,
+        pageVisible: getComputedStyle(document.querySelector('.sbw-view-page')).display !== 'none',
+        chatVisible: getComputedStyle(document.querySelector('.sbw-view-chat')).display !== 'none',
+        pageScroll: document.scrollingElement.scrollHeight - innerHeight,
         text: (document.querySelector('.sbw-view:not([hidden])')?.innerText ?? '').length,
         active: document.querySelector('.sbw-nav-item.is-active')?.dataset.view ?? (document.querySelector('.sbw-more.is-active') ? 'settings' : null),
       }));
       const inChat = route === 'chat' || route === 'routines';
       check(`${tag} #/${route} renders`, state.chats <= 1 && state.chatVisible === inChat && state.pageVisible === !inChat && state.text > 0, state);
       check(`${tag} #/${route} has no sideways page scroll`, await noSideways(page));
+      check(`${tag} #/${route} never scrolls the page past the app (views scroll inside)`, state.pageScroll <= 1, state.pageScroll);
       // Routines moved into Settings: its page lights the More item, like Settings does
       check(`${tag} #/${route} marks its rail item`, state.active === (route === 'routines' ? 'settings' : route), state.active);
     }

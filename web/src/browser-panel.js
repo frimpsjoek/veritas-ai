@@ -139,7 +139,6 @@ export function createBrowserPanel({ host, doc, win, into }) {
     problem.hidden = true;
     const viewer = PdfViewer(doc, win, {
       src, title: title || 'PDF', marks: [], openRaw: () => host.openLink(url, { outside: true }),
-      save: async () => { throw new Error('Highlights are saved for the PDFs in your library. Add this paper to your library first.'); },
       failed: (message) => { problem.textContent = message; problem.hidden = false; },
     });
     body.replaceChildren(viewer.el, problem);
