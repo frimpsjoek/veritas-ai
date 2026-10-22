@@ -122,7 +122,7 @@ def doi_of(url: str) -> str | None:
 
 def library_pdf(doi: str) -> tuple[str, str] | None:
     """(attachment key, title) of a PDF in the Zotero library for this DOI, or None."""
-    if not zotero.ZOTERO.is_dir():
+    if not zotero.root().is_dir():
         return None
     try:
         rows = zotero.snapshot("reader", max_age=60).execute(

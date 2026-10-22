@@ -172,7 +172,7 @@ def _render_annotation(key: str, target: Path) -> bool:
     if not row or not row[1]:
         return False
     position, stored, attachment = json.loads(row[0]), row[1], row[2]
-    pdf_path = zotero.ZOTERO / "storage" / attachment / stored[8:] if stored.startswith("storage:") else Path(stored)
+    pdf_path = zotero.root() / "storage" / attachment / stored[8:] if stored.startswith("storage:") else Path(stored)
     rects = position.get("rects") or []
     if not pdf_path.is_file() or not rects or "pageIndex" not in position:
         return False

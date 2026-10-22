@@ -731,50 +731,87 @@ def index_media(db: sqlite3.Connection, verbose: bool, progress: Progress) -> in
 
 
 def index_zotero(db: sqlite3.Connection, verbose: bool, progress: Progress) -> int:
-    """Adds, updates and removes Zotero items. Skipped entirely when Zotero's files have not changed, unless some
-    indexed item is still missing `collection_keys` (a one-time backfill after that field was added)."""
+    """Every enabled Zotero library: the default one as zotero/KEY, the others as <name>:/zotero/KEY (phase 2).
+    Items of a library that is no longer enabled are removed."""
+    changed = 0
+    default = LAYOUT.libraries[0] if LAYOUT.libraries else None
+    if default is not None or zotero.available():
+        changed += _index_library(db, verbose, progress, "", "zotero_fingerprint")
+    others = LAYOUT.libraries[1:]
+    for lib in others:
+        with zotero.library(lib.path):
+            changed += _index_library(db, verbose, progress, lib.prefix, f"zotero_fingerprint:{lib.name}")
+    keep = {lib.prefix for lib in others}
+    for (path,) in db.execute("SELECT path FROM notes WHERE source='zotero' AND path LIKE '%:/%'").fetchall():
+        if path[:path.index(":/") + 2] not in keep and not path.startswith(kept_prefixes() or ("\0",)):
+            delete_note(db, path)
+    db.commit()
+    return changed
+
+
+def _index_library(db: sqlite3.Connection, verbose: bool, progress: Progress, prefix: str, fingerprint_key: str) -> int:
+    """Adds, updates and removes one library's items (the one zotero.root() names). Skipped entirely when Zotero's
+    files have not changed, unless some indexed item is still missing `collection_keys` (a one-time backfill after
+    that field was added). Collections and paper notes belong to the default library (prefix "") only."""
     if not zotero.available():
         return 0
+    mine = "path LIKE ? || '%'" if prefix else "path NOT LIKE '%:/%'"
+    args = (prefix,) if prefix else ()
     fingerprint = json.dumps(zotero.fingerprint())
-    row = db.execute("SELECT value FROM meta WHERE key='zotero_fingerprint'").fetchone()
+    row = db.execute("SELECT value FROM meta WHERE key=?", (fingerprint_key,)).fetchone()
     missing_keys = {r[0] for r in db.execute(
-        "SELECT path FROM notes WHERE source='zotero' AND (meta IS NULL OR json_extract(meta, '$.collection_keys') IS NULL)")}
+        f"SELECT path FROM notes WHERE source='zotero' AND {mine} AND (meta IS NULL OR json_extract(meta, '$.collection_keys') IS NULL)",
+        args)}
     if row and row[0] == fingerprint and not missing_keys:
         return 0
     progress.stage("zotero")
     docs = zotero.documents()
-    tree = zotero.collection_tree()
-    db.execute("DELETE FROM collections")
-    db.executemany("INSERT INTO collections VALUES (?,?,?)", [(c["key"], c["name"], c["parent"]) for c in tree])
-    known = {r[0]: (r[1], r[2]) for r in db.execute("SELECT path, mtime, size FROM notes WHERE source='zotero'")}
-    current = {d.path for d in docs}
+    if not prefix:
+        tree = zotero.collection_tree()
+        db.execute("DELETE FROM collections")
+        db.executemany("INSERT INTO collections VALUES (?,?,?)", [(c["key"], c["name"], c["parent"]) for c in tree])
+    known = {r[0]: (r[1], r[2]) for r in db.execute(f"SELECT path, mtime, size FROM notes WHERE source='zotero' AND {mine}", args)}
+    path_of = lambda d: prefix + d.path  # noqa: E731
+    current = {path_of(d) for d in docs}
     for rel in known.keys() - current:
         delete_note(db, rel)
-    changed = [d for d in docs if known.get(d.path) != (d.signature, len(d.text))]
-    changed_paths = {d.path for d in changed}
+    changed = [d for d in docs if known.get(path_of(d)) != (d.signature, len(d.text))]
+    changed_paths = {path_of(d) for d in changed}
     for n, doc in enumerate(changed, 1):
-        store_note(db, doc.path, doc.title, "zotero", "zotero", doc.tags, [], doc.signature, len(doc.text),
+        store_note(db, path_of(doc), doc.title, "zotero", "zotero", doc.tags, [], doc.signature, len(doc.text),
                    "", doc.meta, doc.text)
         if n % 50 == 0:
             db.commit()
             progress.advance(n, len(changed))
     # Items whose text is unchanged but whose meta lacks collection_keys: patch the column in place, so the
     # backfill never re-chunks or re-embeds content that did not change.
-    backfilled = [d for d in docs if d.path in missing_keys and d.path not in changed_paths]
+    backfilled = [d for d in docs if path_of(d) in missing_keys and path_of(d) not in changed_paths]
     if backfilled:
         db.executemany("UPDATE notes SET meta=? WHERE path=?",
-                       [(json.dumps(d.meta, ensure_ascii=False), d.path) for d in backfilled])
-    db.execute("INSERT OR REPLACE INTO meta VALUES ('zotero_fingerprint', ?)", (fingerprint,))
+                       [(json.dumps(d.meta, ensure_ascii=False), path_of(d)) for d in backfilled])
+    db.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)", (fingerprint_key, fingerprint))
     db.commit()
     if verbose:
-        print(f"zotero: {len(docs)} items, {len(changed)} new or changed, {len(backfilled)} meta-only backfilled, "
-              f"{len(known.keys() - current)} removed", file=sys.stderr)
-    if changed:
+        print(f"zotero{' ' + prefix if prefix else ''}: {len(docs)} items, {len(changed)} new or changed, "
+              f"{len(backfilled)} meta-only backfilled, {len(known.keys() - current)} removed", file=sys.stderr)
+    if changed and not prefix:
         import paper_notes
         refreshed = paper_notes.refresh_changed([d.key for d in changed])
         if verbose and refreshed:
             print(f"zotero: refreshed {refreshed} paper notes", file=sys.stderr)
     return len(changed)
+
+
+def zotero_ref(path: str) -> tuple[Path, str]:
+    """(library folder, item key) for an index path or key: <name>:/zotero/KEY is that library's item, zotero/KEY or
+    a bare KEY the default library's."""
+    name, sep, rest = path.partition(":/")
+    if sep:
+        for lib in LAYOUT.libraries:
+            if lib.name == name:
+                return lib.path, rest.removeprefix(zotero.PREFIX)
+        raise FileNotFoundError(f"no Zotero library named {name!r}")
+    return zotero.ZOTERO, path.removeprefix(zotero.PREFIX)
 
 
 # The user's own notes get vectors first; within a source, every note's opening chunks come before the deep
@@ -1354,8 +1391,8 @@ def note_path(path: str) -> str:
                                                                     (zotero.PREFIX + path[1:],)).fetchone():
             return zotero.PREFIX + path[1:]
         raise FileNotFoundError(f"no Zotero item with citation key {path!r}")
-    if path.startswith(zotero.PREFIX):
-        if db.execute("SELECT 1 FROM notes WHERE path=?", (path,)).fetchone():
+    if path.startswith(zotero.PREFIX) or path.partition(":/")[2].startswith(zotero.PREFIX):  # <name>:/zotero/KEY too
+        if db.execute("SELECT 1 FROM notes WHERE path=? AND source='zotero'", (path,)).fetchone():
             return path
         raise FileNotFoundError(f"no Zotero item {path!r}")
     return index_path(resolve(path))
@@ -1610,7 +1647,8 @@ def sources_report() -> dict:
         elif f.name in ignored:
             role, documents = "ignored", counts.get(f.prefix, 0)
         elif f.kind == "zotero":
-            role, documents = "zotero", counts["zotero/"]
+            default = bool(LAYOUT.libraries) and LAYOUT.libraries[0].name == f.name
+            role, documents = "zotero", counts["zotero/"] if default else counts.get(f.prefix, 0)
         elif f.path.resolve() == VAULT.resolve():
             role, documents = "main", counts[""]
         else:

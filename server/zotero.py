@@ -8,6 +8,7 @@ writing (the database is in WAL mode), and Zotero's own file is never opened for
 """
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import os
@@ -16,11 +17,31 @@ import shutil
 import sqlite3
 import tempfile
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-ZOTERO = Path(os.environ.get("KB_ZOTERO", Path.home() / "Zotero"))
+ZOTERO = Path(os.environ.get("KB_ZOTERO", Path.home() / "Zotero"))  # the default library
+# The library the functions below read, when it is not the default one (several libraries, phase 2 task 3). A context
+# variable, so one request or index stage switching library never changes what another thread reads.
+_LIBRARY: ContextVar[Path | None] = ContextVar("zotero_library", default=None)
+
+
+def root() -> Path:
+    """The library being read: the one set by `library()`, else the default."""
+    return _LIBRARY.get() or ZOTERO
+
+
+@contextmanager
+def library(path: Path):
+    """Reads `path`'s library inside the block: `with zotero.library(lab): zotero.documents()`."""
+    token = _LIBRARY.set(path)
+    try:
+        yield path
+    finally:
+        _LIBRARY.reset(token)
 PREFIX = "zotero/"  # index paths look like zotero/ABCD1234; they are not vault files
 SKIP_TYPES = ("attachment", "note", "annotation")
 # Status tags written by Zotero plugins (#broken, #nosource, /unread, linter/error, zotmoov, notion): not topics.
@@ -42,14 +63,14 @@ class ZoteroDoc:
 
 
 def available() -> bool:
-    return (ZOTERO / "zotero.sqlite").is_file()
+    return (root() / "zotero.sqlite").is_file()
 
 
 def fingerprint() -> tuple[float, float]:
     """Cheap change check: the database's mtime (with its WAL) and the newest full-text cache."""
-    db = max((ZOTERO / n).stat().st_mtime for n in ("zotero.sqlite", "zotero.sqlite-wal") if (ZOTERO / n).exists())
+    db = max((root() / n).stat().st_mtime for n in ("zotero.sqlite", "zotero.sqlite-wal") if (root() / n).exists())
     newest = 0.0
-    storage = ZOTERO / "storage"
+    storage = root() / "storage"
     if storage.is_dir():
         for entry in os.scandir(storage):
             cache = os.path.join(entry.path, ".zotero-ft-cache")
@@ -63,10 +84,12 @@ def fingerprint() -> tuple[float, float]:
 def snapshot(name: str = "index", max_age: float = 0) -> sqlite3.Connection:
     """A private copy of zotero.sqlite. Each user (the indexer, the reading view) keeps its own file, so one
     never reads a copy the other is rewriting; `max_age` reuses a recent copy instead of taking a new one."""
-    path = os.path.join(tempfile.gettempdir(), f"kb-zotero-{name}.sqlite")
+    # One copy per library and user, so two libraries never share a copy.
+    tag = hashlib.sha1(str(root()).encode()).hexdigest()[:8]
+    path = os.path.join(tempfile.gettempdir(), f"kb-zotero-{name}-{tag}.sqlite")
     if max_age and os.path.exists(path) and time.time() - os.path.getmtime(path) < max_age:
         return sqlite3.connect(path)
-    database = ZOTERO / "zotero.sqlite"
+    database = root() / "zotero.sqlite"
     source = sqlite3.connect(f"file:{database}?mode=ro", uri=True, timeout=2)
     try:
         source.execute("SELECT 1 FROM sqlite_master LIMIT 1")
@@ -189,7 +212,7 @@ def documents() -> list[ZoteroDoc]:
                 if comment:
                     line += ("\n" if line else "") + f"Comment: {comment.strip()}"
                 highlights.append(line + (f" (p. {page})" if page else ""))
-            cache = ZOTERO / "storage" / keys[attachment] / ".zotero-ft-cache"
+            cache = root() / "storage" / keys[attachment] / ".zotero-ft-cache"
             if cache.is_file():
                 signature = max(signature, cache.stat().st_mtime)
                 full_texts.append(cache.read_text(encoding="utf-8", errors="replace"))
@@ -276,7 +299,7 @@ def item_detail(key: str, full_text: bool = False) -> dict | None:
                                  FROM itemAnnotations a JOIN items i USING(itemID)
                                  WHERE a.parentItemID=? ORDER BY a.sortIndex""", att_id)
                           if annotation_id not in deleted and (text or comment or kind == 3) and annotation_key]  # 3: image selection
-            cache = ZOTERO / "storage" / att_key / ".zotero-ft-cache"
+            cache = root() / "storage" / att_key / ".zotero-ft-cache"
             entry = {"key": att_key, "title": title or "", "content_type": content_type or "", "highlights": highlights,
                      "has_full_text": cache.is_file(),
                      "open_uri": f"zotero://open-pdf/library/items/{att_key}" if content_type == "application/pdf" else ""}

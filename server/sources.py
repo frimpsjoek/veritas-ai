@@ -4,13 +4,14 @@
                                 "enabled": true, "skip": []}, ...]}
 
 A folder holding zotero.sqlite is a Zotero library, one holding .obsidian/ is an Obsidian vault, anything else is a
-plain folder of notes, PDFs and images. The kind is detected on every read and never stored, so a folder that gains
+plain folder of notes, PDFs and images (connectors.py). The kind is detected on every read and never stored, so a folder that gains
 .obsidian/ later simply becomes a vault.
 
 The main folder is the output folder: the listed folder marked "main": true (set_output, or KB_VAULT when seeding),
 else ~/Documents/Veritas, created when first written. It keeps bare relative paths in the index and is what kb.VAULT
-means, so everything that writes notes (AI notes, digests, paper notes, skills, chats) writes there. Every other folder's paths carry a `<name>:/` prefix. One Zotero library is read; a
-second enabled one is reported as ignored.
+means, so everything that writes notes (AI notes, digests, paper notes, skills, chats) writes there. Every other
+folder's paths carry a `<name>:/` prefix. Every enabled Zotero library is read: the default one ("default_library",
+else the first) as zotero/KEY, the others as <name>:/zotero/KEY.
 
 Without sources.json the list is computed in memory: KB_VAULT if set (as the output folder), then KB_ZOTERO or the
 library Zotero's own prefs point at. Nothing is written until seed() or a change.
@@ -51,7 +52,8 @@ class Folder:
     enabled: bool = True
     skip: list[str] = field(default_factory=list)
     kind: str = "plain"  # detected through connectors.REGISTRY: zotero | obsidian | pdf | plain | ... | missing
-    main: bool = False  # set on the vault seeded from today's setup, so it stays the main folder as it is
+    main: bool = False  # the output folder: notes are written here
+    default_library: bool = False  # the Zotero library "+ Add" goes to
 
     @property
     def prefix(self) -> str:
@@ -62,10 +64,11 @@ class Folder:
 class Layout:
     main: Path
     main_is_vault: bool
-    zotero: Path | None
+    zotero: Path | None  # the default library (the one "+ Add" and unprefixed zotero/KEY paths mean)
     others: list[Folder]  # enabled non-Zotero folders other than the main one, read with their prefix
-    ignored: list[Folder]  # enabled but not read (a second Zotero library, a missing path)
+    ignored: list[Folder]  # enabled but not read (a missing path)
     folders: list[Folder]  # every entry, as listed
+    libraries: list[Folder] = field(default_factory=list)  # enabled Zotero libraries, the default first
 
 
 def detect(path: Path) -> str:
@@ -167,7 +170,7 @@ def folders() -> list[Folder]:
     for e in entries:
         path = Path(e["path"]).expanduser()
         out.append(Folder(e["name"], path, bool(e.get("enabled", True)), list(e.get("skip") or []), detect(path),
-                          bool(e.get("main"))))
+                          bool(e.get("main")), bool(e.get("default_library"))))
     return out
 
 
@@ -176,13 +179,13 @@ def resolved() -> Layout:
     enabled = [f for f in listed if f.enabled]
     ignored = [f for f in enabled if f.kind == "missing"]
     libraries = [f for f in enabled if f.kind == "zotero"]
-    ignored += libraries[1:]
+    libraries.sort(key=lambda f: not f.default_library)  # stable: the marked one first, else list order
     # The folder marked main stays the output even without .obsidian/ (a vault never opened on this machine), so its
     # paths never change; otherwise ~/Documents/Veritas.
     vaults = [f for f in enabled if f.main and _notes(f)]
     main = vaults[0].path if vaults else OUTPUT_DEFAULT
     others = [f for f in enabled if _notes(f) and f.path.resolve() != main.resolve()]
-    return Layout(main, bool(vaults), libraries[0].path if libraries else None, others, ignored, listed)
+    return Layout(main, bool(vaults), libraries[0].path if libraries else None, others, ignored, listed, libraries)
 
 
 def add(path: str | Path, name: str | None = None) -> Folder:
@@ -228,6 +231,19 @@ def set_output(name: str | None) -> None:
         e.pop("main", None)
         if e["name"] == name:
             e["main"] = True
+    save(entries)
+
+
+def set_default_library(name: str) -> None:
+    """The Zotero library "+ Add" goes to and unprefixed zotero/KEY paths mean."""
+    entries = load()
+    entries = defaults() if entries is None else entries
+    match = next((e for e in entries if e["name"] == name), None)
+    if match is None or detect(Path(match["path"]).expanduser()) != "zotero":
+        raise SourceError(f"there is no Zotero library named {name!r}")
+    for e in entries:
+        e.pop("default_library", None)
+    match["default_library"] = True
     save(entries)
 
 

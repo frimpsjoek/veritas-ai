@@ -529,13 +529,16 @@ class Handler(BaseHTTPRequestHandler):
                     max_chars = min(max_chars, int(rules.get("agent_read_max_chars", 12000)))
                 result = kb.read_note(guard(q["path"]), q.get("heading"), max_chars, int(q.get("offset", 0)))
             elif route == "/zotero":
-                key = q["key"].removeprefix(zotero.PREFIX)
-                guard(zotero.PREFIX + key)
-                result = zotero.item_detail(key, full_text=q.get("full_text") == "1")
+                lib, key = kb.zotero_ref(q["key"])
+                guard(q["key"] if ":/" in q["key"] else zotero.PREFIX + key)
+                with zotero.library(lib):
+                    result = zotero.item_detail(key, full_text=q.get("full_text") == "1")
                 if result is None:
                     raise FileNotFoundError(f"no Zotero item {key!r}")
             elif route == "/zotero/pdf":
-                return pdf_route.serve(self, q.get("key", ""))
+                lib = kb.zotero_ref(q["library"] + ":/")[0] if q.get("library") else zotero.ZOTERO
+                with zotero.library(lib):
+                    return pdf_route.serve(self, q.get("key", ""))
             elif route == "/site-icon":
                 try:
                     found = site_icons.site_icon(domain=q.get("domain") or None, openalex=q.get("openalex") or None)

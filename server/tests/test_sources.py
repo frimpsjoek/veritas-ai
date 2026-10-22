@@ -90,7 +90,8 @@ def test_second_vault_and_second_library(home):
     layout = sources.resolved()
     assert layout.main == home / "Documents" / "Veritas"
     assert [f.name for f in layout.others] == ["a", "b"]
-    assert layout.zotero == z1 and [f.name for f in layout.ignored] == ["z2"]
+    assert layout.zotero == z1 and layout.ignored == []
+    assert [f.name for f in layout.libraries] == ["z1", "z2"]  # every library is read (phase 2)
 
 
 def test_disabled_and_missing_folders_are_not_read(home):

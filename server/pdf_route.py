@@ -89,7 +89,7 @@ def _linked(path: str) -> Path:
 
 
 def _stored(key: str, named: str) -> Path:
-    storage = (zotero.ZOTERO / "storage").resolve()
+    storage = (zotero.root() / "storage").resolve()
     folder = storage / key
     try:
         if named and "/" not in named and "\\" not in named and (folder / named).is_file():
