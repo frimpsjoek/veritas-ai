@@ -11,3 +11,8 @@ server/models/
 .superpowers/
 ui/dev/out/
 ui/dev/.perf-cache/
+
+# kept out of the public repo: personal performance logs, run evidence, third-party screenshots
+server/perf/
+docs/specs/*/evidence/
+docs/specs/*/refs/

@@ -34,7 +34,7 @@ export function renderIconRow(doc) {
 export function renderSourcePills(doc, host) {
   const row = h(doc, 'div', 'sb-p-pill-row');
   const sources = { ...DEFAULT_SOURCES, ...(host.prefs.get('chatSources') ?? {}) };
-  for (const key of /** @type {(keyof Sources)[]} */ (['papers', 'notes', 'scholarly', 'web'])) {
+  for (const key of /** @type {('papers' | 'notes' | 'scholarly' | 'web')[]} */ (['papers', 'notes', 'scholarly', 'web'])) {
     const pill = h(doc, 'button', 'sb-p-pill');
     pill.setAttribute('type', 'button');
     pill.append(icon(doc, PILL_ICON[key], 'sb-p-icon'), h(doc, 'span', '', key[0].toUpperCase() + key.slice(1)));

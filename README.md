@@ -5,6 +5,12 @@ to papers you can open, and finds new work for you, all on your own machine.
 
 Built for the [OSI Hackathon 2026](https://scientificintelligence.org/campaigns/osi-hackathon-2026) (team Veritas AI).
 
+**What existed before, what is new.** Veritas grows out of Second Brain, Joseph Frimpong's earlier tool: the Zotero
+and Obsidian plugins, the local search index and the chat over your own library were built before the event. During
+the hackathon (Oct 21-22, 2026) we built the **reading radar and its daily digest**, the tools the assistant uses on
+them, the in-app link reader, the Valency Bond connector, the research personas and Veritas itself: one repository,
+one name, one knowledge base. The table [below](#built-during-the-hackathon-oct-21-22-2026) lists each piece.
+
 ## Why
 
 A physicist or chemist keeps knowledge in three places that do not talk to each other: a reference manager, notes
@@ -40,16 +46,19 @@ question, and Veritas answers from each angle: its methods, tools, data and next
 
 ## Built during the hackathon (Oct 21-22, 2026)
 
-Veritas grew out of Second Brain, Joseph Frimpong's earlier tool. During the event:
+Before the event: the Zotero and Obsidian plugins, the search index, chat with citations to your own library.
+During the event:
 
 | What | Where |
 |---|---|
-| Seed-paper radar: own papers via OpenAlex, calibration with per-seed field baselines, whole-paper second pass, two live runs on a real library | `server/radar_api.py`, `agent/`, `docs/specs/021-radar-seeds/spec.md` |
+| Reading radar and daily digest seeded by your own papers: own papers via OpenAlex, calibration with per-seed field baselines, whole-paper second pass, two live runs on a real library | `server/radar_api.py`, `agent/`, `docs/specs/021-radar-seeds/spec.md` |
+| Digest tools for the assistant: `read_digest` answers "what was my digest today about?" whatever sources are switched on | `agent/src/tools.js`, `agent/src/library-http.js` |
 | In-app link panel, server half: `/web/page` (frame, reader view, PDF or a plain reason) and `/web/pdf`; DOI → library PDF → open-access PDF → abstract; public-host guard on every redirect | `server/web_page.py`, `server/tests/test_web_page.py`, `docs/specs/022-web-page-route/spec.md` |
-| Valency Bond connector (Streamable HTTP, bearer token kept in the Keychain) | `agent/src/catalog.js` |
+| Valency Bond connector (Streamable HTTP, bearer token kept in the Keychain), its own chip in the chat, and saved keys that survive a restart | `agent/src/catalog.js`, `agent/src/mcp-hub.js`, `agent/src/node/agentd.mjs` |
+| Research persona knowledge base (31 personas, 6 fields) | `docs/research-personas/` |
 | Citations by Zotero item key resolve (libraries without Better BibTeX keys) | `server/kb.py` |
 | Web app fixes: hidden views stay hidden, the page never scrolls past the app, long PDFs stay drawn in Safari | `web/src/` |
-| One repo with enforced import boundaries and one check command, from three repos that reached into each other | `tools/boundaries.mjs`, `check.sh`, `docs/specs/veritas/` |
+| Veritas: one repo with enforced import boundaries and one check command, from three repos that reached into each other; then one knowledge base (connector registry, several Zotero libraries incl. Zotero online, chats mirrored as Markdown); the Veritas name and logo | `tools/boundaries.mjs`, `check.sh`, `server/`, `docs/specs/veritas/` |
 
 ## What we learned
 
@@ -57,7 +66,7 @@ Veritas grew out of Second Brain, Joseph Frimpong's earlier tool. During the eve
   and a browser frame with `x-frame-options`. Open-access copies, found by DOI through OpenAlex, open far more often.
 - One average of a whole library is a poor relevance filter: several lines of work average into a point near none of
   them. Comparing with each seed paper, minus that seed's own field baseline, separated real matches from the field.
-- Specs first, then code, then recorded evidence: every feature here has a spec with checks and their actual results.
+- Specs first, then code, then checks with their actual results: every feature here has a spec under `docs/specs/`.
 
 ## Parts
 
