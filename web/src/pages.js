@@ -78,7 +78,7 @@ export async function paintProjects(into, ctx) {
     });
   } catch (error) {
     host.logError(error);
-    list.append(h(doc, 'p', 'sbw-hint', "Couldn't reach the Second Brain server."));
+    list.append(h(doc, 'p', 'sbw-hint', "Couldn't reach the Veritas server."));
     make.hidden = true;
     return;
   }
@@ -176,8 +176,8 @@ function indexStatus(doc, host) {
 
 /** @param {Document} doc @param {any} host */
 function versionLine(doc, host) {
-  const line = h(doc, 'span', 'sbs-help', 'Second Brain web app');
-  host.json('/status').then((status) => { if (status?.version) line.textContent = `Second Brain ${status.version}`; }).catch(() => {});
+  const line = h(doc, 'span', 'sbs-help', 'Veritas web app');
+  host.json('/status').then((status) => { if (status?.version) line.textContent = `Veritas ${status.version}`; }).catch(() => {});
   return line;
 }
 

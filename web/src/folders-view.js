@@ -9,7 +9,7 @@ const KIND = /** @type {Record<string, string>} */ ({
   zotero: 'Zotero library', obsidian: 'Obsidian vault', plain: 'Folder', missing: 'Not found',
 });
 const ROLE = /** @type {Record<string, string>} */ ({
-  main: 'main folder: notes Second Brain writes go here', zotero: '', listed: '', off: 'switched off',
+  main: 'main folder: notes Veritas writes go here', zotero: '', listed: '', off: 'switched off',
   ignored: 'not read: a second Zotero library, or the folder is not there',
 });
 
@@ -88,7 +88,7 @@ export function foldersWidget(doc, host) {
   };
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (!path.value.trim()) { say('Type the folder path on the computer that runs Second Brain.'); return; }
+    if (!path.value.trim()) { say('Type the folder path on the computer that runs Veritas.'); return; }
     add.disabled = true;
     try {
       const added = await host.json('/sources', 'POST', { path: path.value.trim(), ...(name.value.trim() ? { name: name.value.trim() } : {}) });

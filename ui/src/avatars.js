@@ -77,7 +77,7 @@ let gradients = 0;
 
 /** Second Brain's AI: a white sparkle on an indigo-to-violet circle. @param {Document} doc @param {{ size?: number, label?: string }} [opts] */
 export function aiAvatar(doc, opts = {}) {
-  const svg = frame(doc, opts.size ?? 18, 'is-ai', opts.label ?? 'Written by Second Brain AI');
+  const svg = frame(doc, opts.size ?? 18, 'is-ai', opts.label ?? 'Written by Veritas AI');
   const id = `sb-ai-grad-${++gradients}`;  // one id per mark: two marks on a page must not share a removed <defs>
   const defs = shape(doc, 'defs', {});
   const grad = shape(doc, 'linearGradient', { id, x1: 0, y1: 0, x2: 1, y2: 1 });

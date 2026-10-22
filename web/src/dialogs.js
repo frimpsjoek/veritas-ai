@@ -51,7 +51,7 @@ export function createDialogs(doc) {
   return {
     /** @param {string} message @param {{ title?: string }} [opts] */
     confirm(message, opts) {
-      return modal(opts?.title ?? 'Second Brain', (box, finish) => {
+      return modal(opts?.title ?? 'Veritas', (box, finish) => {
         box.append(h(doc, 'p', 'sbw-dialog-text', message));
         buttons(box, 'Cancel', 'OK', () => finish(false), () => finish(true));
       }, false);
@@ -59,7 +59,7 @@ export function createDialogs(doc) {
 
     /** @param {string} message @param {string} initial @param {{ title?: string }} [opts] */
     promptText(message, initial, opts) {
-      return modal(opts?.title ?? 'Second Brain', (box, finish) => {
+      return modal(opts?.title ?? 'Veritas', (box, finish) => {
         box.append(h(doc, 'p', 'sbw-dialog-text', message));
         const input = /** @type {HTMLInputElement} */ (h(doc, 'input', 'sbw-dialog-input'));
         input.type = 'text';

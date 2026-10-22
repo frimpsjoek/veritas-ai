@@ -340,7 +340,7 @@ export async function paintHome(into, ctx) {
     [conversations, routines] = await Promise.all([ai.conversations.list().catch(() => []), ai.routines?.list().catch((/** @type {unknown} */ error) => { routinesFailed = true; host.logError(error); return []; }) ?? []]);
   } catch (error) {
     host.logError(error);
-    content.replaceChildren(h(doc, 'p', 'sbw-hint', "Couldn't reach the Second Brain server."));
+    content.replaceChildren(h(doc, 'p', 'sbw-hint', "Couldn't reach the Veritas server."));
     return;
   }
 

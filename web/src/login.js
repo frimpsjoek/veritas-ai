@@ -5,7 +5,7 @@
 import { h } from '../../ui/src/dom.js';
 
 const MESSAGES = {
-  wrong: "That code didn't work. It may be out of date. On your Mac, open Second Brain, go to Settings, and scan the new code.",
+  wrong: "That code didn't work. It may be out of date. On your Mac, open Veritas, go to Settings, and scan the new code.",
   offline: "Couldn't reach your Mac. Check that it is awake and that Tailscale is on, then try again.",
 };
 
@@ -18,7 +18,11 @@ export function startLogin(env = {}) {
   if (win.location.hash) win.history.replaceState(null, '', win.location.pathname + win.location.search);
 
   const page = h(doc, 'main', 'sbw-login');
-  const title = h(doc, 'h1', 'sbw-h1', 'Second Brain');
+  const title = h(doc, 'h1', 'sbw-h1');
+  const logo = /** @type {HTMLImageElement} */ (h(doc, 'img', 'sbw-login-logo'));
+  logo.src = 'veritas-logo.png';
+  logo.alt = 'Veritas';
+  title.append(logo);
   const message = h(doc, 'p', 'sbw-lead');
   message.setAttribute('role', 'status');
   const form = /** @type {HTMLFormElement} */ (h(doc, 'form', 'sbw-login-form'));

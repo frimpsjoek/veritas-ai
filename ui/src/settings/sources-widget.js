@@ -123,7 +123,7 @@ export function sourcesWidget(doc, host, opts) {
       await load();
       // an engine from before `sources` drops the write and reads back unchanged
       if (write.kind === 'engine' && write.patch.sources && data.settings && data.settings.sources == null) {
-        say(`${chip.label} can't be changed until the Second Brain engine is updated.`, true);
+        say(`${chip.label} can't be changed until the Veritas engine is updated.`, true);
         return;
       }
       say(`${chip.label} turned ${chip.on ? 'off' : 'on'}`);

@@ -22,7 +22,7 @@ export function plainError(detail) {
   const text = String(detail ?? '');
   if (/\b(401|403)\b|unauthori[sz]ed|forbidden|invalid[^.]*key|api key/i.test(text)) return 'The key was refused. Check that you copied all of it.';
   if (/ENOTFOUND|ECONNREFUSED|EAI_AGAIN|fetch failed|timed? ?out|unreachable|network/i.test(text)) return "Couldn't reach it. Check the address and your connection.";
-  if (/ENOENT|command not found|spawn .* not found|\b(npx|uvx)\b/i.test(text)) return "Its program couldn't start. It needs Node (npx) or uv (uvx) on the computer running Second Brain.";
+  if (/ENOENT|command not found|spawn .* not found|\b(npx|uvx)\b/i.test(text)) return "Its program couldn't start. It needs Node (npx) or uv (uvx) on the computer running Veritas.";
   return text ? `Couldn't connect: ${text}` : "Couldn't connect.";
 }
 

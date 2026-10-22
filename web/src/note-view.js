@@ -42,7 +42,7 @@ export async function paintNote(into, ctx, route) {
     return;
   }
   const title = titleFromPath(route.path);
-  win.document.title = `${title} · Second Brain`;
+  win.document.title = `${title} · Veritas`;
 
   let html = '';
   const { markdown, formulas } = protectMath(withoutComments(withoutFrontMatter(String(note.text))));

@@ -63,7 +63,7 @@ export class SkillsDialog {
 
   async service() {
     const ai = await this.chat.host.ai();
-    if (!ai.skills) throw new Error('Skills need the updated Second Brain server. Restart it and try again.');
+    if (!ai.skills) throw new Error('Skills need the updated Veritas server. Restart it and try again.');
     return ai.skills;
   }
 

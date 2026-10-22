@@ -116,7 +116,7 @@ export function cardActions(routine) {
 }
 
 /** The honest limit, shown under the list. */
-export const LIMIT_LINE = 'Routines run while the Second Brain server or Zotero is running. Missed runs catch up once.';
+export const LIMIT_LINE = 'Routines run while the Veritas server or Zotero is running. Missed runs catch up once.';
 
 /**
  * The three starter cards (invented examples). Each is a draft for the create sheet; nothing is saved until the

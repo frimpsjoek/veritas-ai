@@ -357,7 +357,7 @@ export class ChatView {
     const scopeOptions = [['library', 'Whole library']];
     if (this.host.can.scopes) {
       scopeOptions.push(['collections', 'Collections'], ['tag', 'A tag'],
-        ['savedSearch', 'A saved search', 'Only narrows the search when the AI runs on this computer; on the Second Brain server it searches the whole library']);
+        ['savedSearch', 'A saved search', 'Only narrows the search when the AI runs on this computer; on the Veritas server it searches the whole library']);
     }
     for (const [value, label, title] of scopeOptions) {
       const option = /** @type {HTMLOptionElement} */ (this.el('option', '', label));
@@ -639,7 +639,7 @@ export class ChatView {
       const [, , title] = ChatView.SOURCES.find(([sid]) => sid === id);
       const hint = hintOf(this.host, id, title);
       btn.title = disabledHere ?? (id === 'notes' && offline
-        ? "Notes need the Second Brain server, which isn't running" : `Search ${hint}`);
+        ? "Notes need the Veritas server, which isn't running" : `Search ${hint}`);
     }
   }
 
@@ -968,7 +968,7 @@ export class ChatView {
     }
     this.engineCanFill = Boolean(ai.sessions?.run && ai.sessions?.estimate && ai.sessions?.events);
     this.engineCanReport = Boolean(ai.reviews?.answer); // pipeline 2 (spec 007 E7): clarify cards and reports written from a table
-    this.where.textContent = ai.where === 'server' ? 'Runs on the Second Brain server' : 'Runs on this computer';
+    this.where.textContent = ai.where === 'server' ? 'Runs on the Veritas server' : 'Runs on this computer';
     this.canProject = Boolean(ai.projects);
     const [conversations, reviews, searches, projects] = await Promise.all([ai.conversations.list().catch(() => []),
       Promise.resolve().then(() => ai.reviews.list()).catch(() => []), FindView.list(this.host).catch(() => []),
@@ -1767,7 +1767,7 @@ export class ChatView {
 
   addAnswer(into = this.thread) {
     const root = this.el('div', 'sb-ai-answer has-avatar');
-    const who = aiAvatar(this.doc, { size: 20, label: 'Second Brain AI' });
+    const who = aiAvatar(this.doc, { size: 20, label: 'Veritas AI' });
     who.classList.add('sb-ai-avatar');
     root.append(who);
     const activities = this.el('div', 'sb-ai-activities');

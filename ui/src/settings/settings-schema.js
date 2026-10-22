@@ -59,10 +59,10 @@ export const ROWS = [
   { id: 'general.openLinks', section: 'general', label: 'Open links', help: 'Where a web link opens when you click it.', kind: 'radio', hosts: ['web', 'obsidian'], needs: 'linksInside', store: 'prefs', key: 'openLinks', def: 'inside',
     options: [['inside', 'Inside the app'], ['outside', 'In your browser']], keywords: 'links web page browser viewer external' },
   { id: 'general.colors', section: 'general', label: 'Colors', help: "By default the writing space uses Zotero's colors and follows light and dark mode.", kind: 'custom', hosts: ZOTERO, store: 'none', custom: 'zoteroColors', keywords: 'color background text accent highlight' },
-  { id: 'general.updatesZotero', section: 'general', label: 'Updates', help: 'A new build from your Second Brain server can install itself while Zotero keeps running, with no restart. Public installs should leave this on GitHub releases.', kind: 'select', hosts: ZOTERO, store: 'prefs', key: 'updates', def: 'github',
-    options: [['server', 'From my Second Brain server'], ['github', 'From GitHub releases (default)'], ['off', 'Off']] },
-  { id: 'general.updatesObsidian', section: 'general', label: 'Updates', help: 'A new build from your Second Brain server can install itself while Obsidian keeps running, checked every 15 minutes.', kind: 'select', hosts: OBSIDIAN, store: 'prefs', key: 'updates', def: 'server',
-    options: [['server', 'From my Second Brain server'], ['off', 'Off']] },
+  { id: 'general.updatesZotero', section: 'general', label: 'Updates', help: 'A new build from your Veritas server can install itself while Zotero keeps running, with no restart. Public installs should leave this on GitHub releases.', kind: 'select', hosts: ZOTERO, store: 'prefs', key: 'updates', def: 'github',
+    options: [['server', 'From my Veritas server'], ['github', 'From GitHub releases (default)'], ['off', 'Off']] },
+  { id: 'general.updatesObsidian', section: 'general', label: 'Updates', help: 'A new build from your Veritas server can install itself while Obsidian keeps running, checked every 15 minutes.', kind: 'select', hosts: OBSIDIAN, store: 'prefs', key: 'updates', def: 'server',
+    options: [['server', 'From my Veritas server'], ['off', 'Off']] },
   { id: 'general.copyDepth', section: 'general', label: 'Copy for AI: link depth', help: '1 copies the note and the notes it links to; 2 also copies the notes those link to.', kind: 'select', hosts: OBSIDIAN, store: 'prefs', key: 'contextDepth', numeric: true, def: 1,
     options: [['0', 'Just the note'], ['1', '1 level'], ['2', '2 levels']] },
   { id: 'general.copySimilar', section: 'general', label: 'Copy for AI: add similar notes', help: 'Also include the 5 notes most similar in meaning, even if not linked.', kind: 'toggle', hosts: OBSIDIAN, store: 'prefs', key: 'contextSimilar', def: false },
@@ -74,7 +74,7 @@ export const ROWS = [
   { id: 'mac.scanDirs', section: 'mac', label: 'Folders to look for models in', help: 'One folder per line. Models are found live, so adding one here is enough.', kind: 'lines', hosts: ALL, store: 'engine', key: 'local.scanDirs' },
   { id: 'mac.idleMinutes', section: 'mac', label: 'Stop an idle model after', help: 'Minutes without a question. The model opens again on the next one. Stopping it frees the memory it uses.', kind: 'number', hosts: ALL, store: 'engine', key: 'local.idleMinutes', min: 1, def: 5, unit: 'minutes' },
   { id: 'mac.allowReports', section: 'mac', label: 'Allow local models for reports', help: 'Not recommended. In tests a small model made up numbers and looped on long reports. Reports are written by Codex or Claude Code unless you turn this on.', kind: 'toggle', hosts: ALL, store: 'engine', key: 'local.allowReports', def: false },
-  { id: 'mac.python', section: 'mac', label: 'Python for local models', help: 'Leave empty to use the arm64 environment Second Brain set up. Only change it if you moved that environment.', kind: 'text', hosts: ALL, store: 'engine', key: 'local.python', nullable: true, advanced: true, def: null, placeholder: 'Automatic' },
+  { id: 'mac.python', section: 'mac', label: 'Python for local models', help: 'Leave empty to use the arm64 environment Veritas set up. Only change it if you moved that environment.', kind: 'text', hosts: ALL, store: 'engine', key: 'local.python', nullable: true, advanced: true, def: null, placeholder: 'Automatic' },
   { id: 'mac.external', section: 'mac', label: 'Use models from other apps', help: 'Also offer models that other apps on this Mac already downloaded.', kind: 'toggle', hosts: ALL, store: 'engine', key: 'local.external', advanced: true, def: true },
 
   // ------------------------------------------------------------------ Research
@@ -107,7 +107,7 @@ export const ROWS = [
   { id: 'sources.radar', section: 'sources', label: 'Radar sources', help: 'The journals, feeds and searches your radar watches.', kind: 'custom', hosts: WEB, store: 'none', custom: 'radarLink', advanced: true },
 
   // ------------------------------------------------------------------ Search index
-  { id: 'folders.list', section: 'folders', label: 'Folders the search reads', help: 'Any folder of notes, PDFs and images on the computer that runs Second Brain. An Obsidian vault and your Zotero library are recognised by what is in them.', kind: 'custom', hosts: WEB, store: 'none', custom: 'folders', keywords: 'folders vault obsidian zotero library add folder markdown pdf' },
+  { id: 'folders.list', section: 'folders', label: 'Folders the search reads', help: 'Any folder of notes, PDFs and images on the computer that runs Veritas. An Obsidian vault and your Zotero library are recognised by what is in them.', kind: 'custom', hosts: WEB, store: 'none', custom: 'folders', keywords: 'folders vault obsidian zotero library add folder markdown pdf' },
   { id: 'index.status', section: 'index', label: 'What the search covers', help: 'What is indexed, and whether it is up to date.', kind: 'custom', hosts: WEB, store: 'none', custom: 'indexStatus', keywords: 'index update coverage documents' },
   { id: 'index.open', section: 'index', label: 'Index status', help: "What's indexed, what's running now, and buttons to update, stop or re-read sources.", kind: 'action', hosts: OBSIDIAN, store: 'none', action: 'openIndexStatus', buttonLabel: 'Open' },
 
@@ -115,19 +115,19 @@ export const ROWS = [
   { id: 'server.start', section: 'server', label: 'Start the index server with Obsidian', help: 'Runs the local search index while Obsidian is open, and keeps it up to date.', kind: 'toggle', hosts: OBSIDIAN, when: 'desktop', store: 'prefs', key: 'startServer', def: true },
   { id: 'server.kbDir', section: 'server', label: 'Index folder', help: 'Where kb.py lives.', kind: 'text', hosts: OBSIDIAN, when: 'desktop', store: 'prefs', key: 'kbDir' },
   { id: 'server.vault', section: 'server', label: 'Obsidian vault', help: 'Optional. With the server, notes sync with Obsidian and you get similar papers, notes that cite a paper, full-text search and the drive search for lost PDFs.', kind: 'text', hosts: ZOTERO, store: 'prefs', key: 'vault', placeholder: 'Second-Brain' },
-  { id: 'server.addressZotero', section: 'server', label: 'Server address', help: 'Where the Second Brain server listens.', kind: 'text', hosts: ZOTERO, store: 'prefs', key: 'server', def: 'http://127.0.0.1:27182' },
+  { id: 'server.addressZotero', section: 'server', label: 'Server address', help: 'Where the Veritas server listens.', kind: 'text', hosts: ZOTERO, store: 'prefs', key: 'server', def: 'http://127.0.0.1:27182' },
   { id: 'server.tokenZotero', section: 'server', label: 'Access token', help: 'Only for a server on another computer: the token it shows when you set up a device. A server on this computer needs none.', kind: 'password', hosts: ZOTERO, store: 'prefs', key: 'token', keywords: 'token bearer server remote' },
   { id: 'server.addressObsidian', section: 'server', label: 'Mac address', help: "The Mac's Tailscale address and port.", kind: 'text', hosts: OBSIDIAN, store: 'prefs', key: 'remoteUrl', keywords: 'tailscale server address' },
   { id: 'server.token', section: 'server', label: 'Access token', help: 'Filled in by the setup QR code on your Mac.', kind: 'text', hosts: OBSIDIAN, when: 'mobile', store: 'prefs', key: 'token' },
   { id: 'server.test', section: 'server', label: 'Test connection', help: 'Checks that this device can reach your Mac.', kind: 'action', hosts: OBSIDIAN, when: 'mobile', store: 'none', action: 'testConnection', buttonLabel: 'Test' },
   { id: 'server.python', section: 'server', label: 'Python for the index', help: 'The Python that runs the search index.', kind: 'text', hosts: OBSIDIAN, when: 'desktop', store: 'prefs', key: 'python', advanced: true },
   { id: 'server.port', section: 'server', label: 'Port', help: 'Local port. Only this Mac and your Tailscale devices can reach it.', kind: 'number', hosts: OBSIDIAN, when: 'desktop', store: 'prefs', key: 'port', min: 1025, max: 65535, advanced: true },
-  { id: 'server.phone', section: 'server', label: 'Use on your phone', help: 'Opens Second Brain on your phone, already signed in.', kind: 'custom', hosts: ['web', 'obsidian'], store: 'none', custom: 'phone', keywords: 'phone qr tailscale iphone' },
+  { id: 'server.phone', section: 'server', label: 'Use on your phone', help: 'Opens Veritas on your phone, already signed in.', kind: 'custom', hosts: ['web', 'obsidian'], store: 'none', custom: 'phone', keywords: 'phone qr tailscale iphone' },
 
   // ------------------------------------------------------------------ About
   { id: 'about.version', section: 'about', label: 'Version', help: 'The build you are running.', kind: 'custom', hosts: ALL, store: 'none', custom: 'version' },
   { id: 'about.update', section: 'about', label: 'Check for updates', help: 'Looks for a newer build now instead of waiting for the next check.', kind: 'action', hosts: ['zotero', 'obsidian'], store: 'none', action: 'checkUpdates', buttonLabel: 'Check now' },
-  { id: 'about.logs', section: 'about', label: 'Logs folder', help: 'Where Second Brain writes its logs, for when something goes wrong.', kind: 'action', hosts: ALL, store: 'none', action: 'openLogs', buttonLabel: 'Show' },
+  { id: 'about.logs', section: 'about', label: 'Logs folder', help: 'Where Veritas writes its logs, for when something goes wrong.', kind: 'action', hosts: ALL, store: 'none', action: 'openLogs', buttonLabel: 'Show' },
   { id: 'about.diagnostics', section: 'about', label: 'Copy diagnostics', help: 'Copies version and status details you can paste into a message. It contains no keys or notes.', kind: 'action', hosts: ALL, store: 'none', action: 'copyDiagnostics', buttonLabel: 'Copy' },
 ];
 

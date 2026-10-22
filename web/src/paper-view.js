@@ -90,7 +90,7 @@ export async function paintPaper(into, ctx, route) {
   }
   const parts = paperParts(item);
   const zoteroUri = String(item.zotero_uri || `zotero://select/library/items/${route.key}`);
-  win.document.title = `${item.title} · Second Brain`;
+  win.document.title = `${item.title} · Veritas`;
 
   // ---- the shell of the page
   const reader = h(doc, 'div', 'sbw-reader');

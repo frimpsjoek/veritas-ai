@@ -32,7 +32,7 @@ export async function paintPhone(into, { host, doc }) {
   url.setAttribute('aria-label', 'Sign-in link');
   url.addEventListener('focus', () => url.select());
   into.append(
-    h(doc, 'p', 'sbw-hint', 'Point your phone camera at the code to open Second Brain and sign in. Keep this link private: it signs in whoever opens it.'),
+    h(doc, 'p', 'sbw-hint', 'Point your phone camera at the code to open Veritas and sign in. Keep this link private: it signs in whoever opens it.'),
     qr, url,
     ...(link.secure ? [] : [h(doc, 'p', 'sbw-hint', 'This link uses plain http inside your tailnet, which Tailscale already encrypts.')]),
   );

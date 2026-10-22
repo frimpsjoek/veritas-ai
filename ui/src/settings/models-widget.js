@@ -323,7 +323,7 @@ export function modelsWidget(doc, host, ctx = {}) {
       paint();
     } catch (error) {
       host.logError?.(error);
-      root.replaceChildren(h(doc, 'p', 'sbs-help', "Couldn't reach the Second Brain server, so the model list isn't available."));
+      root.replaceChildren(h(doc, 'p', 'sbs-help', "Couldn't reach the Veritas server, so the model list isn't available."));
     }
   })();
 

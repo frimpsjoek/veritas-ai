@@ -51,7 +51,7 @@ export function mcpWidget(doc, host) {
     let reports;
     try { reports = await (await host.ai()).mcp.list(); } catch (error) {
       host.logError?.(error);
-      list.append(h(doc, 'p', 'sbs-help', "Couldn't reach the Second Brain server."));
+      list.append(h(doc, 'p', 'sbs-help', "Couldn't reach the Veritas server."));
       return;
     }
     if (!reports.length) { list.append(h(doc, 'p', 'sbs-help', 'No outside sources added yet.')); return; }

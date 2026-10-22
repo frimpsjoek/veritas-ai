@@ -18,7 +18,7 @@ import {
 /** The engine's radar API, or a plain message when the server is too old or absent. @param {any} chat */
 async function radarService(chat) {
   const ai = await chat.host.ai();
-  if (!ai.radar) throw new Error('The reading radar needs the updated Second Brain server. Restart it and try again.');
+  if (!ai.radar) throw new Error('The reading radar needs the updated Veritas server. Restart it and try again.');
   return ai.radar;
 }
 
@@ -448,7 +448,7 @@ export class RadarSheet {
     this.message.textContent = 'Saving…';
     try {
       const ai = await this.chat.host.ai();
-      if (!ai.routines) throw new Error('Routines need the updated Second Brain server. Restart it and try again.');
+      if (!ai.routines) throw new Error('Routines need the updated Veritas server. Restart it and try again.');
       if (this.routine) await ai.routines.update(this.routine.id, draft);
       else await ai.routines.create(draft);
     } catch (error) {

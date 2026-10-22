@@ -33,8 +33,12 @@ const SYNC_MS = 800;
 export function createShell({ host, doc = document, win = /** @type {Window} */ (doc.defaultView) }) {
   const root = h(doc, 'div', 'sbw');
   const rail = h(doc, 'nav', 'sbw-rail');
-  rail.setAttribute('aria-label', 'Second Brain');
-  const brand = h(doc, 'div', 'sbw-brand', 'Second Brain');
+  rail.setAttribute('aria-label', 'Veritas');
+  const brand = h(doc, 'div', 'sbw-brand');
+  const mark = /** @type {HTMLImageElement} */ (h(doc, 'img', 'sbw-brand-mark'));
+  mark.src = 'veritas-mark-180.png';
+  mark.alt = '';
+  brand.append(mark, h(doc, 'span', 'sbw-brand-name', 'Veritas'));
   const nav = h(doc, 'div', 'sbw-nav');
   /** @type {Map<string, HTMLAnchorElement>} */
   const links = new Map();
@@ -199,7 +203,7 @@ export function createShell({ host, doc = document, win = /** @type {Window} */ 
       if (view === active) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');
     }
     more.classList.toggle('is-active', route.view === 'settings' || route.view === 'routines' || (win.innerWidth < 700 && route.view === 'projects'));
-    doc.title = route.view === 'home' ? 'Second Brain' : `${TITLES[route.view]} · Second Brain`;
+    doc.title = route.view === 'home' ? 'Veritas' : `${TITLES[route.view]} · Veritas`;
   }
 
   async function render() {

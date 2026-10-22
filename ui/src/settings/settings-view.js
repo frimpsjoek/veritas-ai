@@ -229,7 +229,7 @@ export function SettingsView(host, doc, mount, options = {}) {
     paintNav();
     pane.replaceChildren();
     const groups = visibleSections({ host: kind, platform, query, section, advanced, supports });
-    if (engineError && ROWS.some((r) => r.store === 'engine')) pane.append(h(doc, 'p', 'sbs-banner', "Couldn't reach the Second Brain server, so some values show their defaults."));
+    if (engineError && ROWS.some((r) => r.store === 'engine')) pane.append(h(doc, 'p', 'sbs-banner', "Couldn't reach the Veritas server, so some values show their defaults."));
     if (query && !groups.length) pane.append(h(doc, 'p', 'sbs-empty', `Nothing matches "${query}".`));
     for (const { section: s, rows, hiddenAdvanced } of groups) {
       const group = h(doc, 'section', 'sbs-group');

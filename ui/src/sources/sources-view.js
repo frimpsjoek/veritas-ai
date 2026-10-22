@@ -97,10 +97,10 @@ export async function mountSources(into, { host, doc, links }, { mode, routines:
     if (!known) routines = (await ai.routines?.list()) ?? [];
   } catch (error) {
     host.logError?.(error);
-    hint("Couldn't reach the Second Brain server.");
+    hint("Couldn't reach the Veritas server.");
     return;
   }
-  if (!ai.routines || !ai.radar) { hint('The reading radar needs the updated Second Brain server. Restart it and try again.'); return; }
+  if (!ai.routines || !ai.radar) { hint('The reading radar needs the updated Veritas server. Restart it and try again.'); return; }
 
   let routine = routines.find((r) => isRadar(r) && r.status === 'active') ?? routines.find(isRadar) ?? null;
   const form = routine ? formFromRoutine(routine) : startEmpty(newForm());

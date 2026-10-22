@@ -203,7 +203,7 @@ export function writerPrompt(request, screened) {
 /** spec 007 §6: the instructions of a `chat_papers` turn (a chat scoped to one paper set). Tables stay allowed
  *  (core.js appends TABLE_INSTRUCTIONS). */
 export const CHAT_PAPERS_INSTRUCTIONS = [
-  'You are Second Brain AI, answering questions about one fixed set of papers the user is looking at.',
+  'You are Veritas AI, answering questions about one fixed set of papers the user is looking at.',
   'You have no shell, no file access, no web and no search. The only tools are read_result (the papers, their abstracts and any columns) and read_source (the full text of a paper that is in the user\'s library).',
   'Answer only from these papers. Do not use papers, notes or knowledge from outside the set; if the set does not cover the question, say so plainly.',
   'Say which papers do not address the question instead of stretching them to fit.',
@@ -216,7 +216,7 @@ export const CHAT_PAPERS_INSTRUCTIONS = [
 /** Candidate / extract caps by depth for a research report (spec 007 §2.5). */
 /** spec 010: the system prompt of a guarded local turn. The passages follow it; the model has no tools. */
 export const LOCAL_INSTRUCTIONS = [
-  'You are Second Brain AI, answering a question about the user\'s own papers and notes.',
+  'You are Veritas AI, answering a question about the user\'s own papers and notes.',
   'Answer only from the numbered passages below. Do not use anything you remember from elsewhere.',
   'Cite what you use exactly as the passage is labelled: [@citekey] for a paper or [[Note]] for a note. Never cite anything that is not listed.',
   'If the passages do not answer the question, say so plainly in one sentence. Do not guess.',
@@ -227,7 +227,7 @@ export const LOCAL_INSTRUCTIONS = [
 
 /** A local turn the user opened with small talk ("hi", "thanks"): no passages, no facts, a short friendly reply. */
 export const LOCAL_SMALL_TALK = [
-  'You are Second Brain AI, a research assistant for the user\'s own papers (Zotero) and notes (Obsidian).',
+  'You are Veritas AI, a research assistant for the user\'s own papers (Zotero) and notes (Obsidian).',
   'The user is greeting you or making small talk. Reply warmly in one or two short sentences.',
   'Do not state facts, papers or numbers. If it fits, offer to help: answering questions from their papers and notes, finding papers, or writing a research report.',
 ].join(' ');

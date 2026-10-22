@@ -108,7 +108,7 @@ export function linkMenu(doc, host, url, event) {
   const onOutside = (/** @type {Event} */ e) => { if (!pop.contains(/** @type {Node} */ (e.target))) close(); };
   const onKey = (/** @type {KeyboardEvent} */ e) => { if (e.key === 'Escape') close(); };
   pop.append(
-    menuItem(doc, { label: 'Open in Second Brain', onClick: () => host.openLink(url, { outside: false }) }, close),
+    menuItem(doc, { label: 'Open in Veritas', onClick: () => host.openLink(url, { outside: false }) }, close),
     menuItem(doc, { label: 'Open in your browser', icon: 'open', onClick: () => host.openLink(url, { outside: true }) }, close),
   );
   doc.body.append(pop);

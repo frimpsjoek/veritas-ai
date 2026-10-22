@@ -53,16 +53,18 @@ for (const asset of homeAssets()) copyFileSync(asset.path, `${out}/${asset.name}
 
 const icon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="#3b5bdb"/><path d="M256 112c-79 0-144 55-144 126 0 41 22 77 56 100l-8 58 63-34c10 2 22 3 33 3 79 0 144-55 144-127S335 112 256 112z" fill="none" stroke="#fff" stroke-width="28" stroke-linejoin="round"/><circle cx="200" cy="240" r="16" fill="#fff"/><circle cx="256" cy="240" r="16" fill="#fff"/><circle cx="312" cy="240" r="16" fill="#fff"/></svg>\n`;
 writeFileSync(`${out}/icon.svg`, icon);
+// Veritas's own mark and logo (src/brand): the tab and home-screen icon, the rail and the sign-in page.
+for (const name of ['veritas-mark.png', 'veritas-mark-180.png', 'veritas-logo.png']) copyFileSync(`src/brand/${name}`, `${out}/${name}`);
 
 writeFileSync(`${out}/manifest.webmanifest`, `${JSON.stringify({
-  name: 'Second Brain',
-  short_name: 'Second Brain',
+  name: 'Veritas',
+  short_name: 'Veritas',
   start_url: '/app/',
   scope: '/app/',
   display: 'standalone',
   background_color: '#ffffff',
-  theme_color: '#3b5bdb',
-  icons: [{ src: 'icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' }],
+  theme_color: '#333f8f',
+  icons: [{ src: 'veritas-mark.png', sizes: '512x512', type: 'image/png', purpose: 'any' }, { src: 'veritas-mark-180.png', sizes: '180x180', type: 'image/png', purpose: 'any' }],
 }, null, 2)}\n`);
 
 writeFileSync(`${out}/index.html`, `<!doctype html>
@@ -70,11 +72,11 @@ writeFileSync(`${out}/index.html`, `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Second Brain</title>
-<meta name="theme-color" content="#3b5bdb">
+<title>Veritas</title>
+<meta name="theme-color" content="#333f8f">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="icon" href="icon.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="icon.svg">
+<link rel="icon" href="veritas-mark-180.png" type="image/png">
+<link rel="apple-touch-icon" href="veritas-mark-180.png">
 <link rel="preload" href="inter.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="fraunces.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="${cssName}">
@@ -92,8 +94,8 @@ writeFileSync(`${out}/login.html`, `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="referrer" content="no-referrer">
-<title>Sign in · Second Brain</title>
-<link rel="icon" href="icon.svg" type="image/svg+xml">
+<title>Sign in · Veritas</title>
+<link rel="icon" href="veritas-mark-180.png" type="image/png">
 <link rel="stylesheet" href="${cssName}">
 </head>
 <body>

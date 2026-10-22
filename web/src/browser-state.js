@@ -45,8 +45,8 @@ export function blockedReason(answer, error) {
   if (answer?.mode === 'blocked' && answer.reason) return String(answer.reason);
   const status = /** @type {any} */ (error)?.status;
   if (status === 400) return String(/** @type {any} */ (error)?.message || 'This link does not open here.');
-  if (status === 401 || status === 403) return 'Sign in to Second Brain again to open links here.';
-  return "Second Brain couldn't reach the page.";
+  if (status === 401 || status === 403) return 'Sign in to Veritas again to open links here.';
+  return "Veritas couldn't reach the page.";
 }
 
 /** The file a link names, for the bar while a PDF opens. @param {string} url */
