@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { checkBoundaries } from './boundaries.mjs';
 
 /** @param {Record<string, string>} files repo-relative path → contents */
@@ -94,4 +95,15 @@ test('lets test and dev folders read any part, but not old repo paths', () => {
   assert.equal(found.length, 1);
   assert.equal(found[0].file, 'web/test/x.test.js');
   assert.match(found[0].reason, /old repo path/);
+});
+
+test('in a git repo, skips files git ignores (build output)', () => {
+  const root = repo({
+    '.gitignore': 'zotero/content/bundle.js\n',
+    'zotero/content/bundle.js': "import x from '../../web/src/a.js';\n",
+    'zotero/content/hand.js': "import x from '../../web/src/a.js';\n",
+  });
+  execFileSync('git', ['init', '-q', root]);
+  const found = checkBoundaries(root);
+  assert.deepEqual(found.map((f) => f.file), ['zotero/content/hand.js']);
 });

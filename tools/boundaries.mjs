@@ -3,6 +3,7 @@
 // agent, ui may use agent, agent and server use nothing outside themselves. An app never imports another app, and no
 // path may still name one of the old Second Brain repos.
 //   node tools/boundaries.mjs [root]    prints `file:line: reason` per violation; exit 1 when there is any
+import { execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -34,13 +35,25 @@ function sources(dir) {
   });
 }
 
+/** The files git would commit (tracked or new, not ignored), or null outside a git repo. @param {string} root */
+function gitFiles(root) {
+  try {
+    const out = execFileSync('git', ['-C', root, 'ls-files', '--cached', '--others', '--exclude-standard', '-z'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    return out.split('\0').filter((f) => SOURCE.test(f) && !f.split('/').some((d) => SKIP.has(d))).map((f) => join(root, f));
+  } catch {
+    return null;
+  }
+}
+
 /** @param {string} root @returns {{ file: string, line: number, spec: string, reason: string }[]} */
 export function checkBoundaries(root) {
   root = resolve(root);
   const found = [];
+  const tracked = gitFiles(root); // build output is git-ignored, so in a repo only real sources are read
   for (const from of Object.keys(ALLOWED)) {
     let files;
-    try { files = sources(join(root, from)); } catch { continue; } // a part that does not exist yet
+    if (tracked) files = tracked.filter((f) => relative(root, f).split(sep)[0] === from);
+    else try { files = sources(join(root, from)); } catch { continue; } // a part that does not exist yet
     for (const path of files) {
       const file = relative(root, path).split(sep).join('/');
       const lines = readFileSync(path, 'utf8').split('\n');
