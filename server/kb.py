@@ -401,7 +401,23 @@ class Embedder:
 
 # ---------------------------------------------------------------- indexing
 
+# During an index run, the vectors of deleted rows, keyed by the exact text they were made from. A note re-stored
+# under a new path (its folder became the output or stopped being it) or with only some sections edited gets the
+# vectors of its unchanged passages back instead of re-embedding them. None outside an index run.
+_VEC_STASH: dict[str, bytes] | None = None
+
+
+def _embed_text(title: str, heading: str, text: str) -> str:
+    """What embed_pending embeds for a passage (and the stash key)."""
+    return f"{title}" + (f" > {heading}" if heading else "") + f"\n{text}"
+
+
 def delete_note(db: sqlite3.Connection, rel: str) -> None:
+    if _VEC_STASH is not None:
+        for title, heading, text, vec in db.execute(
+                "SELECT n.title, c.heading, c.text, v.vec FROM chunks c JOIN notes n ON n.path=c.path "
+                "JOIN vecs v ON v.id=c.id WHERE c.path=?", (rel,)):
+            _VEC_STASH[_embed_text(title, heading, text)] = vec
     ids = [r[0] for r in db.execute("SELECT id FROM chunks WHERE path=?", (rel,))]
     db.executemany("DELETE FROM chunks_fts WHERE rowid=?", [(i,) for i in ids])
     db.execute("DELETE FROM chunks WHERE path=?", (rel,))
@@ -544,6 +560,15 @@ def index(full: bool = False, verbose: bool = True, reread_zotero: bool = False,
 
 
 def _index(full: bool, verbose: bool, progress: Progress) -> dict:
+    global _VEC_STASH
+    _VEC_STASH = {}
+    try:
+        return _index_stages(full, verbose, progress)
+    finally:
+        _VEC_STASH = None
+
+
+def _index_stages(full: bool, verbose: bool, progress: Progress) -> dict:
     started = time.time()
     db = connect()
     if full:
@@ -642,6 +667,9 @@ def store_note(db: sqlite3.Connection, rel: str, title: str, folder: str, source
                          (rel, ord_, chunk.heading, chunk.text))
         db.execute("INSERT INTO chunks_fts (rowid, title, heading, text, tags) VALUES (?,?,?,?,?)",
                    (cur.lastrowid, title, chunk.heading, chunk.text, " ".join(tags)))
+        vec = _VEC_STASH.get(_embed_text(title, chunk.heading, chunk.text)) if _VEC_STASH is not None else None
+        if vec is not None:
+            db.execute("INSERT OR REPLACE INTO vecs VALUES (?,?,?)", (cur.lastrowid, rel, vec))
 
 
 def index_media(db: sqlite3.Connection, verbose: bool, progress: Progress) -> int:
@@ -810,7 +838,7 @@ def embed_pending(db: sqlite3.Connection, verbose: bool = True, batch: int = 256
                           f"WHERE c.id NOT IN (SELECT id FROM vecs) ORDER BY {EMBED_ORDER} LIMIT ?", (batch,)).fetchall()
         if not rows:
             break
-        texts = [f"{title}" + (f" > {heading}" if heading else "") + f"\n{text}" for _, title, heading, text, _ in rows]
+        texts = [_embed_text(title, heading, text) for _, title, heading, text, _ in rows]
         vectors = embed(texts, batch_size=64 if embed.mlx is not None else 16).astype(np.float16)
         db.executemany("INSERT OR REPLACE INTO vecs VALUES (?,?,?)",
                        [(r[0], r[4], v.tobytes()) for r, v in zip(rows, vectors)])
