@@ -3,7 +3,6 @@
 set -e
 cd "$(dirname "$0")"
 (cd editor-src && npm ci --silent && npm run build --silent)
-(cd engine-src && npm ci --silent --ignore-scripts && npm run build --silent)
 (cd ../agent && npm ci --silent && npm run build --silent)  # the server's agentd
 (cd ../ui && npm ci --silent)
 npm ci --silent

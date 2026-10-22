@@ -233,62 +233,29 @@ SecondBrain.Editor = class {
 			try {
 				note = await this.store.load(this.item);
 			} catch (error) {
-				if (this.store.kind !== "obsidian" || !this.sb.isOffline(error)) throw error;
+				if (!this.sb.isOffline(error)) throw error;
+				// no local copy any more: say so, keep the editor; checkForChanges opens the note once the server is back
 				this.sb.setOnline(false);
-				this.store = this.sb.local;
-				note = await this.store.load(this.item);
+				await this.ready;
+				this.restoreDraft();
+				this.setStatus(this.sb.unreachable(error), true);
+				return;
 			}
 			await this.ready;
 			this.apply(note);
-			if (this.store.kind === "obsidian") await this.adoptLocalCopy(note);
 			this.restoreDraft();
 		} catch (error) {
 			this.setStatus(`Couldn't open the note: ${error.message ?? error}`, true);
 		}
 	}
 
-	/** Notes written while Second Brain wasn't running live in the local folder; move them into the vault. */
-	async adoptLocalCopy(note) {
-		const local = await this.sb.local.load(this.item).catch(() => null);
-		if (!local?.path) return;
-		// a notes folder inside the vault: the server already treats this very file as the paper's note
-		if (note.path && local.path.replace(/\\/g, "/").endsWith("/" + note.path)) return;
-		if (local.text.trim() === note.text.trim()) return this.sb.local.retire(this.key);
-		if (!note.text.trim()) {
-			this.applying = true;
-			this.cm.setText(local.text);
-			this.applying = false;
-			this.dirty = true;
-			await this.flush();
-			if (!this.dirty && this.store.kind === "obsidian") await this.sb.local.retire(this.key);
-			return;
-		}
-		this.setStatus("Two versions", true);
-		this.conflict.replaceChildren(
-			this.el("span", "", "You also wrote in this note while Second Brain wasn't running."),
-			this.button("Use that version", "Replace the Obsidian note with the one written offline", async () => {
-				this.applying = true;
-				this.cm.setText(local.text);
-				this.applying = false;
-				await this.flush(true);
-				if (!this.dirty) await this.sb.local.retire(this.key);
-			}),
-			this.button("Keep Obsidian's", "The offline copy is kept in Zotero's data folder, under second-brain/moved-to-obsidian", async () => {
-				this.conflict.hidden = true;
-				await this.sb.local.retire(this.key);
-				this.setStatus(this.savedLabel());
-			}),
-		);
-		this.conflict.hidden = false;
-	}
-
 	savedLabel() {
-		if (!this.path) return this.store.kind === "local" ? "New note · saved on this computer when you write" : "New note · saved to Obsidian when you write";
-		return this.store.kind === "local" ? "Saved on this computer" : "Synced with Obsidian";
+		if (!this.path) return "New note · saved to your notes when you write";
+		return "Synced with your notes";
 	}
 
 	showWhere() {
-		this.obsidian.hidden = this.store.kind !== "obsidian" || !this.path;
+		this.obsidian.hidden = !this.path;
 	}
 
 	apply(note) {
@@ -343,16 +310,7 @@ SecondBrain.Editor = class {
 		this.setStatus("Saving…");
 		this.saving = (async () => {
 			try {
-				let saved;
-				try {
-					saved = await this.store.save(this.item, text, this.hash, force);
-				} catch (error) {
-					if (this.store.kind !== "obsidian" || !this.sb.isOffline(error)) throw error;
-					// Second Brain stopped: keep writing to this computer; it moves into the vault when it's back
-					this.sb.setOnline(false);
-					this.store = this.sb.local;
-					saved = await this.store.save(this.item, text, null, true);
-				}
+				const saved = await this.store.save(this.item, text, this.hash, force);
 				this.hash = saved.hash;
 				this.path = saved.path;
 				this.showWhere();
@@ -365,7 +323,13 @@ SecondBrain.Editor = class {
 			} catch (error) {
 				this.dirty = true;
 				if (error.status === 409) this.showConflict(error.body);
-				else this.setStatus(`Not saved: ${error.message ?? error}`, true);
+				else if (this.sb.isOffline(error)) {
+					// the server stopped: the text stays here (and in the drafts kept at quit) and is saved once it is back
+					this.sb.setOnline(false);
+					this.setStatus(`Not saved: ${this.sb.unreachable(error)}`, true);
+					clearTimeout(this.saveTimer);
+					this.saveTimer = setTimeout(() => this.flush(), 10000);
+				} else this.setStatus(`Not saved: ${error.message ?? error}`, true);
 			} finally {
 				this.saving = null;
 			}
@@ -385,7 +349,7 @@ SecondBrain.Editor = class {
 	}
 
 	showConflict(current) {
-		const elsewhere = this.store.kind === "local" ? "outside Zotero" : "in Obsidian";
+		const elsewhere = "outside Zotero";
 		this.setStatus(`Changed ${elsewhere}`, true);
 		this.conflict.replaceChildren(
 			this.el("span", "", `This note was also changed ${elsewhere}.`),
@@ -599,7 +563,7 @@ SecondBrain.Editor = class {
 			await Zotero.Promise.delay(1000);
 		}
 		await this.flush();
-		if (this.store.kind === "obsidian") this.sb.post("/paper-note/refresh", { key: this.key }).catch((error) => Zotero.logError(error));
+		this.sb.post("/paper-note/refresh", { key: this.key }).catch((error) => Zotero.logError(error));
 	}
 
 	/** Rebuild HTML (Zotero notes) from an allowlist, so nothing in a note can run inside Zotero. */

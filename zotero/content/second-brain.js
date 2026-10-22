@@ -5,7 +5,7 @@ SecondBrain = {
 	id: null,
 	version: null,
 	rootURI: null,
-	online: false, // the Second Brain server (Obsidian index) answered recently; everything else works without it
+	online: false, // the Veritas server answered recently; notes, search and the assistant need it
 	paneID: null,
 	menuIDs: [],
 	columnKey: null,
@@ -25,12 +25,10 @@ SecondBrain = {
 		this.autoQuote = Zotero.Prefs.get("extensions.secondbrain.autoQuote", true) ?? true;
 		this.focusMode = Zotero.Prefs.get("extensions.secondbrain.focus", true) ?? false;
 		Zotero.SecondBrain = this; // for Zotero's Run JavaScript window and tests
-		this.local = new this.LocalStore(this);
 		this.obsidian = new this.ObsidianStore(this);
-		this.localIndex = new this.LocalIndex(this);
 		this.agent = new this.AgentHost(this);
 		this.updater = new this.Updater(this);
-		Zotero.uiReadyPromise.then(() => { this.localIndex.start(); this.updater.start(); });
+		Zotero.uiReadyPromise.then(() => this.updater.start());
 		this.prefObservers = ["color.background", "color.text", "color.accent", "color.highlight"].map((name) =>
 			Zotero.Prefs.registerObserver(`extensions.secondbrain.${name}`, () => {
 				for (const editor of this.editors) editor.applyColors();
@@ -51,7 +49,6 @@ SecondBrain = {
 
 	shutdown() {
 		for (const id of this.prefObservers ?? []) Zotero.Prefs.unregisterObserver(id);
-		this.localIndex?.close();
 		this.agent?.shutdown();
 		this.updater?.stop();
 		delete Zotero.SecondBrain;
@@ -102,13 +99,21 @@ SecondBrain = {
 		return (Zotero.Prefs.get("extensions.secondbrain.server", true) || "http://127.0.0.1:27182").replace(/\/+$/, "");
 	},
 
-	/** Notes go to the Obsidian vault while the Second Brain server runs, otherwise to the local folder. Until
-	 *  the server has been seen to be down, try it: at startup the first note opens before any check has
-	 *  answered, and guessing "down" there opened the empty local copy instead of the vault note. An editor
-	 *  that can't reach the server falls back to the local folder by itself. */
+	/** The access token for a Veritas server on another computer (Settings → Server and phone). The server treats a
+	 *  request from this computer as local and needs none, so it is sent only when set. */
+	get token() {
+		return String(Zotero.Prefs.get("extensions.secondbrain.token", true) ?? "").trim();
+	},
+
+	/** Headers for every request to the Veritas server: `extra`, plus `Authorization: Bearer <token>` when a token is set. */
+	serverHeaders(extra = {}) {
+		const token = this.token;
+		return token ? { ...extra, Authorization: `Bearer ${token}` } : { ...extra };
+	},
+
+	/** Paper notes live on the Veritas server; there is no second store on this computer. */
 	store() {
-		const where = Zotero.Prefs.get("extensions.secondbrain.notesIn", true) || "auto";
-		return where === "local" || (this.checkedOnce && !this.online) ? this.local : this.obsidian;
+		return this.obsidian;
 	},
 
 	isOffline(error) {
@@ -118,8 +123,8 @@ SecondBrain = {
 	setOnline(on) {
 		if (this.online === on) return;
 		this.online = on;
-		if (!on) this.localIndex?.serverGone();
 		Zotero.ItemTreeManager.refreshColumns?.();
+		this.agent?.connectionChanged?.();
 	},
 
 	openSettings() {
@@ -138,67 +143,36 @@ SecondBrain = {
 		}));
 	},
 
-	/** Search over the index when it runs; otherwise Zotero's own search of the library. */
+	/** Search over the Veritas server's index. Without the server it throws, and the caller shows unreachable(). */
 	async searchAll(query, limit, source = "", exclude = "") {
-		if (this.online || !this.checkedOnce) {
-			try {
-				const params = new URLSearchParams({ q: query, limit: String(limit) });
-				if (source) params.set("source", source);
-				if (exclude) params.set("exclude_source", exclude);
-				const hits = await this.api(`/search?${params}`);
-				this.setOnline(true);
-				return hits;
-			} catch (error) {
-				if (!this.isOffline(error)) throw error;
-				this.setOnline(false);
-			}
+		const params = new URLSearchParams({ q: query, limit: String(limit) });
+		if (source) params.set("source", source);
+		if (exclude) params.set("exclude_source", exclude);
+		try {
+			const hits = await this.api(`/search?${params}`);
+			this.setOnline(true);
+			return hits;
+		} catch (error) {
+			if (this.isOffline(error)) this.setOnline(false);
+			throw error;
 		}
-		// Without the server only Zotero papers can be searched: a search for notes, PDFs or images has nothing to look in.
-		if (exclude || (source && source !== "zotero")) throw new Error("Notes need the Second Brain server");
-		return (await this.searchLocally(query, limit)).map((item) => ({
-			path: "zotero/" + item.key, title: item.getField("title"),
-			zotero: { authors: item.getCreators().map((c) => [c.firstName, c.lastName].filter(Boolean).join(" ")), year: item.getField("year"), venue: item.getField("publicationTitle") },
-		}));
-	},
-
-	/** Papers for a query without the server: the built-in model by meaning, plus Zotero's own word search.
-	 *  `words` picks Zotero's quick-search mode; `within` (a Set of item keys) limits the results to a scope. */
-	async searchLocally(query, limit, { words = "quicksearch-titleCreatorYearNote", within = null } = {}) {
-		const search = new Zotero.Search();
-		search.libraryID = Zotero.Libraries.userLibraryID;
-		search.addCondition(words, "contains", query);
-		const ids = (await search.search()).slice(0, 400);
-		const items = Zotero.Items.get(ids).map((item) => (item.isRegularItem() ? item : item.parentItem)).filter((item) => item?.isRegularItem());
-		const keyword = [...new Map(items.map((item) => [item.key, item])).keys()];
-		let keys = keyword;
-		if (this.localIndex.ready) {
-			// meaning first; papers that also contain the words move up a little
-			const exact = new Set(keyword);
-			// a scope can be small, so rank the whole library before keeping the papers inside it
-			const ranked = (await this.localIndex.search(query, within ? this.localIndex.keys.length : 2 * limit)).map((hit) => ({ ...hit, score: hit.score + (exact.has(hit.key) ? 0.03 : 0) }));
-			ranked.sort((a, b) => b.score - a.score);
-			keys = [...new Set([...ranked.map((hit) => hit.key), ...keyword])];
-		}
-		if (within) keys = keys.filter((key) => within.has(key));
-		const found = keys.slice(0, limit).map((key) => Zotero.Items.getByLibraryAndKey(Zotero.Libraries.userLibraryID, key)).filter(Boolean);
-		await Zotero.Items.loadDataTypes(found);
-		return found;
 	},
 
 	async api(path) {
 		const response = await Zotero.HTTP.request("GET", this.server + path, {
-			responseType: "json", timeout: 15000, successCodes: false,
+			headers: this.serverHeaders(), responseType: "json", timeout: 15000, successCodes: false,
 		});
 		if (response.status >= 400 || !response.response) {
-			throw new Error(response.response?.error ?? `HTTP ${response.status}`);
+			throw Object.assign(new Error(response.response?.error ?? `HTTP ${response.status}`), { status: response.status });
 		}
 		return response.response;
 	},
 
+	/** The one sentence for "the server did not answer", or what it answered instead. */
 	unreachable(error) {
-		return this.isOffline(error)
-			? "Second Brain isn't running, so this needs it. Notes, highlights and citations still work without it."
-			: `Couldn't reach Second Brain: ${error?.message ?? error}`;
+		if (this.isOffline(error)) return `Veritas server is not running (${this.server}). Start it, then try again.`;
+		if (error?.status === 401) return "The Veritas server did not accept the access token (Settings → Server and phone).";
+		return `Couldn't reach the Veritas server: ${error?.message ?? error}`;
 	},
 
 	// ------------------------------------------------------------------ opening results
@@ -336,10 +310,10 @@ SecondBrain = {
 			this.setOnline(true);
 		} catch (error) {
 			if (box.dataset.key !== item.key) return;
-			if (!this.isOffline(error)) Zotero.logError(error);
-			this.setOnline(false);
+			if (this.isOffline(error)) this.setOnline(false);
+			else Zotero.logError(error);
+			box.append(this.stateLine(doc, this.isOffline(error) ? "info" : "error", this.unreachable(error)));
 			this.relatedInZotero(box, item);
-			this.similarLocally(box, item);
 			setSectionSummary?.("");
 			return;
 		}
@@ -364,7 +338,7 @@ SecondBrain = {
 		this.list(more, "Similar papers in your library", papers, "No similar papers found.");
 	},
 
-	/** Without the index: the paper's related items as Zotero knows them. */
+	/** Without the server: the paper's related items as Zotero itself records them (no index involved). */
 	relatedInZotero(box, item) {
 		const doc = box.ownerDocument;
 		const more = this.related_(doc);
@@ -374,26 +348,6 @@ SecondBrain = {
 			.map((other) => ({ path: "zotero/" + other.key, title: other.getField("title"),
 				zotero: { authors: other.getCreators().map((c) => [c.firstName, c.lastName].filter(Boolean).join(" ")), year: other.getField("year"), venue: other.getField("publicationTitle") } }));
 		this.list(more, "Related in Zotero", rows, "No related items.");
-	},
-
-	/** Without the index server: similar papers from the search model running in Zotero, if it's downloaded. */
-	similarLocally(box, item) {
-		const doc = box.ownerDocument;
-		const more = box.querySelector(".sb-related") ?? box.appendChild(this.related_(doc));
-		const index = this.localIndex;
-		if (!index.ready) {
-			const hint = this.stateLine(doc, "info", index.state === "absent"
-				? "For similar papers without Obsidian, download the search model in Second Brain settings (⚙)."
-				: "The search model is still reading your library; similar papers show here when it's done.");
-			more.append(hint);
-			return;
-		}
-		const rows = index.similar(item.key, 8).map(({ key, score }) => {
-			const other = Zotero.Items.getByLibraryAndKey(item.libraryID, key);
-			return other && { path: "zotero/" + key, title: other.getField("title"), score, calibration: index.calibration,
-				zotero: { authors: other.getCreators().map((c) => [c.firstName, c.lastName].filter(Boolean).join(" ")), year: other.getField("year"), venue: other.getField("publicationTitle") } };
-		}).filter(Boolean);
-		this.list(more, "Similar papers in your library", rows, "No similar papers found.");
 	},
 
 	/** "My notes" of the paper's Obsidian note, editable right here. */
@@ -459,7 +413,6 @@ SecondBrain = {
 		// deleted items can no longer be traced to their paper
 		if (event === "delete") this.touchedAll = true;
 		else for (const id of ids) this.touched.add(this.paperKeyOf(id));
-		if (event !== "refresh") this.localIndex?.updateSoon();
 		clearTimeout(this.zoteroTimer);
 		this.zoteroTimer = setTimeout(() => {
 			const added = [...this.added];
@@ -723,7 +676,7 @@ SecondBrain = {
 
 	async post(path, body) {
 		const response = await Zotero.HTTP.request("POST", this.server + path, {
-			body: JSON.stringify(body), headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(body), headers: this.serverHeaders({ "Content-Type": "application/json" }),
 			responseType: "json", timeout: 30000, successCodes: false,
 		});
 		if (response.status >= 400 || !response.response) {
@@ -917,7 +870,7 @@ SecondBrain = {
 	async refreshIndexState() {
 		try {
 			this.indexState = (await this.api("/zotero/status")).items ?? {};
-			this.online = true;
+			this.setOnline(true);
 			Zotero.ItemTreeManager.refreshColumns?.();
 		} catch (error) {
 			if (this.isOffline(error)) this.setOnline(false);
@@ -1047,9 +1000,7 @@ SecondBrain = {
 				row.addEventListener("mousemove", () => { if (active !== n) select(n); });
 				list.append(row);
 			});
-			list.append(this.stateLine(doc, "info", this.online ? "↑↓ move · Enter open · papers open here, notes in Obsidian"
-				: this.localIndex.ready ? "↑↓ move · Enter open · searching your library by meaning, on this computer"
-				: "↑↓ move · Enter open · searching titles, authors and notes (download the search model in settings to search by meaning)"));
+			list.append(this.stateLine(doc, "info", "↑↓ move · Enter open · papers open here, notes in Obsidian"));
 			select(0);
 			this.papersInHits(hits).then((keys) => {
 				if (mine !== seq || !keys.length) return;
@@ -1085,15 +1036,6 @@ SecondBrain = {
 		}
 	},
 
-	/** Without Second Brain there's no drive search, but papers with no PDF can still be found online. */
-	async planWithoutServer() {
-		const items = (await Zotero.Items.getAll(Zotero.Libraries.userLibraryID, true)).filter((item) => item.isRegularItem());
-		let ok = 0;
-		const missing = [];
-		for (const item of items) (await this.hasWorkingPDF(item)) ? ok++ : missing.push(item.key);
-		return { counts: { ok, pdf_attachments: items.length, ok_after_base: 0 }, relink: [], find_online: missing, local: true };
-	},
-
 	async runFix(win, prompts, job) {
 		const progress = new Zotero.ProgressWindow({ closeOnClick: false });
 		progress.changeHeadline("Second Brain: checking PDF attachments");
@@ -1112,24 +1054,19 @@ SecondBrain = {
 				await Zotero.Promise.delay(1500);
 			}
 		} catch (error) {
-			if (!this.isOffline(error)) {
-				line.setError();
-				line.setText(this.unreachable(error));
-				progress.startCloseTimer(8000);
-				return;
-			}
-			line.setText("Finding papers without a PDF…");
-			plan = await this.planWithoutServer();
+			line.setError();
+			line.setText(this.unreachable(error));
+			progress.startCloseTimer(8000);
+			return;
 		}
 		progress.close();
 
 		const c = plan.counts;
 		const baseChange = plan.base && Zotero.Prefs.get("baseAttachmentPath") !== plan.base;
 		const text = [
-			plan.local ? `${c.ok} of ${c.pdf_attachments} papers have a PDF that opens. (Start Second Brain to also search your drives for lost files.)`
-				: `${c.ok} of ${c.pdf_attachments} PDF attachments open today.`,
+			`${c.ok} of ${c.pdf_attachments} PDF attachments open today.`,
 			baseChange ? `• ${c.ok_after_base} more open once linked files are read from ${plan.base}.` : "",
-			plan.local ? "" : `• ${plan.relink.length} were found elsewhere on your drives (checked against each paper's title or DOI) and will be relinked.`,
+			`• ${plan.relink.length} were found elsewhere on your drives (checked against each paper's title or DOI) and will be relinked.`,
 			`• ${plan.find_online.length} papers still have no PDF; Zotero will look for open-access copies online, then Unpaywall (with your email), arXiv, OpenAlex, Semantic Scholar and Europe PMC (this runs in the background and can take a while).`,
 			"",
 			"Nothing is deleted. Continue?",

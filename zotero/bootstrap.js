@@ -1,6 +1,6 @@
 /* Second Brain for Zotero: notes on each paper, similar papers and search by meaning, and free-PDF finding.
-   Works on its own; when the optional Second Brain server runs (127.0.0.1:27182 by default) notes sync with an
-   Obsidian vault and search covers the vault too. */
+   A client of the Veritas server (127.0.0.1:27182 by default), like the Obsidian plugin: notes, search and the
+   assistant live on the server. */
 
 var SecondBrain;
 var chromeHandle;
@@ -12,7 +12,6 @@ async function startup({ id, version, rootURI }) {
 	Services.scriptloader.loadSubScript(rootURI + "content/second-brain.js");
 	Services.scriptloader.loadSubScript(rootURI + "content/editor.js");
 	Services.scriptloader.loadSubScript(rootURI + "content/store.js");
-	Services.scriptloader.loadSubScript(rootURI + "content/local-index.js");
 	Services.scriptloader.loadSubScript(rootURI + "content/discover.js");
 	Services.scriptloader.loadSubScript(rootURI + "content/pending-adds.js");
 	Services.scriptloader.loadSubScript(rootURI + "content/agent.js");

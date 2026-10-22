@@ -1,5 +1,5 @@
 // The only host-specific code. The core is plain ES2022 with zero dependencies; it touches the OS only through this port.
-// Gecko impl (content/agent-host.js): Subprocess.sys.mjs, IOUtils/PathUtils, fetch, Zotero.Server.Endpoints.
+// (Zotero used to have a Gecko implementation; it is now a client of the server and runs none.)
 // Node impl (agent-src/node/platform.mjs): child_process.spawn, fs/promises, fetch, http.createServer.
 
 export interface ChildProcess {

@@ -11,4 +11,3 @@ server/models/
 .superpowers/
 ui/dev/out/
 ui/dev/.perf-cache/
-engine-src/model-cache/

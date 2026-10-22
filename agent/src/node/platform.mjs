@@ -1,6 +1,6 @@
 // agent-src/src/node/platform.mjs. The Node implementation of platform.d.ts's Platform port: child_process.spawn,
 // fs/promises, the global fetch, and one shared http.createServer that routes are mounted on and off of. This is
-// what the sidecar (agentd, T3.1) runs on; Zotero gets gecko/platform.js (T4.1) against the same interface.
+// what the sidecar (agentd, T3.1) runs on. Zotero runs no platform of its own: it is a client of this server.
 import { spawn as nodeSpawn } from 'node:child_process';
 import { promises as fsp, constants as fsConstants } from 'node:fs';
 import path from 'node:path';

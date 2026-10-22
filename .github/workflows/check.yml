@@ -21,7 +21,6 @@ jobs:
             obsidian/package-lock.json
             zotero/package-lock.json
             zotero/editor-src/package-lock.json
-            zotero/engine-src/package-lock.json
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"

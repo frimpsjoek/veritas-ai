@@ -4,10 +4,10 @@ A Zotero 7+ plugin for reading and writing about papers.
 
 - **Notes on each paper, inside Zotero.** A large Markdown editor in the item pane (and beside an open PDF) with
   live formatting, images you paste, and `[@citekey]` citations to other papers in your library. New highlights
-  you make in the PDF can be added to the note as linked quotes. Notes are plain Markdown files on your computer.
-- **Similar papers and search by meaning, on your computer.** Download the search model once (about 45 MB) from
-  the plugin's settings. It reads the title and abstract of every paper in your library and shows how close other
-  papers are to the one you're looking at. Nothing is sent anywhere.
+  you make in the PDF can be added to the note as linked quotes. Notes are plain Markdown files in the Veritas
+  server's notes folder.
+- **Similar papers and search by meaning.** The Veritas server's index shows how close other papers and notes are
+  to the one you're looking at.
 - **Find new papers.** Search the services you pick (OpenAlex, Semantic Scholar, arXiv, Crossref, PubMed / Europe
   PMC, bioRxiv / medRxiv, ChemRxiv; Google Scholar opens in your browser, since it has no API) in your own words, or open *Find Related Papers
   Online* on a paper to see similar papers, the papers citing it, and its references. Papers you already have are
@@ -16,12 +16,15 @@ A Zotero 7+ plugin for reading and writing about papers.
   Semantic Scholar and Europe PMC after Zotero's own resolvers.
 - **Focus.** One button hides the rest of the item pane and makes the note wider.
 
-It works on its own. If you also run the optional Second Brain server (a local index of an Obsidian vault and
-your Zotero library), notes sync both ways with an Obsidian vault, and search covers your vault too.
+The plugin is a client of the Veritas server (one knowledge base for Zotero, Obsidian and the web app), the same
+way the Obsidian plugin is. Notes, search, similar papers and the assistant need the server running; without it the
+plugin says "Veritas server is not running" and keeps unsaved note text until it is back. Free PDFs, Find new
+papers and your Zotero library itself work without it. Set the server address, and an access token for a server
+on another computer, in **Zotero Settings → Second Brain → Server and phone**.
 
 ## AI assistant (optional)
 
-Everything above works without it. The assistant answers questions from your own papers and notes, with
+The assistant runs on the Veritas server and answers questions from your own papers and notes, with
 citations you can click.
 
 **What you need.** One of these, already installed and signed in on your computer:
@@ -72,8 +75,8 @@ is hidden until you choose to trust that service. **Test** shows what is availab
 
 1. Download `second-brain-<version>.xpi` from the [latest release](https://github.com/frimpsjoek/zotero-second-brain/releases/latest).
 2. In Zotero: **Tools → Plugins**, then the gear menu → **Install Plugin From File…**, and pick the file.
-3. Open **Zotero Settings → Second Brain** to download the search model, choose where notes are kept, and add
-   your email for Unpaywall and OpenAlex.
+3. Open **Zotero Settings → Second Brain** to set the Veritas server address (and access token, if the server
+   runs on another computer), and add your email for Unpaywall and OpenAlex.
 
 Zotero checks this repository for updates.
 
@@ -81,11 +84,8 @@ Zotero checks this repository for updates.
 
 | What | Where |
 |---|---|
-| Paper notes (without the server) | `<Zotero data directory>/second-brain/notes/`, or a folder you choose. Each file has a `zotero-key` in its front matter. |
-| Search model and index | `<Zotero data directory>/second-brain/model`, `runtime`, `index` (Settings → Remove deletes them) |
-| Settings | Zotero preferences, `extensions.secondbrain.*` |
-| AI chats, reviews and AI settings (without the server) | `<Zotero data directory>/second-brain/` (`chats`, `reviews`, `settings.json`) |
-| Finished literature reviews | With the server: `ai_notes/Literature Reviews/` in your vault. Without it: `Literature Reviews/` in your notes folder. |
+| Paper notes, chats, reviews and AI settings | On the Veritas server (its notes folder and data folder) |
+| Settings | Zotero preferences, `extensions.secondbrain.*` (the access token is `extensions.secondbrain.token`) |
 
 ## Unpaywall and OpenAlex keys
 
@@ -108,11 +108,10 @@ and email are sent only to those services.
 ## Building
 
 ```sh
-./build.sh   # builds the editor and engine bundles, then dist/second-brain-<version>.xpi and dist/update.json
+./build.sh   # builds the editor and the agent client bundles, then dist/second-brain-<version>.xpi and dist/update.json
 ```
 
-The search engine is [Transformers.js](https://github.com/huggingface/transformers.js) with ONNX Runtime Web,
-running `snowflake-arctic-embed-s` in a few web workers. See [THIRD_PARTY.md](THIRD_PARTY.md) for licenses.
+See [THIRD_PARTY.md](THIRD_PARTY.md) for licenses.
 
 ## Releasing
 
