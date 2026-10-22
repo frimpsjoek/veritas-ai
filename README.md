@@ -10,6 +10,8 @@ Veritas AI: Joseph Frimpong, Oded Asiedu and Huihuo Zheng.
 
 ![Veritas reading radar](docs/images/reading-radar.png)
 
+**Demo video (2 min):** [docs/video/veritas-demo.mp4](https://github.com/frimpsjoek/veritas-ai/blob/main/docs/video/veritas-demo.mp4)
+
 ## What it does
 
 - **Chat over your own library and notes**, with every answer cited to a paper or note you can open.
