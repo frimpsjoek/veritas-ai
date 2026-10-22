@@ -282,7 +282,8 @@ def set_default_library(name: str) -> None:
     entries = load()
     entries = defaults() if entries is None else entries
     match = next((e for e in entries if e["name"] == name), None)
-    if match is None or detect(Path(match["path"]).expanduser()) != "zotero":
+    online = match is not None and match.get("kind") == "zotero-web"
+    if match is None or not (online or ("path" in match and detect(Path(match["path"]).expanduser()) == "zotero")):
         raise SourceError(f"there is no Zotero library named {name!r}")
     for e in entries:
         e.pop("default_library", None)

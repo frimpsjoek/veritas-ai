@@ -1,6 +1,7 @@
 """Add to Zotero and Read later from hosts that are not Zotero (spec 013 W3).
 
-    add_papers(papers, collection, tag)   per paper {status: added | queued | failed, key?, message?}
+    add_papers(papers, collection, tag)   per paper {status: added | queued | failed, key?, message?}; to the default
+                                          library: an online one directly (Web API), a local one through this queue
     tag_item(key, doi, title, tag)        the same for a tag edit (Read later)
     annotate(key, annotation)             a highlight made in the web reader, for the PDF attachment `key` (spec 014 G3)
     pending()  done(ids)  attempt(id, message)   the queue the Zotero plugin drains
@@ -152,9 +153,51 @@ def _outcome(entry_id: str, applied: dict[str, dict]) -> dict:
     return {"status": "queued", "id": entry_id}
 
 
+def default_account():
+    """The online library "+ Add" goes to, when the default library is one (else None: the local plugin queue)."""
+    import kb
+    return next((a for a in kb.LAYOUT.accounts if a.default_library and a.kind == "zotero-web"), None)
+
+
+def web_item(paper: dict, tag: str | None) -> dict:
+    """A Zotero Web API item for a paper as the apps send it ({title, authors, year, doi, abstract, venue, url})."""
+    authors = paper.get("authors") or []
+    authors = [authors] if isinstance(authors, str) else authors
+    item = {"itemType": "preprint" if "arxiv" in str(paper.get("doi") or paper.get("url") or "").lower() else "journalArticle",
+            "title": str(paper["title"]).strip(),
+            "creators": [{"creatorType": "author", "name": str(a)} for a in authors if str(a).strip()],
+            "date": str(paper.get("year") or ""), "DOI": str(paper.get("doi") or ""),
+            "abstractNote": str(paper.get("abstract") or ""), "url": str(paper.get("url") or ""),
+            "tags": [{"tag": tag}] if tag else []}
+    if paper.get("venue"):
+        item["publicationTitle" if item["itemType"] == "journalArticle" else "repository"] = str(paper["venue"])
+    return item
+
+
+def _add_online(account, papers: list, tag: str | None) -> list[dict]:
+    import zotero_web
+    key = zotero_web.get_key(account.user_id)
+    if not key:
+        return [{"status": "failed", "message": f"no Zotero API key for {account.name}; add it in Settings"} for _ in papers]
+    client = zotero_web.Client(account.user_id, key)
+    results = []
+    for paper in papers:
+        if not isinstance(paper, dict) or not str(paper.get("title") or "").strip():
+            results.append({"status": "failed", "message": "a paper needs a title"})
+            continue
+        try:
+            results.append({"status": "added", "key": client.create(web_item(paper, tag)), "library": account.name})
+        except zotero_web.ZoteroWebError as error:
+            results.append({"status": "failed", "message": str(error)})
+    return results
+
+
 def add_papers(papers: list, collection: str | None = None, tag: str | None = None) -> list[dict]:
     collection = collection or None
     tag = (tag or "").strip() or None
+    account = default_account()
+    if account is not None:  # local collection keys mean nothing online, so `collection` is not sent
+        return _add_online(account, papers, tag)
     results: list[dict] = []
     ids = []
     for paper in papers:
