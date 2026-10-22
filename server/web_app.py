@@ -17,12 +17,13 @@ import subprocess
 import tempfile
 import threading
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import unquote, urlencode
 
 import kb
 
 WEB_DIR = kb.HOME / "data" / "web"
 STATE_NAME = "state.json"
+APP_URL_FILE = kb.HOME / "data" / "web-app-url"
 # Kept in WEB_DIR by the server (state, sign-in sessions, queued adds); a request for them is a 404, not a download.
 PRIVATE = {STATE_NAME, "sessions.json", "pending-adds.json"}
 MAX_FILE_BYTES = 256 * 1024
@@ -181,4 +182,19 @@ def phone_link(api_token: str, port: int = 27182) -> dict:
         return {"problem": "Tailscale is running, but it does not forward to Second Brain yet. Run this once in Terminal:",
                 "command": f"tailscale serve --bg --https=8443 http://127.0.0.1:{port}", "host": dns}
     base = min(found)[1]  # an https port first
+    app_url = hosted_app_url()
+    if app_url:  # the hosted web app (phase 3): it learns this server and the token from the link's #fragment
+        return {"url": f"{app_url}#{urlencode({'server': base, 't': api_token})}", "host": dns,
+                "secure": base.startswith("https"), "app_url": app_url}
     return {"url": f"{base}/app/login#t={api_token}", "host": dns, "secure": base.startswith("https")}
+
+
+def hosted_app_url() -> str | None:
+    """The hosted web app's address, from VERITAS_WEB_APP_URL or data/web-app-url, else None (use this server's /app/)."""
+    url = os.environ.get("VERITAS_WEB_APP_URL", "").strip()
+    if not url:
+        try:
+            url = APP_URL_FILE.read_text(encoding="utf-8").strip()
+        except OSError:
+            url = ""
+    return url or None

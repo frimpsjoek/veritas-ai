@@ -248,3 +248,15 @@ def test_phone_link_says_what_is_missing(monkeypatch):
     fake_tailscale(monkeypatch, STATUS, {})
     missing = web_app.phone_link("tok")
     assert missing["command"] == "tailscale serve --bg --https=8443 http://127.0.0.1:27182" and "url" not in missing
+
+
+def test_phone_link_points_at_hosted_app_when_set(monkeypatch, tmp_path):
+    fake_tailscale(monkeypatch, STATUS, SERVE)
+    monkeypatch.setattr(web_app, "APP_URL_FILE", tmp_path / "web-app-url")
+    monkeypatch.setenv("VERITAS_WEB_APP_URL", "https://example.org/veritas-ai/")
+    link = web_app.phone_link("tok")
+    assert link["url"] == "https://example.org/veritas-ai/#server=https%3A%2F%2Fmac.tail1.ts.net%3A8443&t=tok"
+    assert link["app_url"] == "https://example.org/veritas-ai/"
+    monkeypatch.delenv("VERITAS_WEB_APP_URL")
+    (tmp_path / "web-app-url").write_text("https://other.example/app\n")
+    assert web_app.phone_link("tok")["url"].startswith("https://other.example/app#server=")
