@@ -75,7 +75,7 @@ function lineForGroup(group, resolveResult) {
   }
 
   const { title, icon, detail } = classify(calls, resolveResult);
-  const failNote = failed ? plural(failed, 'failed') : null;
+  const failNote = failed ? `${failed} failed` : null; // a past participle: no plural ending
   const combined = [detail, failNote].filter(Boolean).join(' · ') || null;
   return { id: group.id, icon, title, detail: combined, state: /** @type {const} */ ('done'), items, entries, reasoning };
 }

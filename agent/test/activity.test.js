@@ -235,3 +235,14 @@ test('pastTense words a finished step in the past and leaves other text alone', 
   assert.equal(pastTense('Reading your results'), 'Read your results');
   assert.equal(pastTense('Already searched'), 'Already searched');
 });
+
+test('two failed calls read "2 failed", not "2 faileds"', () => {
+  const events = [
+    activity('a1', 'start', 'library', 'Searching your papers for "Neaton"'),
+    activity('a1', 'end', 'library', 'Searching your papers for "Neaton"', { ok: false }),
+    activity('a2', 'start', 'library', 'Searching your papers for "Jeffrey B. Neaton"'),
+    activity('a2', 'end', 'library', 'Searching your papers for "Jeffrey B. Neaton"', { ok: false }),
+    { type: 'done', answer: { text: 'x', citations: [], structured: null, usage: {} } },
+  ];
+  assert.equal(compactActivities(events)[0].detail, 'Conducted 2 searches · 2 failed');
+});
