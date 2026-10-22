@@ -77,3 +77,5 @@ register(Connector("zotero", "Zotero library", lambda p: (p / "zotero.sqlite").i
 register(Connector("obsidian", "Obsidian vault", lambda p: (p / ".obsidian").is_dir(), writes_notes=True))
 register(Connector("pdf", "PDF folder", _only_pdfs, indexed_as="plain"))
 register(Connector("plain", "Notes folder", lambda p: True, writes_notes=True))
+# Added by account (user id + API key), not found in a folder: zotero_web.py.
+register(Connector("zotero-web", "Zotero online library", lambda p: False, can_add_items=True))

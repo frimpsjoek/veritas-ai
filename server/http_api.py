@@ -52,6 +52,7 @@ PUT  /digests/<file> {"text"}                   save Second Brain/Digests/<file>
 POST /index                                    re-index changed notes now
 GET  /sources                                  the folders the index reads, each with kind, role and count (spec 018)
 POST /sources {"path","name"?}                 add a folder (400 unreadable/too broad, 409 already listed); starts indexing
+POST /sources {"kind":"zotero-web","user_id","key"?,"name"?}  add an online Zotero library (key goes to the Keychain)
 PATCH /sources/<name> {"enabled"?,"skip"?}     switch a folder on or off, or set its skip patterns
 PATCH /sources/output {"name": str|null}       where notes are written: a listed notes folder, or ~/Documents/Veritas
 DELETE /sources/<name>                         take a folder off the list (its rows go on the next index run)
@@ -671,6 +672,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, result)
             if route == "/sources":
                 body = self._body()
+                if body.get("kind") == "zotero-web":  # an online library: {"kind", "user_id", "key"?, "name"?}
+                    try:
+                        entry = sources.add_account("zotero-web", str(body.get("user_id", "")),
+                                                    key=body.get("key") or None, name=body.get("name") or None)
+                    except sources.DuplicateSource as error:
+                        return self._send(409, {"error": str(error)})
+                    except sources.SourceError as error:
+                        return self._send(400, {"error": str(error)})
+                    sources_changed()
+                    return self._send(201, {"name": entry["name"], "kind": entry["kind"], **kb.sources_report()})
                 try:
                     folder = sources.add(str(body.get("path", "")), body.get("name") or None)
                 except sources.DuplicateSource as error:

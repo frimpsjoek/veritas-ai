@@ -61,6 +61,20 @@ class Folder:
 
 
 @dataclass
+class Account:
+    """A source reached online instead of in a folder (kind "zotero-web": a Zotero library through the Web API)."""
+    name: str
+    kind: str
+    user_id: str
+    enabled: bool = True
+    default_library: bool = False
+
+    @property
+    def prefix(self) -> str:
+        return f"{self.name}:/"
+
+
+@dataclass
 class Layout:
     main: Path
     main_is_vault: bool
@@ -69,6 +83,7 @@ class Layout:
     ignored: list[Folder]  # enabled but not read (a missing path)
     folders: list[Folder]  # every entry, as listed
     libraries: list[Folder] = field(default_factory=list)  # enabled Zotero libraries, the default first
+    accounts: list[Account] = field(default_factory=list)  # enabled online sources (Zotero Web API)
 
 
 def detect(path: Path) -> str:
@@ -168,10 +183,37 @@ def folders() -> list[Folder]:
     entries = defaults() if entries is None else entries
     out = []
     for e in entries:
+        if "path" not in e:
+            continue  # an online account (accounts())
         path = Path(e["path"]).expanduser()
         out.append(Folder(e["name"], path, bool(e.get("enabled", True)), list(e.get("skip") or []), detect(path),
                           bool(e.get("main")), bool(e.get("default_library"))))
     return out
+
+
+def accounts() -> list[Account]:
+    entries = load() or []
+    return [Account(e["name"], e.get("kind", ""), str(e.get("user_id", "")), bool(e.get("enabled", True)),
+                    bool(e.get("default_library"))) for e in entries if "path" not in e]
+
+
+def add_account(kind: str, user_id: str, *, key: str | None = None, name: str | None = None) -> dict:
+    """Adds an online source; its API key (when given) goes to the Keychain, never to sources.json."""
+    if kind != "zotero-web":
+        raise SourceError(f"unknown kind of online source {kind!r}")
+    if not re.fullmatch(r"\d{1,12}", str(user_id)):
+        raise SourceError("the Zotero user ID is the number shown at zotero.org/settings/keys")
+    entries = load()
+    entries = defaults() if entries is None else entries
+    taken = {e["name"] for e in entries}
+    name = unique_name("zotero-online", taken) if name is None else check_name(name, taken)
+    if key:
+        import zotero_web
+        zotero_web.store_key(str(user_id), key)
+    entry = {"name": name, "kind": kind, "user_id": str(user_id), "enabled": True}
+    entries.append(entry)
+    save(entries)
+    return entry
 
 
 def resolved() -> Layout:
@@ -185,7 +227,8 @@ def resolved() -> Layout:
     vaults = [f for f in enabled if f.main and _notes(f)]
     main = vaults[0].path if vaults else OUTPUT_DEFAULT
     others = [f for f in enabled if _notes(f) and f.path.resolve() != main.resolve()]
-    return Layout(main, bool(vaults), libraries[0].path if libraries else None, others, ignored, listed, libraries)
+    return Layout(main, bool(vaults), libraries[0].path if libraries else None, others, ignored, listed, libraries,
+                  [a for a in accounts() if a.enabled])
 
 
 def add(path: str | Path, name: str | None = None) -> Folder:
@@ -221,7 +264,7 @@ def set_output(name: str | None) -> None:
     entries = load()
     entries = defaults() if entries is None else entries
     if name is not None:
-        match = next((e for e in entries if e["name"] == name), None)
+        match = next((e for e in entries if e["name"] == name and "path" in e), None)
         if match is None:
             raise SourceError(f"there is no folder named {name!r}")
         kind = detect(Path(match["path"]).expanduser())

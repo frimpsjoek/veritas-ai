@@ -624,6 +624,8 @@ def _index_stages(full: bool, verbose: bool, progress: Progress) -> dict:
     refresh_paper_references([rel for rel in changed if rel.startswith("Papers/")])
     media_changed = index_media(db, verbose, progress)
     zotero_changed = index_zotero(db, verbose, progress)
+    web_changed, web_errors = index_zotero_web(db, verbose, progress)
+    zotero_changed += web_changed
     stamp(db, "indexed_at")
     db.commit()
     text_seconds = round(time.time() - started, 1)
@@ -632,7 +634,7 @@ def _index_stages(full: bool, verbose: bool, progress: Progress) -> dict:
     embedded = embed_pending(db, verbose, progress=progress)
     db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     result = {"notes": len(files), "changed": len(changed), "removed": len(removed), "zotero_changed": zotero_changed, "media_changed": media_changed,
-              "embedded": embedded,
+              "embedded": embedded, "zotero_web_errors": web_errors,
               "text_seconds": text_seconds, "seconds": round(time.time() - started, 1)}
     if verbose:
         print(json.dumps(result), file=sys.stderr)
@@ -741,7 +743,7 @@ def index_zotero(db: sqlite3.Connection, verbose: bool, progress: Progress) -> i
     for lib in others:
         with zotero.library(lib.path):
             changed += _index_library(db, verbose, progress, lib.prefix, f"zotero_fingerprint:{lib.name}")
-    keep = {lib.prefix for lib in others}
+    keep = {lib.prefix for lib in others} | {a.prefix for a in LAYOUT.accounts}
     for (path,) in db.execute("SELECT path FROM notes WHERE source='zotero' AND path LIKE '%:/%'").fetchall():
         if path[:path.index(":/") + 2] not in keep and not path.startswith(kept_prefixes() or ("\0",)):
             delete_note(db, path)
@@ -800,6 +802,52 @@ def _index_library(db: sqlite3.Connection, verbose: bool, progress: Progress, pr
         if verbose and refreshed:
             print(f"zotero: refreshed {refreshed} paper notes", file=sys.stderr)
     return len(changed)
+
+
+def index_zotero_web(db: sqlite3.Connection, verbose: bool, progress: Progress) -> tuple[int, list[str]]:
+    """Online Zotero libraries (zotero_web.py): (items changed, errors). A library is re-read only when its version
+    moved; an error (no key, 403, 429, no network) keeps its indexed items and is reported, not raised."""
+    import zotero_web
+    changed, errors = 0, []
+    for account in LAYOUT.accounts:
+        if account.kind != "zotero-web":
+            continue
+        key = zotero_web.get_key(account.user_id)
+        if not key:
+            errors.append(f"{account.name}: no Zotero API key in the Keychain")
+            continue
+        client = zotero_web.Client(account.user_id, key)
+        stamp_key = f"zotero_web_version:{account.name}"
+        try:
+            version = client.version()
+            row = db.execute("SELECT value FROM meta WHERE key=?", (stamp_key,)).fetchone()
+            if row and row[0] == str(version):
+                continue
+            progress.stage("zotero")
+            docs = zotero_web.documents({"name": account.name}, client)
+        except zotero_web.ZoteroWebError as error:
+            errors.append(f"{account.name}: {error}")
+            continue
+        known = {r[0]: (r[1], r[2]) for r in db.execute(
+            "SELECT path, mtime, size FROM notes WHERE source='zotero' AND path LIKE ? || '%'", (account.prefix,))}
+        current = {d.path for d in docs}
+        for rel in known.keys() - current:
+            delete_note(db, rel)
+        for doc in docs:
+            if known.get(doc.path) != (doc.signature, len(doc.text)):
+                store_note(db, doc.path, doc.title, "zotero", "zotero", doc.tags, [], doc.signature, len(doc.text),
+                           "", doc.meta, doc.text)
+                changed += 1
+        db.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)", (stamp_key, str(version)))
+        db.commit()
+        if verbose:
+            print(f"zotero online {account.name}: {len(docs)} items", file=sys.stderr)
+    for (path,) in db.execute("SELECT path FROM notes WHERE source='zotero' AND path LIKE '%:/%'").fetchall():
+        prefix = path[:path.index(":/") + 2]
+        if prefix not in {a.prefix for a in LAYOUT.accounts} | {lib.prefix for lib in LAYOUT.libraries[1:]}:
+            delete_note(db, path)
+    db.commit()
+    return changed, errors
 
 
 def zotero_ref(path: str) -> tuple[Path, str]:
@@ -1655,6 +1703,9 @@ def sources_report() -> dict:
             role, documents = "listed", counts.get(f.prefix, 0)
         rows.append({"name": f.name, "path": str(f.path), "enabled": f.enabled, "skip": f.skip, "kind": f.kind,
                      "role": role, "documents": documents})
+    for a in sources.accounts():  # online libraries: no folder
+        rows.append({"name": a.name, "path": None, "enabled": a.enabled, "skip": [], "kind": a.kind,
+                     "role": "online" if a.enabled else "off", "documents": counts.get(a.prefix, 0) if a.enabled else 0})
     output = next((f.name for f in LAYOUT.folders if f.main and f.path.resolve() == VAULT.resolve()), None)
     return {"main": str(VAULT), "main_is_vault": LAYOUT.main_is_vault, "output": {"name": output, "path": str(VAULT)},
             "main_documents": counts[""] if not LAYOUT.main_is_vault else None,
