@@ -1,0 +1,37 @@
+name: Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            agent/package-lock.json
+            ui/package-lock.json
+            web/package-lock.json
+            obsidian/package-lock.json
+            zotero/package-lock.json
+            zotero/editor-src/package-lock.json
+            zotero/engine-src/package-lock.json
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Server venv
+        run: python -m venv server/.venv && server/.venv/bin/pip install -r server/requirements.txt
+      - name: Check every part
+        run: ./check.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: veritas-zotero-xpi
+          path: zotero/dist/
+          # Short-lived: these count toward the account-wide artifact storage quota (hit 2026-10-20).
+          retention-days: 7
