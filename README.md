@@ -41,6 +41,19 @@ Valency connector, the research personas, and Veritas itself: one repository and
 
 Run `./check.sh` to build and test everything.
 
+## Run it
+
+Needs Python 3.12 with [uv](https://docs.astral.sh/uv/) and Node 22.
+
+```sh
+(cd server && uv venv && uv pip install -r requirements.txt)
+(cd agent && npm ci && npm run build)
+(cd web && npm ci && ./install.sh)
+cd server && .venv/bin/python kb.py serve
+```
+
+Open http://localhost:27182/app/, then add your folders and Zotero library in Settings.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
