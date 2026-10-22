@@ -98,6 +98,16 @@ export const MCP_CATALOG = [
     config: stdio('wikipedia', 'uvx', ['wikipedia-mcp', '--transport', 'stdio'], {}),
   },
   {
+    // From docs.valency.io/guides/api (2026-10-22): Streamable HTTP at https://mcp.valency.io/, a bearer token from
+    // the Valency app's Settings page; https://mcp.valency.io/health answers {"status":"ok"}.
+    id: 'valency', name: 'Valency Bond', tier: 'default', verified: true,
+    homepage: 'https://docs.valency.io/',
+    description: '500M+ papers and preprints (arXiv, ChemRxiv and more): semantic search, citing and similar papers, author profiles, trends, BibTeX export (38 tools).',
+    auth: 'A free Valency account (researchers, academics, non-profits) and its bearer token.',
+    config: /** @type {McpServerConfig} */ ({ name: 'valency', enabled: true, transport: 'http', url: 'https://mcp.valency.io/', headers: { Authorization: 'Bearer ' } }),
+    setup: { fields: [{ in: 'header', name: 'Authorization', label: 'Valency bearer token', kind: 'key', prefix: 'Bearer ' }], getKey: { url: 'https://app.valency.io/settings', steps: 'Sign up free at app.valency.io/start (or sign in), open Settings and copy your bearer token.' } },
+  },
+  {
     id: 'nasa-ads', name: 'NASA ADS', tier: 'niche', verified: false,
     homepage: 'https://github.com/prtc/nasa-ads-mcp',
     description: 'Astronomy citation graph.',

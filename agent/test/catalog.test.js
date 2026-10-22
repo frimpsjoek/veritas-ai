@@ -38,3 +38,11 @@ test('niche and optional tiers are marked, and unverified entries say so', () =>
 test('catalogEntry returns null for an unknown id', () => {
   assert.equal(catalogEntry('does-not-exist'), null);
 });
+
+test('Valency Bond is the documented Streamable HTTP endpoint with a bearer token from its Settings page', () => {
+  const entry = catalogEntry('valency');
+  assert.equal(entry.config.transport, 'http');
+  assert.equal(entry.config.url, 'https://mcp.valency.io/');
+  assert.deepEqual(entry.setup.fields, [{ in: 'header', name: 'Authorization', label: 'Valency bearer token', kind: 'key', prefix: 'Bearer ' }]);
+  assert.equal(entry.setup.getKey.url, 'https://app.valency.io/settings');
+});
