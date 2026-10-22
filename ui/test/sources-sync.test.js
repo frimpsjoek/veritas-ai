@@ -62,3 +62,8 @@ test('a send carries off, or the mode Research picked: cached stays cached, anyt
   assert.equal(webFor({ ...on, web: false }, { webSearchDefault: 'cached' }), 'off');
   assert.equal(webFor({ ...on, web: false }, { webSearchDefault: 'live' }), 'off');
 });
+
+test('the Valency chip is on while unset, so its first toggle writes false', () => {
+  assert.deepEqual(togglePatch('valency', { papers: true, notes: true, scholarly: true, web: false }), { sources: { valency: false } });
+  assert.deepEqual(togglePatch('valency', { papers: true, notes: true, scholarly: true, web: false, valency: false }), { sources: { valency: true } });
+});

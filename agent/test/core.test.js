@@ -315,3 +315,9 @@ test('each turn opens its tools under the conversation key', async () => {
   await collect(runner.stream('chat', { sessionKey: 'conv-9', instructions: '', history: [], input: 'hi', tools: { scope: { kind: 'library' }, web: 'off', sources: { papers: true, notes: true, scholarly: false, web: false }, audit: 'test' } }, new AbortController().signal));
   assert.deepEqual(keys, ['conv-9']);
 });
+
+test('parseAskResult drops a status line the model echoed into its answer', async () => {
+  const { parseAskResult } = await import('../src/core.js');
+  assert.deepEqual(parseAskResult({ status: 'not_found', markdown: 'status: not_found\n\nNo digest today.' }), { status: 'not_found', markdown: 'No digest today.' });
+  assert.deepEqual(parseAskResult({ status: 'answered', markdown: 'The status: of the run was fine.' }), { status: 'answered', markdown: 'The status: of the run was fine.' });
+});

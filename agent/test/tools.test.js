@@ -315,3 +315,29 @@ test('other conversations, and a second live turn of the same one, get their own
   const unkeyed = gateway.open(CTX);
   assert.notEqual(unkeyed.mcp.token, a.mcp.token);
 });
+
+test('read_digest reads the newest radar digest even with Papers and Notes off', async () => {
+  const library = {
+    ...fakeLibrary({ readResult: { title: '2026-10-22 Seed radar', text: '15 new papers: flat bands, GW, MOFs' } }),
+    async digests() {
+      return [
+        { path: 'Second Brain/Digests/2026-10-22 Seed radar.md', title: '2026-10-22 Seed radar', modified: '2026-10-22 09:44' },
+        { path: 'Second Brain/Digests/2026-10-21 Seed radar.md', title: '2026-10-21 Seed radar', modified: '2026-10-21 08:31' },
+      ];
+    },
+  };
+  const gateway = await createToolGateway(fetch, library, {});
+  const session = gateway.open({ ...CTX, sources: { papers: false, notes: false, scholarly: true, web: true } });
+  assert.ok(session.specs.some((s) => s.name === 'read_digest'));
+  const latest = await session.call('read_digest', {});
+  assert.equal(latest.ok, true);
+  assert.match(latest.text, /flat bands/);
+  assert.deepEqual(library.calls.read[0].ref, { kind: 'note', path: 'Second Brain/Digests/2026-10-22 Seed radar.md' });
+  const missing = await session.call('read_digest', { date: '2026-10-01' });
+  assert.match(missing.text, /No digest for 2026-10-01.*2026-10-22 Seed radar/);
+});
+
+test('read_digest is not offered by a library that cannot list digests', async () => {
+  const gateway = await createToolGateway(fetch, fakeLibrary(), {});
+  assert.ok(!gateway.open(CTX).specs.some((s) => s.name === 'read_digest'));
+});

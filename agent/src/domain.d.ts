@@ -401,7 +401,7 @@ export type Scope =
  *  every reader normalises it to both papers and notes, never rewriting the file. */
 export type ReviewSource = "papers" | "notes" | "scholarly" | "web" | "library";
 /** One value per app (spec 005 §5): what the chat's four source pills search. */
-export interface Sources { papers: boolean; notes: boolean; scholarly: boolean; web: boolean }
+export interface Sources { papers: boolean; notes: boolean; scholarly: boolean; web: boolean; valency?: boolean }
 export type Depth = "fastest" | "quick" | "standard" | "deep"; // fastest: as quick, no screening turn, abstracts only; quick: 3 sub-questions/3 researchers, standard: 5/3, deep: 8/5
 
 /** One skill a run carried: `hash` is the SHA-256 of its SKILL.md, `block` the text put in the prompts (capped), `notice` set when it was cut. */

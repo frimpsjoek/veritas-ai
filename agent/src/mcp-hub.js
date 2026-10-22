@@ -246,7 +246,8 @@ export function createMcpHub(platform, opts = {}) {
           inputSchema: tool.raw.inputSchema ?? { type: 'object', properties: {} },
           annotations: READ_ONLY,
           activity: { kind: 'mcp', label: () => `Using ${name}: ${tool.name}` },
-          enabled: () => true,
+          // a server with its own source switch (valency) is offered only while that switch is on
+          enabled: (ctx) => /** @type {any} */ (ctx?.sources)?.[name] !== false,
           async run(args) {
             const result = await entry.client.callTool(tool.name, args ?? {});
             return { text: toolText(result), seen: [] };

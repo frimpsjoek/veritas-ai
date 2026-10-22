@@ -44,6 +44,9 @@ function yearOf(hit) {
  * @param {{ baseUrl: string }} opts
  * @returns {import("./service").NoteSink}
  */
+/** Where the radar writes its digests (radar_api.put_digest on the server). */
+const DIGEST_FOLDER = 'Second Brain/Digests';
+
 export function createHttpNoteSink(fetchFn, opts) {
   return {
     async publish({ reviewId, title, markdown, frontMatter }) {
@@ -199,6 +202,12 @@ export function createHttpLibraryBackend(fetchFn, opts) {
       const data = await getJSON('/related', { path: relPath, limit: limit ?? 8 });
       if (!data) return [];
       return (data.similar ?? []).slice(0, limit ?? 8).map((n) => ({ ref: refFromPath(n.path), title: n.title ?? n.path, snippet: 'Related by meaning.' }));
+    },
+
+    /** The radar's digests, newest first (notes under Second Brain/Digests/, listed by /recent). @param {{ days?: number, limit?: number }} [q] */
+    async digests({ days, limit } = {}) {
+      const data = await getJSON('/recent', { days: days ?? 30, folder: DIGEST_FOLDER, limit: limit ?? 20 });
+      return (Array.isArray(data) ? data : []).map((n) => ({ path: String(n.path), title: String(n.title ?? n.path), modified: String(n.modified ?? '') }));
     },
 
     /** @param {{ collections: string[] | null }} q */

@@ -119,6 +119,37 @@ function builtinRows(library, fetchFn, settings) {
       },
     },
     {
+      name: 'read_digest',
+      description: "Read the user's reading-radar digest (the papers the radar found for them), by date. Use it for questions about their digest, radar or today's papers; it works whatever sources the chat has on.",
+      inputSchema: { type: 'object', properties: { date: { type: 'string', description: 'YYYY-MM-DD; leave out for the newest digest.' } } },
+      annotations: READ_ONLY,
+      activity: { kind: 'read', label: (a) => (a?.date ? `Reading your digest for ${a.date}` : 'Reading your latest digest') },
+      // The digests are the app's own output, so this does not depend on the Papers/Notes switches.
+      enabled: (ctx) => Boolean(library.digests) && !ctx.session?.on,
+      async run(args) {
+        const all = await /** @type {NonNullable<typeof library.digests>} */ (library.digests)({ days: 60, limit: 40 });
+        if (!all.length) return { text: 'The reading radar has not written any digest yet.', seen: [] };
+        const date = /^\d{4}-\d{2}-\d{2}$/.test(String(args.date ?? '')) ? String(args.date) : null;
+        const day = date ?? (/^(\d{4}-\d{2}-\d{2})/.exec(all[0].title)?.[1] ?? null);
+        const picked = day ? all.filter((d) => d.title.startsWith(day)) : [all[0]];
+        const list = `Digests on file: ${all.slice(0, 10).map((d) => d.title).join('; ')}`;
+        if (!picked.length) return { text: `No digest for ${day}. ${list}.`, seen: [] };
+        /** @type {import("./domain").CitationRef[]} */ const seen = [];
+        /** @type {[import("./domain").CitationRef, string][]} */ const titles = [];
+        const parts = [];
+        for (const d of picked.slice(0, 3)) {
+          const ref = /** @type {import("./domain").CitationRef} */ ({ kind: 'note', path: /** @type {import("./domain").NotePath} */ (d.path) });
+          const body = await library.read(ref, { maxChars: 12000 });
+          if (!body) continue;
+          seen.push(ref);
+          titles.push([ref, body.title]);
+          parts.push(`${labelForRef(ref)} — ${body.title}\n\n${body.text}`);
+        }
+        if (!parts.length) return { text: `The digest for ${day} could not be read. ${list}.`, seen: [] };
+        return { text: parts.join('\n\n---\n\n'), seen, titles, meta: { count: parts.length, detail: countOf(parts.length, 'digest') } };
+      },
+    },
+    {
       name: 'related_sources',
       description: 'Papers and notes related to a given note or paper: links, citing work, shared tags.',
       inputSchema: { type: 'object', properties: { note: { type: 'string' }, citekey: { type: 'string' }, limit: { type: 'integer' } } },

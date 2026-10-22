@@ -161,3 +161,16 @@ test('http server without session ids still works and is initialized once', asyn
     await server.close();
   }
 });
+
+test('a server with its own source switch (valency) is offered only while that switch is on; others ignore it', async () => {
+  const hub = createMcpHub({ fetch, spawn: fakeMcpSpawn([READ_ONLY_TOOL]) });
+  await hub.save({ name: 'valency', enabled: true, transport: 'stdio', command: process.execPath, args: [], env: {} });
+  await hub.save({ name: 'lib', enabled: true, transport: 'stdio', command: process.execPath, args: [], env: {} });
+  const on = (sources) => hub.rows().filter((r) => r.enabled(/** @type {any} */ ({ sources }))).map((r) => r.name).sort();
+  const base = { papers: true, notes: true, scholarly: true, web: false };
+  assert.deepEqual(on(base), ['lib__search', 'valency__search'], 'unset means on');
+  assert.deepEqual(on({ ...base, valency: false }), ['lib__search']);
+  assert.deepEqual(on({ ...base, valency: true }), ['lib__search', 'valency__search']);
+  await hub.remove('valency');
+  await hub.remove('lib');
+});

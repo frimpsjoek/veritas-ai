@@ -28,6 +28,7 @@ export interface LibraryBackend {
   radarProfile?(q: { scope: import("./radar-types").ScoreScope; seeds?: { keys: string[] } }): Promise<import("./radar-types").SeedProfile>;
   /** Writes `Second Brain/Digests/<file>.md` in the vault. */
   writeDigest?(file: string, text: string): Promise<void>;
+  digests?(q?: { days?: number; limit?: number }): Promise<{ path: string; title: string; modified: string }[]>;
 }
 
 export interface ToolContext {

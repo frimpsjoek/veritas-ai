@@ -30,7 +30,7 @@ export interface Settings {
   sources: SourceSwitches | null;
 }
 
-export interface SourceSwitches { papers: boolean; notes: boolean; scholarly: boolean; web: boolean }
+export interface SourceSwitches { papers: boolean; notes: boolean; scholarly: boolean; web: boolean; valency?: boolean }
 
 /** What `settings.update` takes: any subset; a role set to `null` is cleared. */
 export type SettingsPatch = Partial<Omit<Settings, "roles" | "local" | "sources">> & { roles?: Partial<Record<Role, ModelChoice | null>>; local?: Partial<LocalSettings>; sources?: Partial<SourceSwitches> | null };

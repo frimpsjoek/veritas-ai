@@ -119,6 +119,8 @@ export class ChatView {
     ['notes', 'Notes', 'The Obsidian vault'],
     ['scholarly', 'Scholarly', 'Scholarly databases such as OpenAlex and Semantic Scholar'],
     ['web', 'Web', 'The open web'],
+    // shown only while the Valency Bond connector is connected (refreshConnectors)
+    ['valency', 'Valency', 'Valency Bond: 500M+ papers and preprints, ChemRxiv included'],
   ];
 
   /** Every open view refreshes its history, so a change made in one shows in the others. */
@@ -278,6 +280,8 @@ export class ChatView {
       this.sourceButtons[id] = btn;
       this.sourceGroup.append(btn);
     }
+    this.sourceButtons.valency.hidden = true;
+    void this.refreshConnectors();
     this.optionsButton = this.el('button', 'sb-ai-options-button');
     this.optionsButton.title = 'Where to look, and for a report the years and depth';
     this.optionsButton.addEventListener('click', () => this.setOptionsOpen(this.reportOptions.hidden));
@@ -550,6 +554,7 @@ export class ChatView {
       // a pill was just flipped (writing, or flipped since this read began); its own write is the newer truth
       if (this.sourceWrites > 0 || (this.sourceToggles ?? 0) !== seen) return;
       this.engineSettings = settings;
+      void this.refreshConnectors();
       // an engine without `sources` can't hold the switches: the pref is the truth there, all four pills
       const pills = this.sourcesUnsupported ? { ...this.sources } : pillsFrom(settings);
       if (!this.sourcesUnsupported) prefs.set('chatSources', pills); // the offline fallback follows the engine
@@ -567,13 +572,27 @@ export class ChatView {
     const saved = this.host.prefs.get('chatSources');
     if (saved && typeof saved === 'object') {
       if ('papers' in saved || 'notes' in saved) {
-        return { papers: saved.papers !== false, notes: saved.notes !== false, scholarly: saved.scholarly !== false, web: !!saved.web };
+        return { papers: saved.papers !== false, notes: saved.notes !== false, scholarly: saved.scholarly !== false, web: !!saved.web, ...(typeof saved.valency === 'boolean' ? { valency: saved.valency } : {}) };
       }
       if ('library' in saved) {
         return { papers: saved.library !== false, notes: saved.library !== false, scholarly: saved.scholarly !== false, web: !!saved.web };
       }
     }
     return { papers: true, notes: true, scholarly: true, web: false };
+  }
+
+  /** The Valency chip shows only while that connector is connected; a host without connectors keeps it hidden. */
+  async refreshConnectors() {
+    const btn = this.sourceButtons?.valency;
+    if (!btn) return;
+    /** @type {any} */ let reports = null;
+    try { reports = await (await this.host.ai()).mcp?.list?.(); } catch (error) { this.host.logError?.(error); }
+    // shown while the connector is enabled and has not failed (while it connects the hub reports "disabled")
+    const on = Array.isArray(reports) && reports.some((r) => r?.config?.name === 'valency' && r.config.enabled !== false && r.state !== 'failed');
+    if (btn.hidden === !on) return;
+    btn.hidden = !on;
+    this.renderSources();
+    this.renderSend();
   }
 
   /** What a send carries for the pills: the web mode Research picked when the web pill is on, and a copy of the switches. */
@@ -583,7 +602,8 @@ export class ChatView {
 
   toggleSource(id) {
     const before = { ...this.sources };
-    this.sources[id] = !this.sources[id];
+    // valency is on while unset (an optional switch), so its first click turns it off
+    this.sources[id] = id === 'valency' ? this.sources.valency === false : !this.sources[id];
     this.host.prefs.set('chatSources', this.sources);
     // the engine holds the same switches the Settings chips show; a failed write leaves the pill as the user set it
     this.sourcesSyncedAt = Date.now();
@@ -607,13 +627,14 @@ export class ChatView {
    *  when the host can't search the vault right now (Zotero standalone, no server): the pill stays clickable
    *  (its value is kept for when the server comes back), just marked. */
   renderSources() {
-    const disabledInFind = { notes: 'The table lists papers, not notes.', web: 'Find papers doesn’t search the web.' };
+    const disabledInFind = { notes: 'The table lists papers, not notes.', web: 'Find papers doesn’t search the web.', valency: 'Find papers searches its own databases; ask in Chat to use Valency.' };
     const offline = this.host.where() === 'local';
     for (const [id, btn] of Object.entries(this.sourceButtons)) {
       const disabledHere = this.mode === 'find' ? disabledInFind[id] : null;
       btn.disabled = !!disabledHere;
-      btn.classList.toggle('is-on', !!this.sources[id]);
-      btn.setAttribute('aria-pressed', String(!!this.sources[id]));
+      const on = id === 'valency' ? this.sources.valency !== false : !!this.sources[id];
+      btn.classList.toggle('is-on', on);
+      btn.setAttribute('aria-pressed', String(on));
       btn.classList.toggle('is-offline', id === 'notes' && offline);
       const [, , title] = ChatView.SOURCES.find(([sid]) => sid === id);
       const hint = hintOf(this.host, id, title);
@@ -624,7 +645,8 @@ export class ChatView {
 
   /** True once every source pill is off — Send is disabled and the empty state explains why (spec 005 §5). */
   get noSources() {
-    return !this.sources.papers && !this.sources.notes && !this.sources.scholarly && !this.sources.web;
+    const valency = !this.sourceButtons?.valency?.hidden && this.sources.valency !== false;
+    return !this.sources.papers && !this.sources.notes && !this.sources.scholarly && !this.sources.web && !valency;
   }
 
   destroy() {

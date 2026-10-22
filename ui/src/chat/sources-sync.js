@@ -5,7 +5,7 @@
 // `chatSources` pref stays as the offline fallback and as the one-time migration source.
 import { sourceSwitches } from '../../../agent/src/settings.js';
 
-/** @typedef {{ papers: boolean, notes: boolean, scholarly: boolean, web: boolean }} Pills */
+/** @typedef {{ papers: boolean, notes: boolean, scholarly: boolean, web: boolean, valency?: boolean }} Pills */
 
 /** The pills the engine's saved settings describe. @param {any} settings @returns {Pills} */
 export function pillsFrom(settings) {
@@ -15,7 +15,7 @@ export function pillsFrom(settings) {
 /** The pref as the pills it meant, reading the pre-005 `{ library }` shape too. @param {any} pref */
 function prefPills(pref) {
   if (!pref || typeof pref !== 'object') return null;
-  if ('papers' in pref || 'notes' in pref) return { papers: pref.papers !== false, notes: pref.notes !== false, scholarly: pref.scholarly !== false, web: Boolean(pref.web) };
+  if ('papers' in pref || 'notes' in pref) return { papers: pref.papers !== false, notes: pref.notes !== false, scholarly: pref.scholarly !== false, web: Boolean(pref.web), ...(typeof pref.valency === 'boolean' ? { valency: pref.valency } : {}) };
   if ('library' in pref) return { papers: pref.library !== false, notes: pref.library !== false, scholarly: pref.scholarly !== false, web: Boolean(pref.web) };
   return null;
 }
@@ -35,13 +35,14 @@ export function migrationPatch(pref, settings) {
   for (const key of /** @type {const} */ (['papers', 'notes', 'scholarly', 'web'])) {
     if (saved[key] !== now[key]) sources[key] = saved[key];
   }
+  if (typeof saved.valency === 'boolean' && saved.valency !== (now.valency !== false)) sources.valency = saved.valency;
   return Object.keys(sources).length ? { sources } : null;
 }
 
 /** What flipping one pill writes: its own key only, which the engine merges, so a settings copy that went stale
  *  (Settings changed another switch meanwhile) can't undo that change. @param {keyof Pills} id @param {Pills} pills */
 export function togglePatch(id, pills) {
-  return { sources: { [id]: !pills[id] } };
+  return { sources: { [id]: id === 'valency' ? pills.valency === false : !pills[id] } };
 }
 
 /** The `web` value a send carries: off, or the mode Research picked ("When it helps" is cached, anything else, including

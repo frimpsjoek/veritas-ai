@@ -363,7 +363,8 @@ export function parseAskResult(value) {
   if (!value || typeof value !== 'object' || !('status' in value) || !('markdown' in value)) return null;
   const { status, markdown } = value;
   if ((status !== 'answered' && status !== 'not_found') || typeof markdown !== 'string') return null;
-  return { status, markdown };
+  // some models echo the status field into the text ("status: not_found" as the first line); it is not part of the answer
+  return { status, markdown: markdown.replace(/^\s*\**status\**:\s*\**(answered|not_found)\**\s*\n+/i, '') };
 }
 
 export const ASK_SCHEMA = {

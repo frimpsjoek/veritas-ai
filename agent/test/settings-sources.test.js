@@ -33,3 +33,9 @@ test('sourceSwitches fills in what an old or partial record lacks', () => {
   assert.deepEqual(sourceSwitches({}), DEFAULT_SOURCE_SWITCHES);
   assert.deepEqual(sourceSwitches({ sources: { papers: false, notes: true, scholarly: true } }), { papers: false, notes: true, scholarly: true, web: false });
 });
+
+test('the optional valency switch is kept once set and absent until then', async () => {
+  const { sourceSwitches: sw } = await import('../src/settings.js');
+  assert.equal('valency' in sw({}), false);
+  assert.equal(sw({ sources: { papers: true, notes: true, scholarly: true, web: false, valency: false } }).valency, false);
+});

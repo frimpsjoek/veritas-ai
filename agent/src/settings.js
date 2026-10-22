@@ -65,6 +65,8 @@ function mergeSources(base, patch) {
     notes: typeof p.notes === 'boolean' ? p.notes : Boolean(from.notes),
     scholarly: typeof p.scholarly === 'boolean' ? p.scholarly : Boolean(from.scholarly),
     web: typeof p.web === 'boolean' ? p.web : Boolean(from.web),
+    // optional: the Valency Bond connector's switch, kept only once set (absent means on)
+    ...(typeof p.valency === 'boolean' ? { valency: p.valency } : typeof from.valency === 'boolean' ? { valency: from.valency } : {}),
   };
 }
 
