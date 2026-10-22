@@ -4,6 +4,7 @@
 // ULIDs are minted here rather than pulled in as a dependency (agent-src has none besides esbuild/typescript).
 
 import { summaryExtras, newsOf, coverOf, resultPath as resultPathFor } from './sessions.js';
+import { chatMarkdown, mirrorSuffix } from './chat-markdown.js';
 
 const ENCODING = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'; // Crockford base32, no I/O/L/U, matches the ULID spec
 
@@ -30,9 +31,37 @@ export function ulid(now = Date.now()) {
 /**
  * @param {import("./platform").Platform["fs"]} fs
  * @param {string} dir
+ * @param {{ mirrorDir?: string }} [opts] mirrorDir: where each chat is also written as one Markdown file (design goal 10)
  */
-export function conversationStore(fs, dir) {
+export function conversationStore(fs, dir, opts = {}) {
   const pathFor = (id) => `${dir}/${id}.jsonl`;
+  const mirrorDir = opts.mirrorDir;
+  /** id -> the mirror write in flight, so two appends to one chat rewrite its file in order. @type {Map<string, Promise<void>>} */
+  const mirrorQueue = new Map();
+
+  /** The mirror files of chat `id` other than `keep` (an old title's name after a rename). */
+  async function staleMirrors(id, keep) {
+    const suffix = mirrorSuffix(id);
+    return (await fs.list(/** @type {string} */ (mirrorDir))).filter((f) => f.endsWith(suffix) && f !== keep);
+  }
+
+  /** Rewrites chat `id`'s Markdown mirror from its JSONL. A notes folder that cannot be written never fails the chat. */
+  function mirror(id) {
+    if (!mirrorDir) return Promise.resolve();
+    const run = (mirrorQueue.get(id) ?? Promise.resolve()).then(async () => {
+      try {
+        const md = chatMarkdown((await readRecords(id)) ?? []);
+        if (!md) return;
+        await fs.writeAtomic(`${mirrorDir}/${md.name}`, md.text);
+        for (const old of await staleMirrors(id, md.name)) await fs.remove(`${mirrorDir}/${old}`);
+      } catch (error) {
+        console.error(`chat mirror: ${error instanceof Error ? error.message : error}`);
+      }
+    });
+    mirrorQueue.set(id, run);
+    void run.then(() => { if (mirrorQueue.get(id) === run) mirrorQueue.delete(id); });
+    return run;
+  }
 
   function summarize(id, records) {
     const meta = records.find((r) => r.type === 'meta');
@@ -85,12 +114,21 @@ export function conversationStore(fs, dir) {
     /** @param {import("./domain").SessionRecord} record */
     async append(id, record) {
       await fs.append(pathFor(id), JSON.stringify(record));
+      await mirror(id);
     },
 
     async remove(id) {
       await fs.remove(pathFor(id));
       // The session's result versions live beside the log (spec 007 §1.3); deleting the chat deletes them too.
       await fs.removeTree?.(`${dir}/${id}.d`);
+      if (mirrorDir) {
+        await mirrorQueue.get(id);
+        try {
+          for (const old of await staleMirrors(id, null)) await fs.remove(`${mirrorDir}/${old}`);
+        } catch (error) {
+          console.error(`chat mirror: ${error instanceof Error ? error.message : error}`);
+        }
+      }
     },
 
     /**

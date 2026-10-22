@@ -62,9 +62,13 @@ def _spawn(sidecar: Sidecar, data_dir: Path, kb_url: str) -> subprocess.Popen | 
     entry = _agentd_entry()
     if not entry.exists():
         return None
+    import kb  # imported lazily: agent_api must be importable stand-alone for its own tests
+
     env = {**os.environ, "SECOND_BRAIN_AGENTD_SECRET": sidecar.secret}
+    # --notes: the output folder; the sidecar mirrors each chat as Markdown into its chats/ (design goal 10).
     return subprocess.Popen(
-        [str(sidecar.node), str(entry), "--port", "0", "--data", str(data_dir), "--kb", kb_url],
+        [str(sidecar.node), str(entry), "--port", "0", "--data", str(data_dir), "--kb", kb_url,
+         "--notes", str(kb.VAULT)],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
     )
 
