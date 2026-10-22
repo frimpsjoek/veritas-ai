@@ -1,8 +1,7 @@
 // @ts-check
 // agent-src/src/library-http.js. A LibraryBackend backed by the Python server's HTTP API (http_api.py). Every
 // request carries X-KB-Client: agent, which is what makes privacy.json and the audit log apply, the same as
-// every other agent route. Used by the Node sidecar; Zotero standalone gets its own LibraryBackend (T4.2), over
-// the built-in search model, not this one.
+// every other agent route. Used by the Node sidecar, the one agent runtime (Zotero and Obsidian are its clients).
 import { citationKey } from './citations.js';
 import { migrateScope } from './scope.js';
 

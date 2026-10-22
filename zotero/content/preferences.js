@@ -1,7 +1,8 @@
-/* global Zotero, Components, Services, IOUtils, PathUtils, ChromeUtils */
-// Second Brain's settings pane (Zotero Settings → Second Brain). The pane is the shared SettingsView (ui-src/src/settings,
+/* global Zotero */
+// Second Brain's settings pane (Zotero Settings → Second Brain). The pane is the shared SettingsView (ui/src/settings,
 // spec 016): the same table of rows Obsidian and the web app draw. This file supplies what only Zotero has: where its
-// values are stored, the colours, the paper-notes folder, the search model, and the key test.
+// values are stored, the colours, the key test and the server check. The server address and access token
+// (extensions.secondbrain.server / .token) are plain rows of that table.
 
 var SecondBrainPrefs = {
 	COLORS: [
@@ -36,16 +37,15 @@ var SecondBrainPrefs = {
 			prefs: {
 				get: (key) => base.prefs.get(key),
 				set(key, value) {
-					// the server address is kept without a trailing slash, as second-brain.js reads it
-					self.set(key, key === "server" && typeof value === "string" ? value.trim().replace(/\/+$/, "") : value);
+					// the server address is kept without a trailing slash, as second-brain.js reads it; the token without spaces
+					const clean = typeof value !== "string" ? value : key === "server" ? value.trim().replace(/\/+$/, "") : key === "token" ? value.trim() : value;
+					self.set(key, clean);
 				},
 			},
 		};
 		return sb.UI.SettingsView(host, doc, mount, {
 			renderers: {
 				zoteroColors: (_row, ctx) => this.colors(ctx.doc),
-				notesFolder: (_row, ctx) => this.notesFolder(ctx.doc),
-				searchModel: (_row, ctx) => this.searchModel(ctx.doc, sb),
 				version: (_row, ctx) => { const el = ctx.doc.createElementNS("http://www.w3.org/1999/xhtml", "span"); el.textContent = sb.version ?? ""; return el; },
 			},
 			actions: {
@@ -55,7 +55,7 @@ var SecondBrainPrefs = {
 					return sb.updater ? sb.updater.checkNow() : "Second Brain isn't loaded";
 				},
 			},
-			onChange: (row) => { if (row.key === "server") void this.check().then((text) => host.notice(`Server: ${text}`)); },
+			onChange: (row) => { if (row.key === "server" || row.key === "token") void this.check().then((text) => host.notice(`Server: ${text}`)); },
 		});
 	},
 
@@ -74,76 +74,6 @@ var SecondBrainPrefs = {
 			grid.append(html("label", { textContent: label }), input, reset);
 		}
 		return grid;
-	},
-
-	/** The paper-notes folder with Choose… and Show in Finder. */
-	notesFolder(doc) {
-		const html = (tag, props = {}) => Object.assign(doc.createElementNS("http://www.w3.org/1999/xhtml", tag), props);
-		const row = html("div", { className: "sb-pref-folder" });
-		const folder = html("input", { type: "text", readOnly: true });
-		const defaultFolder = PathUtils.join(Zotero.DataDirectory.dir, "second-brain", "notes");
-		const showFolder = () => { folder.value = this.pref("notesFolder") || defaultFolder; };
-		showFolder();
-		const choose = html("button", { type: "button", textContent: "Choose…" });
-		choose.addEventListener("click", async () => {
-			const { FilePicker } = ChromeUtils.importESModule("chrome://zotero/content/modules/filePicker.mjs");
-			const picker = new FilePicker();
-			picker.init(doc.defaultView, "Folder for paper notes", picker.modeGetFolder);
-			if (await picker.show() !== picker.returnOK) return;
-			this.set("notesFolder", picker.file);
-			showFolder();
-		});
-		const reveal = html("button", { type: "button", textContent: "Show in Finder" });
-		reveal.addEventListener("click", async () => {
-			await IOUtils.makeDirectory(folder.value, { createAncestors: true });
-			Zotero.File.reveal(folder.value);
-		});
-		row.append(folder, choose, reveal);
-		return row;
-	},
-
-	/** The search model: Download / Remove and a state line (the shared StatusPanel, compact). */
-	searchModel(doc, sb) {
-		const html = (tag, props = {}) => Object.assign(doc.createElementNS("http://www.w3.org/1999/xhtml", tag), props);
-		const row = html("div", { className: "sb-pref-folder" });
-		const index = sb.localIndex;
-		const state = html("span", { className: "sb-pref-hint" });
-		const download = html("button", { type: "button", textContent: "Download" });
-		const remove = html("button", { type: "button", textContent: "Remove" });
-		const panel = sb.UI.StatusPanel ? sb.UI.StatusPanel(doc) : null;
-		if (panel) {
-			state.classList.add("sb-p", "is-flat");
-			state.style.display = "block";
-			state.replaceChildren(panel.el);
-		}
-		const show = (name, detail) => {
-			const busy = ["downloading", "loading", "indexing"].includes(name);
-			const text = {
-				absent: "Not downloaded",
-				downloading: `Downloading… ${detail}`,
-				loading: "Starting…",
-				indexing: `Reading your library… ${detail}`,
-				ready: `Ready · ${detail}`,
-				error: `Didn't work: ${detail}`,
-			}[name] ?? name;
-			if (panel) panel.render({ state: busy ? "running" : name === "ready" ? "idle" : name === "error" ? "error" : "off", label: text, compact: true });
-			else state.textContent = text;
-			download.hidden = !["absent", "error"].includes(name);
-			download.textContent = name === "error" ? "Try again" : "Download";
-			remove.hidden = name === "absent" || busy;
-		};
-		if (index) {
-			show(index.state, index.detail);
-			index.listeners.add(show);
-			doc.defaultView.addEventListener("unload", () => index.listeners.delete(show));
-			download.addEventListener("click", () => index.download());
-			remove.addEventListener("click", () => index.remove());
-		} else {
-			state.textContent = "Second Brain isn't loaded";
-			download.hidden = remove.hidden = true;
-		}
-		row.append(download, remove, state);
-		return row;
 	},
 
 	/** A color input can't be empty, so it starts at the color Zotero is using right now. */
@@ -187,14 +117,17 @@ var SecondBrainPrefs = {
 		return `Unpaywall: ${unpaywall} · OpenAlex: ${this.pref("openalexKey") ? openalex : `${openalex} (no key: small daily limit)`} · Semantic Scholar: ${s2}`;
 	},
 
+	/** Pings the Veritas server with the access token, as every other server call sends it. */
 	async check() {
+		const sb = Zotero.SecondBrain;
 		const base = (this.pref("server") || this.DEFAULT_SERVER).replace(/\/+$/, "");
 		try {
-			const response = await Zotero.HTTP.request("GET", `${base}/ping`, { timeout: 3000, successCodes: false });
+			const response = await Zotero.HTTP.request("GET", `${base}/ping`, { headers: sb?.serverHeaders ? sb.serverHeaders() : {}, timeout: 3000, successCodes: false });
 			return response.status === 200 ? "Connected ✓"
-				: response.status ? `Not available (HTTP ${response.status})` : "Not running · notes are kept in the folder above";
+				: response.status === 401 ? "The server did not accept the access token"
+				: response.status ? `Not available (HTTP ${response.status})` : "Veritas server is not running";
 		} catch (error) {
-			return "Not running · notes are kept in the folder above";
+			return "Veritas server is not running";
 		}
 	},
 };

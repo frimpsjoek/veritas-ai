@@ -22,7 +22,10 @@ test('every row of the old web Settings has a row in the table', () => {
 test('every old Zotero and Obsidian row is in the table for its host', () => {
   const all = { advanced: Object.fromEntries(SECTIONS.map((s) => [s.id, true])), section: null };
   const zotero = ids(visibleSections({ host: 'zotero', ...all }));
-  for (const old of ['general.notesIn', 'general.notesFolder', 'general.colors', 'index.model', 'papers.email', 'papers.openalex', 'papers.unpaywall', 'papers.s2', 'papers.test', 'server.vault', 'server.addressZotero', 'general.updatesZotero', 'about.update', 'research.web', 'mac.scanDirs', 'mac.idleMinutes', 'mac.allowReports', 'sources.mcp']) {
+  // Phase 2 (one knowledge base): Zotero is a client of the server, so its notes-folder and search-model rows are gone
+  for (const gone of ['general.notesIn', 'general.notesFolder', 'index.model']) assert.ok(!zotero.includes(gone), `${gone} is gone from Zotero`);
+  assert.ok(zotero.includes('server.tokenZotero'), 'Zotero has an access token row');
+  for (const old of ['general.colors', 'papers.email', 'papers.openalex', 'papers.unpaywall', 'papers.s2', 'papers.test', 'server.vault', 'server.addressZotero', 'general.updatesZotero', 'about.update', 'research.web', 'mac.scanDirs', 'mac.idleMinutes', 'mac.allowReports', 'sources.mcp']) {
     assert.ok(zotero.includes(old), `${old} shows in Zotero`);
   }
   const obsidian = ids(visibleSections({ host: 'obsidian', ...all }));
@@ -57,7 +60,7 @@ test('advanced rows stay hidden until the section switch is on', () => {
 
 test('Zotero-only rows are hidden on the web, and a row with no way to draw it is hidden too', () => {
   const web = ids(visibleSections({ host: 'web', section: null, advanced: Object.fromEntries(SECTIONS.map((s) => [s.id, true])) }));
-  for (const zoteroOnly of ['general.colors', 'general.notesIn', 'papers.email', 'papers.unpaywall', 'server.vault', 'index.model']) assert.ok(!web.includes(zoteroOnly), `${zoteroOnly} must not show on the web`);
+  for (const zoteroOnly of ['general.colors', 'papers.email', 'papers.unpaywall', 'server.vault', 'server.tokenZotero']) assert.ok(!web.includes(zoteroOnly), `${zoteroOnly} must not show on the web`);
   const supported = ids(visibleSections({ host: 'web', section: 'about', supports: (r) => r.kind !== 'action' }));
   assert.deepEqual(supported, ['about.version']);
   assert.ok(sidebarSections('web').length === SECTIONS.length);

@@ -100,9 +100,9 @@ SecondBrain.createZoteroHost = function createZoteroHost(sb, win, opts = {}) {
 
 		// ---------- engine and connection
 		async ai() { return sb.ai(); },
+		// Zotero is a client of the Veritas server: "server" while it answers (or before the first check), else "offline".
 		where() {
-			if (sb.agent.current) return sb.agent.current.where === "server" ? "server" : "local";
-			return sb.checkedOnce && !sb.online ? "local" : "server";
+			return sb.checkedOnce && !sb.online ? "offline" : "server";
 		},
 		onWhereChange(listener) { return sb.agent.onSwitch(listener); },
 		json(path, method = "GET", body) {

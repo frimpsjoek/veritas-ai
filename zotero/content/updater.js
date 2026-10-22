@@ -30,7 +30,7 @@ SecondBrain.Updater = class {
 	start() {
 		if (this.pref() !== "server") return;
 		// Fires once uiReadyPromise resolves; second-brain.js's init() already runs after Zotero.uiReadyPromise
-		// for localIndex.start(), so this can check immediately.
+		// for this, so it can check immediately.
 		this.check();
 		this.timer = setInterval(() => this.check(), SecondBrain.Updater.CHECK_EVERY_MS);
 	}
@@ -57,7 +57,7 @@ SecondBrain.Updater = class {
 			try {
 				latest = await this.sb.api("/plugins/zotero/latest");
 			} catch (error) {
-				this.lastResult = this.sb.isOffline(error) ? "Second Brain server isn't running." : `Couldn't check: ${error.message}`;
+				this.lastResult = this.sb.isOffline(error) ? "Veritas server is not running." : `Couldn't check: ${error.message}`;
 				Zotero.debug(`[second-brain updater] check failed: ${error.message ?? error}`);
 				return;
 			}
@@ -118,8 +118,9 @@ SecondBrain.Updater = class {
 	}
 
 	async fetchBytes(url, onProgress) {
+		// the xpi comes from the Veritas server, so it carries the access token like every other server call
 		const response = await Zotero.HTTP.request("GET", url, {
-			responseType: "arraybuffer", timeout: 300000,
+			headers: url.startsWith(this.sb.server) ? this.sb.serverHeaders() : {}, responseType: "arraybuffer", timeout: 300000,
 			requestObserver: onProgress ? (xhr) => { xhr.onprogress = (event) => onProgress(event.loaded); } : undefined,
 		});
 		return new Uint8Array(response.response);
