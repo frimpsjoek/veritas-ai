@@ -92,3 +92,10 @@ test('chat mirror: a failing notes folder never fails the chat', async () => {
   await store.append(ID, meta);
   assert.equal((await store.load(ID)).length, 1);
 });
+
+test('chatMarkdown: a crafted created date or id cannot leave the chats folder', () => {
+  const md = chatMarkdown([{ ...meta, created: '../../../../tmp/x', id: 'AAAA/../../evil' }, user]);
+  assert.ok(md);
+  assert.ok(!md.name.includes('/') && !md.name.includes('\\') && !md.name.includes('..'), md.name);
+  assert.match(md.name, /^undated /);
+});

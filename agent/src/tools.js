@@ -255,21 +255,25 @@ export async function createToolGateway(fetchFn, library, settings = {}) {
 
   // One MCP token per conversation key. Codex keeps a conversation's thread between turns, and the thread's MCP
   // config (with its Authorization header) is fixed when the thread starts, so turn 2 still sends turn 1's token.
-  // Reusing the token and pointing it at the new turn's session keeps that thread's tool calls working (a fresh
-  // token per turn made every second Codex turn fail with 401 Unauthorized). A turn still open under the same key
-  // gets a token of its own, so two live turns never share one.
+  // Reusing the token and pointing it at the newest turn's session keeps that thread's tool calls working (a fresh
+  // token per turn made every second Codex turn fail with 401 Unauthorized). The newest turn always owns the token,
+  // also when an older turn of the same conversation is still open (a warm thread can only send the one token), and
+  // an older turn closing never takes it away. Keys are kept least-recently-used first, MAX_KEYS of them.
   /** @type {Map<string, string>} */
   const keyTokens = new Map();
   const MAX_KEYS = 500;
 
   /** @param {any} ctx @param {{ key?: string }} [opts] */
   function open(ctx, opts = {}) {
-    const kept = opts.key ? keyTokens.get(opts.key) : undefined;
-    const token = kept && !sessions.has(kept) ? kept : randomToken();
-    if (opts.key && !kept) {
+    let token = opts.key ? keyTokens.get(opts.key) : undefined;
+    if (opts.key) {
+      token ??= randomToken();
+      keyTokens.delete(opts.key); // re-inserted below: the most recently used key is last
       keyTokens.set(opts.key, token);
       const oldest = keyTokens.keys().next().value;
       if (keyTokens.size > MAX_KEYS && oldest !== undefined) keyTokens.delete(oldest);
+    } else {
+      token = randomToken();
     }
     const seen = [];
     /** Finished calls' activity meta, waiting for the engine to attach it to the matching end event. @type {{ tool: string, key: string, meta: import("./domain").ActivityMeta }[]} */
@@ -348,7 +352,7 @@ export async function createToolGateway(fetchFn, library, settings = {}) {
         return 'Reading a source';
       },
       seen: () => seen.slice(),
-      close() { sessions.delete(token); },
+      close() { if (sessions.get(token) === session) sessions.delete(token); }, // a newer turn may own the token now
     };
     sessions.set(token, session);
     return session;

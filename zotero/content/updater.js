@@ -120,10 +120,19 @@ SecondBrain.Updater = class {
 	async fetchBytes(url, onProgress) {
 		// the xpi comes from the Veritas server, so it carries the access token like every other server call
 		const response = await Zotero.HTTP.request("GET", url, {
-			headers: url.startsWith(this.sb.server) ? this.sb.serverHeaders() : {}, responseType: "arraybuffer", timeout: 300000,
+			headers: this.isServer(url) ? this.sb.serverHeaders() : {}, responseType: "arraybuffer", timeout: 300000,
 			requestObserver: onProgress ? (xhr) => { xhr.onprogress = (event) => onProgress(event.loaded); } : undefined,
 		});
 		return new Uint8Array(response.response);
+	}
+
+	/** Same origin as the Veritas server: a prefix match would also send the token to http://host:1.evil.example. */
+	isServer(url) {
+		try {
+			return new URL(url).origin === new URL(this.sb.server).origin;
+		} catch {
+			return false;
+		}
 	}
 
 	async sha256(bytes) {

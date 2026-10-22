@@ -304,16 +304,30 @@ test('a conversation keeps one MCP token across turns, so a pooled Codex thread 
   assert.equal(res.status, 200);
 });
 
-test('other conversations, and a second live turn of the same one, get their own tokens', async () => {
+test('other conversations get their own tokens; a second live turn of one conversation takes over its token', async () => {
   const gateway = await createToolGateway(fetch, fakeLibrary(), {});
   const a = gateway.open(CTX, { key: 'chat-a' });
   const b = gateway.open(CTX, { key: 'chat-b' });
   assert.notEqual(a.mcp.token, b.mcp.token);
-  const overlapping = gateway.open(CTX, { key: 'chat-a' }); // chat-a's turn is still open
-  assert.notEqual(overlapping.mcp.token, a.mcp.token);
-  assert.equal(gateway._sessionForToken(a.mcp.token), a);
+  const overlapping = gateway.open(CTX, { key: 'chat-a' }); // chat-a's first turn is still open
+  assert.equal(overlapping.mcp.token, a.mcp.token); // the warm Codex thread can only send this one token
+  assert.equal(gateway._sessionForToken(a.mcp.token), overlapping); // the newest turn answers it
+  a.close(); // the older turn ends: it must not take the token away from the newer one
+  assert.equal(gateway._sessionForToken(a.mcp.token), overlapping);
+  overlapping.close();
+  assert.equal(gateway._sessionForToken(a.mcp.token), null);
   const unkeyed = gateway.open(CTX);
   assert.notEqual(unkeyed.mcp.token, a.mcp.token);
+});
+
+test('a conversation in use is not evicted by 500 newer ones (least recently used goes first)', async () => {
+  const gateway = await createToolGateway(fetch, fakeLibrary(), {});
+  const first = gateway.open(CTX, { key: 'busy' });
+  first.close();
+  for (let i = 0; i < 499; i++) gateway.open(CTX, { key: `k${i}` }).close();
+  gateway.open(CTX, { key: 'busy' }).close(); // used again: now the most recent
+  for (let i = 499; i < 520; i++) gateway.open(CTX, { key: `k${i}` }).close();
+  assert.equal(gateway.open(CTX, { key: 'busy' }).mcp.token, first.mcp.token);
 });
 
 test('read_digest reads the newest radar digest even with Papers and Notes off', async () => {

@@ -13,7 +13,7 @@ const MAX_TITLE = 80;
  * @param {string} id
  */
 export function shortId(id) {
-  return id.slice(-8);
+  return String(id).replace(/[^0-9A-Za-z]/g, '').slice(-8) || 'chat';
 }
 
 /** @param {string} title */
@@ -49,6 +49,8 @@ export function chatMarkdown(records) {
 
   const front = ['---', `id: ${meta.id}`, `created: ${meta.created}`, `updated: ${updated}`, 'type: chat', '---'].join('\n');
   const text = [front, `# ${title}`, ...sections].join('\n\n') + '\n';
-  const name = `${String(meta.created).slice(0, 10)} ${safeTitle(title)}${mirrorSuffix(meta.id)}`;
+  // Only a real date goes into the name: a chat file adopted from elsewhere could carry any `created`.
+  const day = /^\d{4}-\d{2}-\d{2}/.exec(String(meta.created))?.[0] ?? 'undated';
+  const name = `${day} ${safeTitle(title)}${mirrorSuffix(meta.id)}`;
   return { name, text };
 }
