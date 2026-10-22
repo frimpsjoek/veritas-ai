@@ -14,6 +14,13 @@ body { background: var(--sb-ui-bg); color: var(--sb-ui-text); font: 15px/1.45 va
 .sbw-login-form label { display: flex; flex-direction: column; gap: var(--sbw-s1); }
 .sbw-login-form input { font-size: 16px; padding: var(--sbw-s2) var(--sbw-s3); } /* 16 px: iOS zooms smaller fields */
 .sbw-login-form .sb-button { padding: var(--sbw-s3) var(--sbw-s4); font-size: var(--sbw-t-body); }
+/* setup-view.js: saved servers above the add form; the https warning stands out */
+.sbw-setup .sbw-setup-servers { margin-bottom: var(--sbw-s4); }
+.sbw-setup .sbw-row { align-items: center; }
+.sbw-setup-server { display: flex; flex-direction: column; min-width: 0; }
+.sbw-setup-server .sbw-row-detail { text-align: left; }
+.sbw-setup-actions { display: flex; gap: var(--sbw-s2); align-items: center; flex-shrink: 0; }
+.sbw-setup-warning { color: var(--sb-ui-danger); }
 .sbw-qr { width: min(240px, 100%); margin: var(--sbw-s3) 0; border: 1px solid var(--sb-ui-line); border-radius: var(--sbw-r1); overflow: hidden; line-height: 0; }
 .sbw-qr svg { width: 100%; height: auto; display: block; }
 .sbw-phone-url { box-sizing: border-box; width: 100%; font: 12px var(--sb-ui-mono); color: var(--sb-ui-muted); }

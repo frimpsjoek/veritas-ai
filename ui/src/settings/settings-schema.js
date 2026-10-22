@@ -112,6 +112,7 @@ export const ROWS = [
   { id: 'index.open', section: 'index', label: 'Index status', help: "What's indexed, what's running now, and buttons to update, stop or re-read sources.", kind: 'action', hosts: OBSIDIAN, store: 'none', action: 'openIndexStatus', buttonLabel: 'Open' },
 
   // ------------------------------------------------------------------ Server and phone
+  { id: 'server.servers', section: 'server', label: 'Servers', help: 'The Veritas servers this browser can use, and which one it uses now. Switching reloads the app.', kind: 'custom', hosts: ['web'], store: 'none', custom: 'servers', keywords: 'server address token connect switch setup' },
   { id: 'server.start', section: 'server', label: 'Start the index server with Obsidian', help: 'Runs the local search index while Obsidian is open, and keeps it up to date.', kind: 'toggle', hosts: OBSIDIAN, when: 'desktop', store: 'prefs', key: 'startServer', def: true },
   { id: 'server.kbDir', section: 'server', label: 'Index folder', help: 'Where kb.py lives.', kind: 'text', hosts: OBSIDIAN, when: 'desktop', store: 'prefs', key: 'kbDir' },
   { id: 'server.vault', section: 'server', label: 'Obsidian vault', help: 'Optional. With the server, notes sync with Obsidian and you get similar papers, notes that cite a paper, full-text search and the drive search for lost PDFs.', kind: 'text', hosts: ZOTERO, store: 'prefs', key: 'vault', placeholder: 'Second-Brain' },

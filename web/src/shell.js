@@ -66,6 +66,7 @@ export function createShell({ host, doc = document, win = /** @type {Window} */ 
   for (const [label, route, phoneOnly] of /** @type {[string, WebRoute, boolean][]} */ ([
     ['Projects', { view: 'projects' }, true],
     ['Settings', { view: 'settings' }, false], ['Search index', { view: 'settings', section: 'index' }, false],
+    ['Server', { view: 'settings', section: 'server' }, false],
   ])) {
     const item = /** @type {HTMLAnchorElement} */ (h(doc, 'a', `sbw-menu-item${phoneOnly ? ' is-phone-only' : ''}`, label));
     item.href = formatRoute(route);

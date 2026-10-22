@@ -1,8 +1,10 @@
 // @ts-check
 // ui-src/src/web/login.js. The sign-in page (login.html): the QR code opens /app/login#t=<token>. The token is read
 // from the fragment, which the browser never sends to a server or writes to a log, removed from the address bar
-// at once, and posted once; the server answers with the sb_session cookie.
+// at once, and posted once; the server answers with the sb_session cookie. A newer link that also names the server
+// (#server=&t=) is handed to the app next to this page (connection.js).
 import { h } from '../../ui/src/dom.js';
+import { parseSignInHash } from './connection.js';
 
 const MESSAGES = {
   wrong: "That code didn't work. It may be out of date. On your Mac, open Veritas, go to Settings, and scan the new code.",
@@ -14,7 +16,10 @@ export function startLogin(env = {}) {
   const win = env.win ?? window;
   const doc = win.document;
   const doFetch = env.fetch ?? ((/** @type {string} */ input, /** @type {RequestInit} */ init) => win.fetch(input, init));
-  const token = new URLSearchParams(win.location.hash.slice(1)).get('t') ?? '';
+  const link = parseSignInHash(win.location.hash);
+  // A link that names its server (#server=&t=) is for the app itself, which saves the server and uses a Bearer token.
+  if (link?.server) { win.location.replace(new URL(`./${win.location.hash}`, win.location.href).href); return Promise.resolve(false); }
+  const token = link?.token ?? '';
   if (win.location.hash) win.history.replaceState(null, '', win.location.pathname + win.location.search);
 
   const page = h(doc, 'main', 'sbw-login');

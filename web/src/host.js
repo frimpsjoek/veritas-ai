@@ -1,7 +1,7 @@
 // @ts-check
 // ui-src/src/web/host.js. The browser's UiHost (host.d.ts): the shared chat, Find papers and reports running as a
-// page served by the Second Brain server, with neither Zotero nor Obsidian open. Everything goes to the server the
-// page came from, so no CORS is involved and nothing is fetched from another origin.
+// page, with neither Zotero nor Obsidian open. Everything goes to one Veritas server: the one the page came from
+// (cookie sign-in, no CORS), or, when the app is hosted elsewhere, the one connection.js chose (Bearer token, CORS).
 import { createRemoteRuntime } from '../../agent/src/remote.js';
 import { createFetchApi, createWebTransport } from './transport.js';
 import { createDialogs } from './dialogs.js';
@@ -47,15 +47,17 @@ function citationLabel(item) {
 }
 
 /**
- * @param {{ base?: string, doc?: Document, win?: Window, fetch?: typeof fetch, onOpenRef?: (ref: import("../../agent/src/domain").CitationRef) => boolean | void, onSignedOut?: (() => void) | null }} [options]
+ * @param {{ base?: string, token?: string | null, doc?: Document, win?: Window, fetch?: typeof fetch, onOpenRef?: (ref: import("../../agent/src/domain").CitationRef) => boolean | void, onSignedOut?: (() => void) | null }} [options]
  *   `onOpenRef` lets the shell show a paper or note itself; returning true means it did. The default is a deep link
- *   into Zotero or Obsidian.
- * @returns {UiHost & { ready: Promise<void>, json(path: string, method?: "GET" | "POST" | "DELETE" | "PATCH", body?: unknown): Promise<any>, setContext(items: ContextItem[]): void, setOpenRef(fn: ((ref: any) => boolean | void) | null): void, setBrowser(fn: ((url: string) => void) | null): void }}
+ *   into Zotero or Obsidian. `base` + `token`: a server on another origin (connection.js), reached with
+ *   `Authorization: Bearer`; without them the page talks to the server it came from, with its cookie.
+ * @returns {UiHost & { ready: Promise<void>, server: { url: string, sameOrigin: boolean }, json(path: string, method?: "GET" | "POST" | "DELETE" | "PATCH", body?: unknown): Promise<any>, setContext(items: ContextItem[]): void, setOpenRef(fn: ((ref: any) => boolean | void) | null): void, setBrowser(fn: ((url: string) => void) | null): void }}
  */
 export function createWebHost(options = {}) {
   const doc = options.doc ?? document;
   const win = /** @type {any} */ (options.win ?? doc.defaultView ?? window);
   const base = options.base ?? win.location.origin;
+  const token = options.token ?? null;
   let openRefHook = options.onOpenRef ?? null;
   /** @type {((url: string) => void) | null} */ let browserHook = null;
 
@@ -72,7 +74,7 @@ export function createWebHost(options = {}) {
       pingTimer = setInterval(() => { void api.call('/ping').catch(() => {}); }, 10000);
     } else if (up && pingTimer) { clearInterval(pingTimer); pingTimer = null; }
   };
-  const api = createFetchApi(base, { fetch: options.fetch, onReachable: setReachable });
+  const api = createFetchApi(base, { fetch: options.fetch, token, onReachable: setReachable });
   const dialogs = createDialogs(doc);
 
   // ---- remembered state: held in memory so prefs.get stays synchronous, written through to the server
@@ -128,6 +130,7 @@ export function createWebHost(options = {}) {
   const host = {
     kind: 'web',
     placement: 'page',
+    server: { url: base, sameOrigin: !token },
     can: { scopes: true, addToLibrary: true, openInTab: false, notesWithoutServer: false, linksInside: true },
     ready,
     json: (path, method, body) => api.call(path, method, body),

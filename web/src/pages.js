@@ -7,6 +7,7 @@ import { h } from '../../ui/src/dom.js';
 import { icon } from '../../ui/src/icons.js';
 import { formatRoute } from '../../ui/src/sources/route.js';
 import { paintPhone } from './phone.js';
+import { paintSetup } from './setup-view.js';
 import { paintHome } from '../../ui/src/home/home.js';
 import { SettingsView } from '../../ui/src/settings/settings-view.js';
 import { foldersWidget } from './folders-view.js';
@@ -113,6 +114,7 @@ export async function paintSettings(into, { host, doc, section, links }) {
     onChange: (row, value) => { if (row.id === 'general.theme') applyTheme(doc, /** @type {string} */ (value)); },
     renderers: {
       phone: (_row, ctx) => { const box = h(ctx.doc, 'div', 'sbw-phone'); void paintPhone(box, { host: ctx.host, doc: ctx.doc }); return box; },
+      servers: (_row, ctx) => serversRow(ctx.doc),
       indexStatus: (_row, ctx) => indexStatus(ctx.doc, ctx.host),
       folders: (_row, ctx) => foldersWidget(ctx.doc, ctx.host),
       radarLink: (_row, ctx) => {
@@ -126,6 +128,17 @@ export async function paintSettings(into, { host, doc, section, links }) {
     },
     actions: { copyDiagnostics: () => copyDiagnostics(doc, host) },
   });
+}
+
+/** Settings > Server and phone > Servers: the setup screen's list and form (setup-view.js). @param {Document} doc */
+function serversRow(doc) {
+  const box = h(doc, 'div');
+  const win = /** @type {Window} */ (doc.defaultView);
+  /** @type {Storage | null} */ let storage = null;
+  try { storage = win.localStorage; } catch { /* blocked: nothing can be saved here */ }
+  if (storage) paintSetup(box, { doc, win, storage, inSettings: true });
+  else box.append(h(doc, 'p', 'sbw-hint', 'This browser does not let the app save servers (a private window?).'));
+  return box;
 }
 
 /** Settings > Routines: each routine with what it is and how it stands, and a way into the routines page to change one.

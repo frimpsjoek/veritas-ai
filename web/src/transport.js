@@ -17,16 +17,20 @@ async function failure(response) {
   return Object.assign(new Error(message), { status: response.status });
 }
 
-/** @param {string} base @param {{ fetch?: typeof fetch, sleep?: (ms: number, signal?: AbortSignal) => Promise<void>, onReachable?: (up: boolean) => void }} [env] */
+/** `token`: a server on another origin (the app hosted elsewhere) gets `Authorization: Bearer`; the server's own /app/
+ *  passes none and signs in with its cookie.
+ *  @param {string} base @param {{ fetch?: typeof fetch, token?: string | null, sleep?: (ms: number, signal?: AbortSignal) => Promise<void>, onReachable?: (up: boolean) => void }} [env] */
 export function createFetchApi(base, env = {}) {
   const doFetch = env.fetch ?? ((input, init) => globalThis.fetch(input, init));
+  /** @type {Record<string, string>} */
+  const auth = env.token ? { Authorization: `Bearer ${env.token}` } : {};
   /** @template T @param {string} path @param {"GET"|"POST"|"DELETE"|"PUT"|"PATCH"} [method] @param {unknown} [body] @param {AbortSignal} [signal] @returns {Promise<T>} */
   async function call(path, method = 'GET', body, signal) {
     let response;
     try {
       response = await doFetch(`${base}${path}`, {
         method,
-        ...(body !== undefined ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
+        ...(body !== undefined ? { headers: { ...auth, 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : env.token ? { headers: auth } : {}),
         ...(signal ? { signal } : {}),
       });
     } catch (error) {
