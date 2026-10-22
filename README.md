@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/images/veritas-logo.png" alt="Veritas" width="160"></p>
+
 # Veritas AI
 
 **An open-source research assistant you can check.** Veritas reads your own papers, notes and Zotero library, answers
@@ -5,6 +7,8 @@ with citations you can open, and finds new papers for you, on your own machine.
 
 Built for the [OSI Hackathon 2026](https://scientificintelligence.org/campaigns/osi-hackathon-2026) by team
 Veritas AI: Joseph Frimpong, Oded Asiedu and Huihuo Zheng.
+
+![Veritas reading radar](docs/images/reading-radar.png)
 
 ## What it does
 
@@ -14,6 +18,8 @@ Veritas AI: Joseph Frimpong, Oded Asiedu and Huihuo Zheng.
 - **Connectors** for literature tools, including [Valency Bond](https://docs.valency.io/).
 - **Research personas**: a [knowledge base](docs/research-personas/research-persona-knowledge-base.md) of 31
   researcher personas across six fields.
+
+![Veritas answering from your reading digest, with citations](docs/images/chat-digest.png)
 
 ## Before and during the hackathon
 
