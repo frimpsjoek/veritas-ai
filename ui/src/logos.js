@@ -77,6 +77,24 @@ const SITE_DOMAINS = /** @type {Record<string, string>} */ ({
   'nasa ads': 'ui.adsabs.harvard.edu', 'nasa-ads': 'ui.adsabs.harvard.edu', inspirehep: 'inspirehep.net', 'inspire-hep': 'inspirehep.net',
 });
 
+/** How a host turns a /site-icon path into something an <img> can load. The web app on the server's own address uses
+ *  the path as it is; on another origin (phase 3) it fetches it from its server with the token and gives a blob URL.
+ *  @type {((path: string) => string | Promise<string>) | null} */
+let siteIconResolver = null;
+
+/** @param {((path: string) => string | Promise<string>) | null} fn */
+export function setSiteIconResolver(fn) {
+  siteIconResolver = fn;
+}
+
+/** Sets `apply(url)` from a /site-icon path, through the host's resolver; `failed()` when it cannot be loaded.
+ *  @param {string} path @param {(url: string) => void} apply @param {() => void} failed */
+export function resolveSiteIcon(path, apply, failed) {
+  const got = siteIconResolver ? siteIconResolver(path) : path;
+  if (typeof got === 'string') apply(got);
+  else got.then(apply, failed);
+}
+
 /** The /site-icon address for a source, or null: a journal by its OpenAlex id, a feed by its address, a known source by
  *  its site. @param {{ label?: string, openalexId?: string | null, url?: string | null }} source */
 export function siteIconUrl(source) {
@@ -108,7 +126,8 @@ export function iconFor(doc, source, opts = {}) {
   img.alt = '';
   img.decoding = 'async';
   img.loading = 'lazy';
-  img.addEventListener('error', () => img.replaceWith(monogramSvg(doc, source.label, size)), { once: true });
-  img.src = src;
+  const fallback = () => img.replaceWith(monogramSvg(doc, source.label, size));
+  img.addEventListener('error', fallback, { once: true });
+  resolveSiteIcon(src, (url) => { img.src = url; }, fallback);
   return img;
 }

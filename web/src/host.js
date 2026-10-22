@@ -5,6 +5,7 @@
 import { createRemoteRuntime } from '../../agent/src/remote.js';
 import { createFetchApi, createWebTransport } from './transport.js';
 import { createAssets } from './assets.js';
+import { setSiteIconResolver } from '../../ui/src/logos.js';
 import { createDialogs } from './dialogs.js';
 import { linkMode, planOpen } from '../../ui/src/links.js';
 
@@ -77,6 +78,8 @@ export function createWebHost(options = {}) {
   };
   const api = createFetchApi(base, { fetch: options.fetch, token, onReachable: setReachable });
   const assets = createAssets({ base, token, fetch: options.fetch, URL: win.URL });
+  // Journal and site icons in the shared UI load from the server too, with the token when the page is elsewhere.
+  setSiteIconResolver(assets.sameOrigin ? null : (path) => assets.url(path));
   /** The one place the app opens a window. `keep`: hand back the tab (an empty one, filled once a ticket arrives).
    *  @param {string} url @param {boolean} [keep] @returns {Window | null} */
   const openTab = (url, keep = false) => win.open(url, '_blank', keep ? '' : 'noopener');

@@ -12,7 +12,7 @@ import {
   GROUPS, startEmpty, isLearned, dropLearned, catalogOf, isFollowed, setFollowed, followedCount, suggestionOf, addTyped, whenText, monogram, sourceLabels, journalRow,
 } from './sources-data.js';
 import { seedsPanel, thresholdText } from './seeds-view.js';
-import { logoFor, iconFor, siteIconUrl } from '../logos.js';
+import { logoFor, iconFor, siteIconUrl, resolveSiteIcon } from '../logos.js';
 import { personAvatar } from '../avatars.js';
 
 /** @typedef {import('./sources-data.js').Entry} Entry */
@@ -61,7 +61,8 @@ function diagram(doc, labels, web = false) {
       const initials = () => svgEl(doc, 'text', { x, y: y + 5, 'text-anchor': 'middle' }, 'sbw-src-mono', monogram(label));
       const mark = logo
         ? svgEl(doc, 'path', { d: logo.path, transform: `translate(${x - 12} ${y - 12})`, fill: logo.hex === '000000' ? 'currentColor' : `#${logo.hex}` }, 'sbw-src-logo')
-        : site ? svgEl(doc, 'image', { href: site, x: x - 12, y: y - 12, width: 24, height: 24 }, 'sbw-src-logo') : initials();
+        : site ? svgEl(doc, 'image', { x: x - 12, y: y - 12, width: 24, height: 24 }, 'sbw-src-logo') : initials();
+      if (site && !logo) resolveSiteIcon(site, (url) => mark.setAttribute('href', url), () => mark.replaceWith(initials()));
       if (site) mark.addEventListener('error', () => { const t = initials(); t.append(svgEl(doc, 'title', {}, '', label)); mark.replaceWith(t); }, { once: true });
       mark.append(svgEl(doc, 'title', {}, '', label));
       svg.append(mark);
