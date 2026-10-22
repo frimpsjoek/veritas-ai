@@ -15,6 +15,9 @@ export const ALLOWED = {
   obsidian: ['ui', 'agent'],
   server: [],
 };
+// A part's test/ and dev/ folders hold repo-wide checks (drift guards, the browser harness), so they may read any
+// part. Shipped code may not.
+const REPO_WIDE = new Set(['test', 'dev']);
 const OLD_REPOS = /(^|\/)(zotero-plugin|obsidian-kb|obsidian-plugin|agent-src|ui-src)(\/|$)/;
 const SKIP = new Set(['node_modules', 'dist', 'dist-web', 'dist-versions', 'vendor', '.git', '.venv', '__pycache__']);
 const SOURCE = /\.(js|mjs|cjs|ts|mts)$/;
@@ -50,7 +53,7 @@ export function checkBoundaries(root) {
           const target = relative(root, resolve(dirname(path), spec)).split(sep).join('/');
           if (target.startsWith('..')) { report(`${spec} points outside the repo`); continue; }
           const to = target.split('/')[0];
-          if (to === from || ALLOWED[from].includes(to)) continue;
+          if (to === from || ALLOWED[from].includes(to) || REPO_WIDE.has(file.split('/')[1])) continue;
           report(`${from} may not import ${to} (${spec})`);
         }
       });

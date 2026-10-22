@@ -83,3 +83,15 @@ test('skips node_modules and build output', () => {
   });
   assert.deepEqual(checkBoundaries(root), []);
 });
+
+test('lets test and dev folders read any part, but not old repo paths', () => {
+  const root = repo({
+    'ui/test/guard.test.js': "const dir = new URL('../../zotero/content', import.meta.url);\n",
+    'ui/dev/checks.mjs': "const dist = new URL('../../web/dist-web', import.meta.url);\n",
+    'web/test/x.test.js': "import { a } from '../../zotero-plugin/ui-src/a.js';\n",
+  });
+  const found = checkBoundaries(root);
+  assert.equal(found.length, 1);
+  assert.equal(found[0].file, 'web/test/x.test.js');
+  assert.match(found[0].reason, /old repo path/);
+});

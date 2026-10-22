@@ -1,0 +1,11 @@
+{
+  "name": "second-brain-zotero",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25"
+  }
+}

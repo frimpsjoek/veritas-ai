@@ -4,16 +4,14 @@ set -e
 cd "$(dirname "$0")"
 (cd editor-src && npm ci --silent && npm run build --silent)
 (cd engine-src && npm ci --silent --ignore-scripts && npm run build --silent)
-(cd agent-src && npm ci --silent && npm run build:zotero --silent && npm run build --silent)  # build: the server's agentd
-(cd ui-src && npm ci --silent && npm run build --silent)
-# The Obsidian plugin compiles agent-src and ui-src with noImplicitAny; agent-src's own tsconfig does not. Check it here
-# so a release never builds the xpi from code Obsidian's install.sh then refuses (0.47.0 did). CI checks out this repo
-# alone, so there the check is skipped with a notice; a local release with the sibling checkout still runs it.
-if [ -d ../obsidian-plugin ]; then
-  (cd ../obsidian-plugin && npx tsc -p .)
-else
-  echo "build.sh: ../obsidian-plugin not found, skipping its type-check" >&2
-fi
+(cd ../agent && npm ci --silent && npm run build --silent)  # the server's agentd
+(cd ../ui && npm ci --silent)
+npm ci --silent
+node build-agent.mjs  # content/agent.js from ../agent
+node build-ui.mjs     # content/sb-ui.js, sb-ui.css, home/ from ../ui
+# The Obsidian plugin compiles agent and ui with noImplicitAny; agent's own tsconfig does not. Check it here so a
+# release never builds the xpi from code Obsidian's install.sh then refuses (0.47.0 did).
+(cd ../obsidian && npm ci --silent && npx tsc -p .)
 version=$(node -p 'require("./manifest.json").version')
 mkdir -p dist
 rm -f "dist/second-brain-$version.xpi"
