@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const agentSrc = path.resolve(here, '..');
 const home = os.homedir();
-const kb = process.env.SECOND_BRAIN_KB ?? path.join(home, 'obsidian-kb');
+const kb = process.env.SECOND_BRAIN_KB ?? fileURLToPath(new URL('../../server', import.meta.url));
 
 const FORBIDDEN_TOOLS = new Set(['Bash', 'Edit', 'Write', 'NotebookEdit']);
 const RAW_MARKERS = {

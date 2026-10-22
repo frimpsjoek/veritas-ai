@@ -166,7 +166,7 @@ async function extractObsidianCss() {
 
   // ~/obsidian-kb/obsidian-plugin, not repoRoot: this worktree's repoRoot is .wt/009-perf, a sibling checkout of
   // the zotero-plugin repo, while the Obsidian plugin lives in its own separate repo under the ~/obsidian-kb hub.
-  const pluginStylesPath = join(os.homedir(), 'obsidian-kb', 'obsidian-plugin', 'styles.css');
+  const pluginStylesPath = fileURLToPath(new URL('../../obsidian/styles.css', import.meta.url));
   if (existsSync(pluginStylesPath)) {
     await writeFile(join(cacheDir, 'plugin.css'), await readFileP(pluginStylesPath));
     manifestFiles.push('plugin.css');

@@ -3,9 +3,9 @@
 # reach the index whenever the Mac is on. macOS asks once for access to the Documents folder: click Allow.
 # Remove with: ./install-service.sh uninstall
 set -e
-LABEL=com.frimpsjoe.obsidian-kb
+LABEL=ai.veritas.server
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-KB="$HOME/obsidian-kb"
+KB="$(cd "$(dirname "$0")" && pwd)"  # this server folder
 
 if [ "$1" = "uninstall" ]; then
   launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true

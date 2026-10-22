@@ -10,6 +10,7 @@ import { createHttpLibraryBackend } from '../src/library-http.js';
 import { createToolGateway, createMcpHttpHandler } from '../src/tools.js';
 import { createLocalRuntime } from '../src/core.js';
 import { createProviders } from '../src/providers/index.js';
+import { fileURLToPath } from 'node:url';
 
 const args = process.argv.slice(2);
 const flag = (name, fallback) => { const i = args.indexOf(`--${name}`); return i >= 0 ? args[i + 1] : fallback; };
@@ -18,7 +19,7 @@ const providerName = flag('provider', 'codex');
 if (!question) { console.error('usage: node dev/report.mjs "question" [--provider codex|claude] [--depth quick] [--answer 1] [--data <dir>]'); process.exit(1); }
 
 const home = process.env.HOME;
-const dataDir = flag('data', `${home}/obsidian-kb/data/agent-dev`);
+const dataDir = flag('data', fileURLToPath(new URL('../../server/data/agent-dev', import.meta.url)));
 const kbBaseUrl = process.env.SECOND_BRAIN_KB_URL ?? 'http://127.0.0.1:27182';
 const platform = createNodePlatform({ homeDir: home });
 const library = createHttpLibraryBackend(platform.fetch, { baseUrl: kbBaseUrl, token: process.env.SECOND_BRAIN_KB_TOKEN ?? null });

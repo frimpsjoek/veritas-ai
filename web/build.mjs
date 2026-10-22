@@ -11,6 +11,8 @@ import { homeAssets } from '../ui/home-assets.mjs';
 
 // The shared sheets and Home's files come from ../ui; run from web/ (npm run build).
 const ui = (/** @type {string} */ path) => `../ui/${path}`;
+// ../ui's own imports (katex) resolve from web's node_modules too, so the web app builds without ui's install.
+const nodePaths = ['node_modules'];
 
 const out = 'dist-web';
 rmSync(out, { recursive: true, force: true });
@@ -27,6 +29,7 @@ for (const [name, file] of [['lib', 'pdf.min.mjs'], ['worker', 'pdf.worker.min.m
 
 const js = await build({
   entryPoints: ['src/index.js'],
+  nodePaths,
   define: { SB_PDFJS: JSON.stringify(pdfjs) },
   bundle: true,
   format: 'esm',
@@ -36,7 +39,7 @@ const js = await build({
   write: false,
   logLevel: 'warning',
 });
-const loginJs = await build({ entryPoints: ['src/login.js'], bundle: true, format: 'esm', platform: 'browser', target: 'es2022', minify: true, write: false, logLevel: 'warning' });
+const loginJs = await build({ entryPoints: ['src/login.js'], nodePaths, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', minify: true, write: false, logLevel: 'warning' });
 const css = [ui('styles/tokens-web.css'), ui('src/home/type.css'), ui('styles/ui.css'), ui('src/home/home.css'), 'src/shell.css', 'src/views.css', ui('src/sources/sources.css')].map((f) => readFileSync(f, 'utf8')).join('\n');
 
 const jsName = hashed('app', 'js', js.outputFiles[0].contents);

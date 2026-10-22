@@ -258,7 +258,11 @@ async function main() {
   const args = process.argv.slice(2);
   const flag = (name, fallback) => { const i = args.indexOf(`--${name}`); return i >= 0 ? args[i + 1] : fallback; };
 
-  const dataDir = flag('data', `${process.env.HOME}/obsidian-kb/data/agent`);
+  const dataDir = flag('data', undefined); // the server always passes it: its data/agent folder
+  if (!dataDir) {
+    process.stderr.write('agentd: --data <folder> is required\n');
+    process.exit(2);
+  }
   const kbBaseUrl = flag('kb', 'http://127.0.0.1:27182');
   const notesDir = flag('notes', undefined); // the server's output folder; chats are mirrored as Markdown in <notes>/chats
   const requestedPort = Number(flag('port', '0'));

@@ -31,11 +31,11 @@ export interface Settings {
 
 export const HOME = (window as any).process?.env?.HOME ?? "";
 export const DEFAULTS: Settings = {
-	kbDir: `${HOME}/obsidian-kb`,
-	python: `${HOME}/obsidian-kb/.venv/bin/python`,
+	kbDir: "", // the Veritas server folder; empty = only connect to a server that is already running
+	python: "", // empty = <kbDir>/.venv/bin/python
 	port: 27182,
 	startServer: true,
-	remoteUrl: "http://example.ts.net:27182",
+	remoteUrl: "",
 	token: "",
 	contextDepth: 1,
 	contextSimilar: false,
@@ -134,10 +134,10 @@ export class Api {
 		if (Date.now() - this.lastOk < 30_000) return true;
 		if (await this.up()) return true;
 		const s = this.settings();
-		if (!Platform.isDesktopApp || !s.startServer) return false;
+		if (!Platform.isDesktopApp || !s.startServer || !s.kbDir) return false;
 		if (!this.server) {
 			const { spawn } = require("child_process") as typeof import("child_process");
-			this.server = spawn(s.python, ["kb.py", "serve", "--port", String(s.port)], { cwd: s.kbDir, stdio: "ignore" });
+			this.server = spawn(s.python || `${s.kbDir}/.venv/bin/python`, ["kb.py", "serve", "--port", String(s.port)], { cwd: s.kbDir, stdio: "ignore" });
 			this.server.on("exit", () => { this.server = null; });
 			this.server.on("error", () => { this.server = null; });
 		}

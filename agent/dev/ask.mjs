@@ -10,6 +10,7 @@ import { createHttpLibraryBackend, createHttpNoteSink } from '../src/library-htt
 import { createToolGateway, createMcpHttpHandler } from '../src/tools.js';
 import { createTurnRunner, createSlots, ASK_SCHEMA, ASK_INSTRUCTIONS, createLocalRuntime } from '../src/core.js';
 import { createProviders } from '../src/providers/index.js';
+import { fileURLToPath } from 'node:url';
 
 const args = process.argv.slice(2);
 const providerFlagIndex = args.indexOf('--provider');
@@ -28,7 +29,7 @@ if (!question || !['codex', 'claude', 'openai'].includes(providerName)) {
 const providerId = providerName === 'openai' ? 'oss:default' : providerName;
 
 const home = process.env.HOME;
-const dataDir = process.env.SECOND_BRAIN_DATA_DIR ?? `${home}/obsidian-kb/data/agent-dev`;
+const dataDir = process.env.SECOND_BRAIN_DATA_DIR ?? fileURLToPath(new URL('../../server/data/agent-dev', import.meta.url));
 const kbBaseUrl = process.env.SECOND_BRAIN_KB_URL ?? 'http://127.0.0.1:27182';
 
 const platform = createNodePlatform({ homeDir: home });

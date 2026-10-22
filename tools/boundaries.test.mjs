@@ -53,7 +53,7 @@ test('rejects old repo names', () => {
   const root = repo({ 'obsidian/src/s.ts': "import { SearchPanel } from '../../zotero-plugin/ui-src/src/index.js';\n" });
   const found = checkBoundaries(root);
   assert.equal(found.length, 1);
-  assert.match(found[0].reason, /old repo path/);
+  assert.match(found[0].reason, /old repo/);
 });
 
 test('sees JSDoc import types', () => {
@@ -94,7 +94,7 @@ test('lets test and dev folders read any part, but not old repo paths', () => {
   const found = checkBoundaries(root);
   assert.equal(found.length, 1);
   assert.equal(found[0].file, 'web/test/x.test.js');
-  assert.match(found[0].reason, /old repo path/);
+  assert.match(found[0].reason, /old repo/);
 });
 
 test('in a git repo, skips files git ignores (build output)', () => {
@@ -106,4 +106,37 @@ test('in a git repo, skips files git ignores (build output)', () => {
   execFileSync('git', ['init', '-q', root]);
   const found = checkBoundaries(root);
   assert.deepEqual(found.map((f) => f.file), ['zotero/content/hand.js']);
+});
+
+test('old repo names in any string literal, not only relative imports', () => {
+  const root = repo({ 'ui/dev/perf.mjs': "const css = join(os.homedir(), 'obsidian-kb', 'obsidian-plugin', 'styles.css');\n// ui-src/dev/perf.mjs: a comment naming the old place is fine\n" });
+  const found = checkBoundaries(root);
+  assert.equal(found.length, 1);
+  assert.equal(found[0].line, 1);
+  assert.match(found[0].reason, /old repo name/);
+});
+
+test('require.resolve, async readFile and .tsx files are read', () => {
+  const root = repo({
+    'web/src/a.js': "const p = require.resolve('../../obsidian/x.js');\nconst t = await readFile('../../zotero/r.css');\n",
+    'web/src/b.tsx': "import x from '../../obsidian/y';\n",
+  });
+  assert.deepEqual(checkBoundaries(root).map((f) => `${f.file}:${f.line}`).sort(), ['web/src/a.js:1', 'web/src/a.js:2', 'web/src/b.tsx:1']);
+});
+
+test('shell scripts and HTML pages are read, with the planned script links allowed', () => {
+  const root = repo({
+    'web/install.sh': 'KB="${KB:-$(cd ../server && pwd)}"\n',
+    'obsidian/install.sh': 'KB="$(cd ../server && pwd)" ../web/install.sh\n',
+    'zotero/build.sh': '(cd ../obsidian && npx tsc -p .)\n(cd ../agent && npm run build)\n',
+    'web/run.sh': 'cat ../zotero/content/x.js\n',
+    'web/src/page.html': '<link rel="stylesheet" href="../../obsidian/styles.css">\n',
+    'server/perf/run.sh': 'UI_SRC=$KB/zotero-plugin/ui-src\n',
+  });
+  const found = checkBoundaries(root).map((f) => `${f.file}:${f.reason.split(' (')[0]}`).sort();
+  assert.deepEqual(found, [
+    'server/perf/run.sh:old repo name zotero-plugin/ui-src',
+    'web/run.sh:web may not import zotero',
+    'web/src/page.html:web may not import obsidian',
+  ]);
 });

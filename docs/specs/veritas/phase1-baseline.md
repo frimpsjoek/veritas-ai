@@ -18,7 +18,7 @@
 
 ## After Tasks 2–5 (`./check.sh`)
 
-tools 12 · agent 792 · ui 284 · web 45 (ui + web = 329, the baseline) · obsidian 27 (main.js rebuilt byte-identical)
+tools 12 · agent 792 · ui 284 · web 45 (ui + web = 329, the baseline) · obsidian 27, type-check clean, build ok (main.js is git-ignored, so the rebuild was not compared byte for byte; an earlier note saying it was identical was wrong)
 · zotero 7 + xpi 0.53.0 · server 281 passed, 3 skipped (277 + 4 layout tests). A deliberate web → obsidian import
 makes `./check.sh` exit 1 at the boundary step.
 
