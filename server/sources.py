@@ -7,14 +7,13 @@ A folder holding zotero.sqlite is a Zotero library, one holding .obsidian/ is an
 plain folder of notes, PDFs and images. The kind is detected on every read and never stored, so a folder that gains
 .obsidian/ later simply becomes a vault.
 
-The main folder is the vault seeded from today's setup ("main": true), else the first enabled Obsidian vault, else the
-home folder (~/Second-Brain-Home). It keeps bare
-relative paths in the index and is what kb.VAULT means, so everything that writes notes (AI notes, digests, paper
-notes, skills) writes there. Every other folder's paths carry a `<name>:/` prefix. One Zotero library is read; a
+The main folder is the output folder: the listed folder marked "main": true (set_output, or KB_VAULT when seeding),
+else ~/Documents/Veritas, created when first written. It keeps bare relative paths in the index and is what kb.VAULT
+means, so everything that writes notes (AI notes, digests, paper notes, skills, chats) writes there. Every other folder's paths carry a `<name>:/` prefix. One Zotero library is read; a
 second enabled one is reported as ignored.
 
-Without sources.json the list is today's setup, computed in memory: KB_VAULT or ~/Documents/Second-Brain, then
-KB_ZOTERO or the library Zotero's own prefs point at. Nothing is written until seed() or a change.
+Without sources.json the list is computed in memory: KB_VAULT if set (as the output folder), then KB_ZOTERO or the
+library Zotero's own prefs point at. Nothing is written until seed() or a change.
 """
 from __future__ import annotations
 
@@ -27,13 +26,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 FILE = Path(os.environ.get("KB_SOURCES", ROOT / "data" / "sources.json"))
-DEFAULT_VAULT = Path.home() / "Documents" / "Second-Brain"
-HOME_FOLDER = Path.home() / "Second-Brain-Home"
+OUTPUT_DEFAULT = Path.home() / "Documents" / "Veritas"  # where notes go unless a listed vault is chosen
 ZOTERO_PROFILES = Path.home() / "Library" / "Application Support" / "Zotero" / "Profiles"
 
 NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 # Names become source labels and path prefixes: none may read as a label the index already gives.
-RESERVED = {"zotero", "pdf", "image", "personal", "notion", "clippings", "youtube", "people", "copilot", "home"}
+RESERVED = {"output", "zotero", "pdf", "image", "personal", "notion", "clippings", "youtube", "people", "copilot", "home"}
 
 
 class SourceError(ValueError):
@@ -122,13 +120,11 @@ def check_name(name: str, taken: set[str]) -> str:
 
 
 def defaults() -> list[dict]:
-    """Today's setup as a folder list: the vault, then the Zotero library."""
+    """The starting folder list: KB_VAULT (as the output folder) when set, then the Zotero library."""
     entries = []
     vault = os.environ.get("KB_VAULT")
-    vault_path = Path(vault) if vault else DEFAULT_VAULT
-    if vault or vault_path.is_dir():
-        entries.append({"name": slug(vault_path.name), "path": str(vault_path), "enabled": True, "skip": [],
-                        "main": True})
+    if vault:
+        entries.append({"name": slug(Path(vault).name), "path": vault, "enabled": True, "skip": [], "main": True})
     zotero_env = os.environ.get("KB_ZOTERO")
     zotero_path = Path(zotero_env) if zotero_env else discover_zotero()
     # Only a real library: a KB_ZOTERO without zotero.sqlite would otherwise be read as a plain folder.
@@ -179,10 +175,10 @@ def resolved() -> Layout:
     ignored = [f for f in enabled if f.kind == "missing"]
     libraries = [f for f in enabled if f.kind == "zotero"]
     ignored += libraries[1:]
-    # The seeded vault stays main even without .obsidian/ (a vault never opened on this machine), so its paths
-    # never change; otherwise the first Obsidian vault; otherwise the home folder.
-    vaults = [f for f in enabled if f.main and f.kind in ("obsidian", "plain")] + [f for f in enabled if f.kind == "obsidian"]
-    main = vaults[0].path if vaults else HOME_FOLDER
+    # The folder marked main stays the output even without .obsidian/ (a vault never opened on this machine), so its
+    # paths never change; otherwise ~/Documents/Veritas.
+    vaults = [f for f in enabled if f.main and f.kind in ("obsidian", "plain")]
+    main = vaults[0].path if vaults else OUTPUT_DEFAULT
     others = [f for f in enabled if f.kind in ("obsidian", "plain") and f.path.resolve() != main.resolve()]
     return Layout(main, bool(vaults), libraries[0].path if libraries else None, others, ignored, listed)
 
@@ -213,6 +209,23 @@ def add(path: str | Path, name: str | None = None) -> Folder:
     entries.append({"name": name, "path": str(folder), "enabled": True, "skip": []})
     save(entries)
     return Folder(name, folder, True, [], kind)
+
+
+def set_output(name: str | None) -> None:
+    """Where Veritas writes notes: a listed Obsidian vault or notes folder by name, or None for ~/Documents/Veritas."""
+    entries = load()
+    entries = defaults() if entries is None else entries
+    if name is not None:
+        match = next((e for e in entries if e["name"] == name), None)
+        if match is None:
+            raise SourceError(f"there is no folder named {name!r}")
+        if detect(Path(match["path"]).expanduser()) not in ("obsidian", "plain"):
+            raise SourceError(f"{name!r} is not a notes folder; pick an Obsidian vault or a folder of notes")
+    for e in entries:
+        e.pop("main", None)
+        if e["name"] == name:
+            e["main"] = True
+    save(entries)
 
 
 def update(name: str, *, enabled: bool | None = None, skip: list[str] | None = None) -> None:

@@ -53,6 +53,7 @@ POST /index                                    re-index changed notes now
 GET  /sources                                  the folders the index reads, each with kind, role and count (spec 018)
 POST /sources {"path","name"?}                 add a folder (400 unreadable/too broad, 409 already listed); starts indexing
 PATCH /sources/<name> {"enabled"?,"skip"?}     switch a folder on or off, or set its skip patterns
+PATCH /sources/output {"name": str|null}       where notes are written: a listed notes folder, or ~/Documents/Veritas
 DELETE /sources/<name>                         take a folder off the list (its rows go on the next index run)
 GET  /app, /app/<path>                         the web app: static files from data/web/ (web_app.py); public, also to the phone
 GET  /web/phone-link                           the sign-in link for the phone (Mac only; 403 when proxied)
@@ -831,7 +832,7 @@ class Handler(BaseHTTPRequestHandler):
         self._run(handle)
 
     def do_PATCH(self) -> None:
-        """Only /sources/<name> uses PATCH: {"enabled"?, "skip"?}."""
+        """Only /sources/<name> uses PATCH: {"enabled"?, "skip"?}; /sources/output takes {"name": str | null}."""
         if not self._allowed():
             return
         route = urlparse(self.path).path
@@ -842,6 +843,13 @@ class Handler(BaseHTTPRequestHandler):
             if not route.startswith("/sources/"):
                 return self._send(404, {"error": "not found"})
             body = self._body()
+            if route == "/sources/output":
+                try:
+                    sources.set_output(body.get("name") or None)
+                except sources.SourceError as error:
+                    return self._send(400, {"error": str(error)})
+                sources_changed()
+                return self._send(200, kb.sources_report())
             skip = body.get("skip")
             if skip is not None and not (isinstance(skip, list) and all(isinstance(x, str) for x in skip)):
                 return self._send(400, {"error": "skip is a list of patterns such as \"drafts/*\""})

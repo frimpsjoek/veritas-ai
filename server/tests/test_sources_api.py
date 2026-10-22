@@ -20,7 +20,7 @@ def api(tmp_path, monkeypatch):
     papers = tmp_path / "papers"
     papers.mkdir()
     monkeypatch.setattr(sources, "FILE", tmp_path / "data" / "sources.json")
-    monkeypatch.setattr(sources, "HOME_FOLDER", tmp_path / "home")
+    monkeypatch.setattr(sources, "OUTPUT_DEFAULT", tmp_path / "home")
     sources.save([{"name": "vault", "path": str(vault), "enabled": True, "skip": [], "main": True}])
     monkeypatch.setattr(kb, "HOME", tmp_path)
     monkeypatch.setattr(kb, "DB_PATH", tmp_path / "data" / "kb.sqlite")

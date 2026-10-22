@@ -27,8 +27,8 @@ def setup(tmp_path, monkeypatch):
     (papers / ".hidden" / "x.md").write_text("# hidden\n")
 
     monkeypatch.setattr(sources, "FILE", tmp_path / "data" / "sources.json")
-    monkeypatch.setattr(sources, "HOME_FOLDER", tmp_path / "home")
-    sources.save([{"name": "vault", "path": str(vault), "enabled": True, "skip": []},
+    monkeypatch.setattr(sources, "OUTPUT_DEFAULT", tmp_path / "home")
+    sources.save([{"name": "vault", "path": str(vault), "enabled": True, "skip": [], "main": True},
                   {"name": "papers", "path": str(papers), "enabled": True, "skip": ["drafts/*"]},
                   {"name": "usb", "path": str(tmp_path / "unplugged"), "enabled": True, "skip": []}])
     monkeypatch.setattr(kb, "HOME", tmp_path)

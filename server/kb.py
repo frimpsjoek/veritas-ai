@@ -40,8 +40,8 @@ import media
 import sources
 import zotero
 
-# The folders to read (spec 018). VAULT is the main folder: the first Obsidian vault, else the home folder; it keeps
-# bare paths and is where notes are written. Without data/sources.json this is today's KB_VAULT / KB_ZOTERO setup.
+# The folders to read (spec 018). VAULT is the main (output) folder: the listed folder chosen for notes, else
+# ~/Documents/Veritas; it keeps bare paths and is where notes are written. Without data/sources.json this is today's KB_VAULT / KB_ZOTERO setup.
 # No Zotero in the list (none found, or switched off): a folder that never exists, so the Zotero stage finds nothing
 # and the Zotero-only routes say so, instead of falling back to ~/Zotero.
 NO_ZOTERO = Path(__file__).resolve().parent / "data" / "no-zotero-library"
@@ -1272,6 +1272,13 @@ def resolve(path: str) -> Path:
         return candidate
     if not inner.endswith(".md") and candidate.with_name(candidate.name + ".md").is_file():
         return candidate.with_name(candidate.name + ".md")
+    # A bare path written when another folder was the output (old chats cite ai_notes/x.md): the listed folder that
+    # has it now.
+    if top == VAULT:
+        for f in LAYOUT.others:
+            moved = (f.path / inner).resolve()
+            if f.path.resolve() in moved.parents and moved.is_file():
+                return moved
     name = Path(inner).name.removesuffix(".md")
     db = connect()
     row = db.execute("SELECT path FROM notes WHERE title=? ORDER BY length(path) LIMIT 1", (name,)).fetchone()
@@ -1581,7 +1588,8 @@ def sources_report() -> dict:
             role, documents = "listed", counts.get(f.prefix, 0)
         rows.append({"name": f.name, "path": str(f.path), "enabled": f.enabled, "skip": f.skip, "kind": f.kind,
                      "role": role, "documents": documents})
-    return {"main": str(VAULT), "main_is_vault": LAYOUT.main_is_vault,
+    output = next((f.name for f in LAYOUT.folders if f.main and f.path.resolve() == VAULT.resolve()), None)
+    return {"main": str(VAULT), "main_is_vault": LAYOUT.main_is_vault, "output": {"name": output, "path": str(VAULT)},
             "main_documents": counts[""] if not LAYOUT.main_is_vault else None,
             "zotero": str(LAYOUT.zotero) if LAYOUT.zotero else None, "folders": rows}
 
@@ -1593,6 +1601,9 @@ def sources_cli(action: str, target: str | None, name: str | None) -> None:
                 raise sources.SourceError("give the folder's path: kb.py sources add PATH [--name N]")
             folder = sources.add(target, name)
             print(f"added {folder.name}: {folder.path} ({folder.kind}); run `kb.py index` to read it")
+        elif action == "output":
+            sources.set_output(target)
+            print(f"notes now go to {target or 'the Veritas folder'}")
         elif action in ("remove", "on", "off"):
             if not target:
                 raise sources.SourceError(f"give the folder's name: kb.py sources {action} NAME")
@@ -1607,7 +1618,7 @@ def sources_cli(action: str, target: str | None, name: str | None) -> None:
     for f in report["folders"]:
         print(f"{f['name']:<20} {f['role']:<8} {f['kind']:<9} {f['documents']:>7}  {f['path']}")
     if not report["main_is_vault"]:
-        print(f"{'(home folder)':<20} {'main':<8} {'plain':<9} {report['main_documents']:>7}  {report['main']}")
+        print(f"{'(Veritas folder)':<20} {'main':<8} {'plain':<9} {report['main_documents']:>7}  {report['main']}")
 
 
 def main() -> None:
@@ -1639,7 +1650,7 @@ def main() -> None:
     p = sub.add_parser("audit")
     p.add_argument("--days", type=float, default=1)
     p = sub.add_parser("sources", help="the folders the index reads (spec 018)")
-    p.add_argument("action", nargs="?", default="list", choices=["list", "add", "remove", "on", "off"])
+    p.add_argument("action", nargs="?", default="list", choices=["list", "add", "remove", "on", "off", "output"])
     p.add_argument("target", nargs="?", help="a folder path (add) or a folder name")
     p.add_argument("--name")
     args = parser.parse_args()
