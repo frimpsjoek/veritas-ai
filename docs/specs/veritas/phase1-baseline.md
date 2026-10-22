@@ -15,3 +15,19 @@
 | Part | Result |
 |---|---|
 | server (`server/.venv` from `requirements.txt`, Python 3.12.11) | 277 passed, 3 skipped: `test_collections.py` needs a built index (`kb.sqlite` with collections); Veritas starts with empty data |
+
+## After Tasks 2–5 (`./check.sh`)
+
+tools 12 · agent 792 · ui 284 · web 45 (ui + web = 329, the baseline) · obsidian 27 (main.js rebuilt byte-identical)
+· zotero 7 + xpi 0.53.0 · server 281 passed, 3 skipped (277 + 4 layout tests). A deliberate web → obsidian import
+makes `./check.sh` exit 1 at the boundary step.
+
+## Task 6 live check (2026-10-22, port 27191, own empty data folder)
+
+- One notes folder listed (a lab notebook, 480 notes, 6 PDFs); `kb.py index` → 35,363 passages embedded in 904 s
+  (onnx, CPU).
+- `kb.py serve --port 27191` with `SECOND_BRAIN_AGENTD_ENTRY` unset: `/ping` → ok; agentd runs from
+  `<repo>/agent/dist/agentd.mjs`; `/agent/ping` with the token → ok.
+- `web/install.sh` → `server/data/web/index.html`; `/app/` serves `app-<hash>.js` and `app-<hash>.css`.
+- `/search?q=GW quasiparticle` → 3 results from the listed folder.
+- The second-brain dev server on port 27190 kept running, untouched.
