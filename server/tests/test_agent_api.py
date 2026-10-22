@@ -179,3 +179,17 @@ def test_sidecar_is_told_the_port_the_server_runs_on(monkeypatch):
     except Stop:
         pass
     assert seen["kb_url"] == "http://127.0.0.1:27190"
+
+
+def test_spawn_passes_notes_dir(tmp_path, monkeypatch):
+    """Phase 2 Task 6: the sidecar mirrors chats as Markdown into <output folder>/chats, so it is told that folder."""
+    entry = tmp_path / "agentd.mjs"
+    entry.write_text("")
+    monkeypatch.setattr(agent_api, "_agentd_entry", lambda: entry)
+    monkeypatch.setattr(kb, "VAULT", tmp_path / "out")
+    seen = {}
+    monkeypatch.setattr(agent_api.subprocess, "Popen", lambda cmd, **kw: seen.setdefault("cmd", cmd))
+    sidecar = agent_api.Sidecar(node=Path("node"), secret="s")
+    agent_api._spawn(sidecar, tmp_path / "data", "http://127.0.0.1:1")
+    cmd = seen["cmd"]
+    assert cmd[cmd.index("--notes") + 1] == str(tmp_path / "out")

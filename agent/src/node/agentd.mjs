@@ -260,6 +260,7 @@ async function main() {
 
   const dataDir = flag('data', `${process.env.HOME}/obsidian-kb/data/agent`);
   const kbBaseUrl = flag('kb', 'http://127.0.0.1:27182');
+  const notesDir = flag('notes', undefined); // the server's output folder; chats are mirrored as Markdown in <notes>/chats
   const requestedPort = Number(flag('port', '0'));
   const secret = process.env.SECOND_BRAIN_AGENTD_SECRET;
   if (!secret) { console.error('SECOND_BRAIN_AGENTD_SECRET is required (set by the Python supervisor)'); process.exit(1); }
@@ -277,7 +278,7 @@ async function main() {
   // No getRoleModel override: it now defaults (core.js) to the same settings.json, read live on every turn, so
   // providers.setRole takes effect on the very next message with no restart (criterion 10).
   const skills = createHttpSkillSource(platform.fetch, { baseUrl: kbBaseUrl });
-  const service = await createLocalRuntime({ platform, library, notes, skills, dataDir, providers, gateway });
+  const service = await createLocalRuntime({ platform, library, notes, skills, dataDir, notesDir, providers, gateway });
 
   const agentd = createAgentd(service, { secret, mcpHandler: createMcpHttpHandler(gateway) });
   gatewaySettings.mcpUrl = `http://127.0.0.1:${await agentd.listen(requestedPort)}/mcp`;

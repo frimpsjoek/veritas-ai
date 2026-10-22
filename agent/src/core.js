@@ -411,7 +411,7 @@ export const ASK_INSTRUCTIONS = [
  * Composition root. See service.d.ts for the full AgentService surface; P1 wires conversations and ask (the
  * Ask harness's needs). Reviews and provider sign-in are built in P5/P6 and throw "not implemented" until then.
  * @param {{ platform: import("./platform").Platform, library: import("./tools").LibraryBackend, notes: import("./service").NoteSink, dataDir: string, secrets?: import("./secrets.js").SecretStore,
- *           skills?: import("./skills").SkillSource,
+ *           skills?: import("./skills").SkillSource, notesDir?: string,
  *           providers: Map<string, import("./provider").Provider>, gateway: import("./tools").ToolGateway,
  *           getRoleModel?: (role: import("./domain").Role) => Promise<import("./domain").ModelChoice>,
  *           getTurnLimits?: (role: import("./domain").Role) => Promise<{ wallClockMs: number, toolCallBudget: number }>,
@@ -467,7 +467,8 @@ export async function createLocalRuntime(deps) {
     allowLocalReports: async () => (await settingsStore.get()).local.allowReports,
     onUsage: (provider, usage) => { usageMemo.set(provider, { ...usage, at: clock() }); },
   });
-  const store = conversationStore(deps.platform.fs, `${deps.dataDir}/chats`);
+  // Design goal 10: with a notes folder, every chat is also written as one Markdown file in <notes>/chats.
+  const store = conversationStore(deps.platform.fs, `${deps.dataDir}/chats`, deps.notesDir ? { mirrorDir: `${deps.notesDir}/chats` } : {});
   const log = eventLog();
   /** conversation id -> the AbortController of its running turn, so `cancel` can stop a turn whose caller is not attached. @type {Map<string, AbortController>} */
   const turnAborts = new Map();

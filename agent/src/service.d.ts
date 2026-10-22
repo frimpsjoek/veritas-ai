@@ -222,6 +222,7 @@ export declare function createLocalRuntime(deps: {
   notes: NoteSink;                              // Zotero: local notes folder; sidecar: POST /ai-note on the Python server
   skills?: import("./skills").SkillSource;     // where skills live (the server's /skills routes); default: <dataDir>/skills
   dataDir: string;                             // chats/, reviews/, settings.json, codex-home/
+  notesDir?: string;                           // the output notes folder; each chat is mirrored as Markdown in <notesDir>/chats
   secrets?: import("./secrets.js").SecretStore; // tests; default: the Keychain on a Mac, else <dataDir>/secrets.json (spec 020)
   clock?: () => number;                        // tests; default Date.now
   routines?: { isOwner?: () => boolean | Promise<boolean>; tickMs?: number; startupGraceMs?: number };
