@@ -15,4 +15,4 @@ mkdir -p "$published"
 cp main.js manifest.json styles.css "$published/"
 echo "published to $published"
 # The web app (spec 013) ships with every release: build it and swap it into the server's data/web.
-../zotero-plugin/install-web.sh
+KB="$(cd ../server && pwd)" ../web/install.sh

@@ -1,7 +1,7 @@
 """Serves the newest Zotero xpi and Obsidian build to the plugins themselves (spec 006).
 
-Lockstep: the server only ever reports a version once BOTH a Zotero xpi (zotero-plugin/dist/second-brain-*.xpi)
-and an Obsidian build (obsidian-plugin/dist-versions/<version>/{main.js,manifest.json,styles.css}) for that same
+Lockstep: the server only ever reports a version once BOTH a Zotero xpi (zotero/dist/second-brain-*.xpi)
+and an Obsidian build (obsidian/dist-versions/<version>/{main.js,manifest.json,styles.css}) for that same
 version exist. `install.sh` publishes the Obsidian side; `build.sh` publishes the Zotero side (unchanged) --
 building is publishing, no separate step.
 

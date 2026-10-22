@@ -1,6 +1,6 @@
 import type { Api } from "./api";
-import { createRemoteRuntime } from "../../zotero-plugin/agent-src/src/remote.js";
-import type { AgentService } from "../../zotero-plugin/agent-src/src/service";
+import { createRemoteRuntime } from "../../agent/src/remote.js";
+import type { AgentService } from "../../agent/src/service";
 
 /** The sidecar's routes are served by the same server as everything else in api.ts, under /agent. `Api.call`
  *  already carries the right base URL, desktop-vs-phone auth and error handling, so the transport just prefixes

@@ -357,8 +357,9 @@ def _without(related: dict, hidden: set[str]) -> dict:
     return out
 
 
-ZOTERO_DIST = kb.HOME / "zotero-plugin" / "dist"
-OBSIDIAN_DIST = kb.HOME / "obsidian-plugin" / "dist-versions"
+# The plugins are parts of the same repo, beside server/ (kb.HOME).
+ZOTERO_DIST = kb.HOME.parent / "zotero" / "dist"
+OBSIDIAN_DIST = kb.HOME.parent / "obsidian" / "dist-versions"
 
 AUDIT_FILE = kb.HOME / "data" / "agent-access.log"
 

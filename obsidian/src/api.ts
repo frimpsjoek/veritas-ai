@@ -44,7 +44,7 @@ export const DEFAULTS: Settings = {
 	updates: "server",
 };
 
-import type { NoteRef as SharedNoteRef, ZoteroMeta as SharedZoteroMeta } from "../../zotero-plugin/ui-src/src/index.js";
+import type { NoteRef as SharedNoteRef, ZoteroMeta as SharedZoteroMeta } from "../../ui/src/index.js";
 
 // The shared panels (ui-src) define these shapes; one definition keeps rows passed between them assignable.
 export type ZoteroMeta = SharedZoteroMeta;

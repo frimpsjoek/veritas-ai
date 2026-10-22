@@ -1,7 +1,7 @@
 import { ItemView, WorkspaceLeaf } from "obsidian";
 import type SecondBrainSearch from "./main";
 // @ts-ignore -- ui-src is plain JS; see chat.ts for the same import.
-import { HomeView as SharedHomeView } from "../../zotero-plugin/ui-src/src/index.js";
+import { HomeView as SharedHomeView } from "../../ui/src/index.js";
 import HOME_CSS from "sb-home-css";
 import { createObsidianHost } from "./ui-host";
 

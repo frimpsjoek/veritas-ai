@@ -1,7 +1,7 @@
 import { ItemView, MarkdownView, TFile, WorkspaceLeaf } from "obsidian";
 import type SecondBrainSearch from "./main";
 import type { SectionMatch } from "./api";
-import { RelatedPanel } from "../../zotero-plugin/ui-src/src/index.js";
+import { RelatedPanel } from "../../ui/src/index.js";
 import { panelFetch } from "./panel-rows";
 
 export const RELATED_VIEW = "second-brain-related";

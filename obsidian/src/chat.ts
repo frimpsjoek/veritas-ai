@@ -2,7 +2,7 @@ import { ItemView, WorkspaceLeaf } from "obsidian";
 import type SecondBrainSearch from "./main";
 // @ts-ignore -- ui-src is plain JS (checked against host.d.ts/domain.d.ts, not against this project's tsconfig);
 // see ui-host.ts for the same import.
-import { ChatView as SharedChatView } from "../../zotero-plugin/ui-src/src/index.js";
+import { ChatView as SharedChatView } from "../../ui/src/index.js";
 import { createObsidianHost } from "./ui-host";
 
 // Second Brain AI (spec 002/003/004), now the shared chat moved into ui-src (spec 005 C3): Chat, Quick answer,

@@ -690,7 +690,13 @@ a.sb-p-chip, button.sb-p-chip { cursor: pointer; }
 .sb-ai .sb-dg-act:hover:not(:disabled) { color: var(--sb-ui-text); text-decoration: underline; }
 .sb-ai .sb-dg-act.is-primary { color: var(--sb-ui-accent); font-weight: 600; }
 .sb-ai .sb-dg-act:disabled { opacity: .5; cursor: default; }
-.sb-dg-state { font-size: 12px; color: var(--sb-ui-muted); }
+.sb-dg-state { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--sb-ui-muted); }
+.sb-ai .sb-dg-act { gap: 5px; }
+.sb-dg-act .sb-lucide, .sb-dg-act .sb-logo, .sb-dg-state svg { flex: none; width: 14px; height: 14px; }
+.sb-lucide { flex: none; vertical-align: -2px; }
+.sb-dg-act.is-icon svg { width: 16px; height: 16px; }
+.sb-ai .sb-dg-act.is-icon { padding: 3px 4px; }
+.sb-dg-act.is-icon .sb-dg-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .sb-art-row.is-dismissed .sb-art-td, .sb-art-rowcard.is-dismissed { opacity: .55; }
 .sb-art-row.is-dismissed .sb-art-title, .sb-art-rowcard.is-dismissed .sb-art-title { color: var(--sb-ui-muted); font-weight: 500; }
 .sb-dg-toast { position: absolute; z-index: 12; left: 50%; bottom: 16px; transform: translateX(-50%); display: flex; align-items: center; gap: 14px; max-width: calc(100% - 32px);
@@ -795,6 +801,61 @@ input:focus-visible + .sbs-switch-track { outline: 2px solid var(--sb-ui-accent)
 .sbs-mcp-tools .is-hidden { color: var(--sb-ui-muted); }
 .sbs-mcp-catalog { margin-top: 8px; }
 .sbs-mcp-catalog > summary { cursor: pointer; color: var(--sb-ui-accent); }
+/* Connect guide (server spec 020 G3): numbered steps, fields, Connect and test, a status line */
+.sbs-mcp-keyline { display: flex; align-items: center; gap: 12px; padding: 4px 0; }
+.sbs-guide { display: flex; flex-direction: column; gap: 10px; margin: 6px 0 12px; padding: 12px; border: 1px solid var(--sb-ui-line); border-radius: 8px; }
+.sbs-guide-steps { margin: 0; padding-inline-start: 1.3em; display: flex; flex-direction: column; gap: 10px; }
+.sbs-guide-step > .sbs-label { display: block; margin-bottom: 2px; }
+.sbs-guide-field { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.sbs-guide-field .sb-input { max-width: 28rem; width: 100%; box-sizing: border-box; }
+.sbs-guide-open { margin-top: 6px; }
+.sbs-guide-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.sbs-guide-status.is-good { color: var(--sb-ui-accent); }
+.sbs-guide-custom > .sb-button { align-self: flex-start; }
+
+/* Sources chips (settings > Sources and tools). Flat: a thin line, a tint when on, no fills, shadows or gradients. */
+.sbs-sources { display: grid; gap: 4px; min-width: 0; }
+.sbs-src-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.sbs-src-menu { position: relative; flex: none; }
+.sbs-src-more { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; color: var(--sb-ui-muted); font-size: 18px; line-height: 1; cursor: pointer; list-style: none; user-select: none; }
+.sbs-src-more::-webkit-details-marker { display: none; }
+.sbs-src-more:hover, .sbs-src-menu[open] > .sbs-src-more { background: var(--sb-ui-hover); }
+.sbs-src-more:focus-visible { outline: 2px solid var(--sb-ui-accent); outline-offset: 2px; }
+.sbs-src-menu-list { position: absolute; z-index: 5; top: 36px; inset-inline-end: 0; display: grid; min-width: 220px; padding: 4px; border: 1px solid var(--sb-ui-line); border-radius: 10px; background: var(--sb-ui-bg); box-shadow: var(--sb-ui-shadow); }
+.sbs-src-item { box-sizing: border-box; width: 100%; min-height: 36px; padding: 0 12px; border: 0; border-radius: 8px; background: none; color: var(--sb-ui-text); font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
+.sbs-src-item:hover, .sbs-src-item:focus-visible { background: var(--sb-ui-hover); outline: none; }
+.sbs-src-panel { margin: 8px 0; padding: 12px 0; border-top: 1px solid var(--sb-ui-line); border-bottom: 1px solid var(--sb-ui-line); }
+.sbs-src-panel-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.sbs-src-group { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px 14px; padding: 16px 0; border-top: 1px solid var(--sb-ui-line); }
+.sbs-src-group:first-of-type { border-top: 0; }
+.sbs-src-group > :not(.sbs-ring):not(.sbs-src-heading) { grid-column: 1 / -1; }
+.sbs-src-group > .sbs-src-heading:first-child { grid-column: 1 / -1; }
+.sbs-src-title { margin: 0; font-size: 15px; font-weight: 600; color: var(--sb-ui-text); }
+.sbs-src-note, .sbs-src-empty, .sbs-src-footer { margin: 0; font-size: 13px; line-height: 1.4; color: var(--sb-ui-muted); }
+.sbs-src-footer { padding-top: 12px; border-top: 1px solid var(--sb-ui-line); }
+.sbs-ring { flex: none; width: 56px; height: 56px; }
+.sbs-ring-arc { stroke: var(--sb-ui-line); }
+.sbs-ring-arc.is-lit { stroke: var(--sb-ui-accent); }
+.sbs-ring-center { fill: var(--sb-ui-text); font-size: 13px; font-weight: 600; }
+.sbs-src-chips { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.sbs-chip { display: inline-flex; align-items: center; gap: 8px; box-sizing: border-box; max-width: 100%; min-height: 36px; padding: 6px 14px 6px 10px; border: 1px solid var(--sb-ui-line); border-radius: 999px; background: transparent; color: var(--sb-ui-muted); font: inherit; font-size: 14px; cursor: pointer; }
+.sbs-chip-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--sb-ui-faint); }
+.sbs-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sbs-chip-detail { flex: none; font-size: 13px; color: var(--sb-ui-muted); }
+.sbs-chip:hover { background: var(--sb-ui-hover); }
+.sbs-chip:focus-visible { outline: 2px solid var(--sb-ui-accent); outline-offset: 2px; }
+.sbs-chip[aria-pressed="true"] { border-color: transparent; background: var(--sb-ui-accent-tint); color: var(--sb-ui-text); }
+.sbs-chip.is-ok .sbs-chip-dot { background: var(--sb-ui-accent); }
+.sbs-chip.is-warn .sbs-chip-dot { background: var(--sb-ui-faint); }
+.sbs-chip.is-bad .sbs-chip-dot { background: var(--sb-ui-danger); }
+.sbs-chip.is-bad .sbs-chip-detail { color: var(--sb-ui-danger); }
+.sbs-src-status { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; margin: 0; font-size: 13px; line-height: 1.4; color: var(--sb-ui-muted); }
+.sbs-src-status .sbs-chip-dot { align-self: center; }
+.sbs-src-status.is-ok .sbs-chip-dot { background: var(--sb-ui-accent); }
+.sbs-src-status .sbs-chip-label { color: var(--sb-ui-text); overflow: visible; white-space: normal; }
+.sbs-src-live { grid-column: 1 / -1; margin: 0; min-height: 0; font-size: 13px; color: var(--sb-ui-muted); }
+.sbs-src-live:empty { display: none; }
+.sbs-chip[aria-busy="true"] { opacity: .6; cursor: progress; }
 
 /* Host-proofing: Obsidian and Zotero style every bare button, select and heading (fill, shadow, centred content,
    their own margins). These rules sit under .sbs, so two classes outrank the host's `button:not(.x)` and heading rules. */
@@ -809,6 +870,13 @@ input:focus-visible + .sbs-switch-track { outline: 2px solid var(--sb-ui-accent)
 .sbs .sbs-row { grid-template-columns: minmax(220px, 1fr) auto; }
 .sbs .sbs-row.is-stacked { grid-template-columns: minmax(0, 1fr); }
 .sbs .sbs-select { width: auto; min-width: 140px; max-width: 240px; }
+.sbs .sbs-chip { height: auto; justify-content: flex-start; font-weight: 400; background: transparent; }
+.sbs .sbs-chip:hover { background: var(--sb-ui-hover); }
+.sbs .sbs-chip[aria-pressed="true"], .sbs .sbs-chip[aria-pressed="true"]:hover { background: var(--sb-ui-accent-tint); }
+.sbs .sbs-src-title { margin: 0; padding: 0; font-size: 15px; }
+.sbs .sbs-src-more { height: 32px; padding: 0; background: none; }
+.sbs .sbs-src-item { height: auto; justify-content: flex-start; background: none; }
+.sbs .sbs-src-item:hover { background: var(--sb-ui-hover); }
 
 /* Narrow: the sections become a strip along the top and the rows stack. */
 @container (max-width: 560px) {
@@ -827,7 +895,26 @@ input:focus-visible + .sbs-switch-track { outline: 2px solid var(--sb-ui-accent)
   .sbs .sbs-row:has(.sbs-switch) { grid-template-columns: minmax(0, 1fr) auto; }
   .sbs-input { width: 100%; }
   .sbs-input.is-number { width: 96px; }
+  .sbs .sbs-chip { min-height: 44px; }
+  .sbs .sbs-chip-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; }
+  .sbs-src-menu-list { inset-inline-end: -4px; max-width: calc(100vw - 32px); }
 }
+
+/* Source logos (logos.js): beside a name, at text size */
+.sb-logo { flex: none; vertical-align: -2px; }
+.sbs-named { display: inline-flex; align-items: center; gap: 6px; }
+.sb-logo-mono circle { fill: var(--sb-ui-line); }
+.sb-logo-mono text { fill: var(--sb-ui-muted); font: 600 10px var(--sb-ui-font, inherit); }
+
+/* Who made it (avatars.js): a person or Second Brain's AI */
+.sb-avatar { flex: none; vertical-align: -3px; }
+.sb-avatar-initials { font: 700 10px/1 system-ui, -apple-system, 'Segoe UI', sans-serif; letter-spacing: 0.02em; }
+/* in a gutter, out of the flow (a class, not :has(): Zotero 7's engine predates it): they change no height, so a new question still lands at the top of the view */
+.sb-ai-user.has-avatar { position: relative; padding-left: 38px; }
+.sb-ai-user > .sb-ai-avatar { position: absolute; left: 10px; top: 8px; }
+.sb-ai-answer.has-avatar { position: relative; padding-left: 30px; }
+.sb-ai-answer > .sb-ai-avatar { position: absolute; left: 0; top: 0; }
+.sb-p-row-title > .sb-avatar { margin-inline-end: 6px; }
 
 
 /* This plugin's own CSS (spec 005 D5). Everything a panel looks like comes from ui-src (ui.css + tokens-obsidian.css); what is

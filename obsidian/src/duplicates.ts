@@ -1,6 +1,6 @@
 import { App, ItemView, Modal, Notice, Setting, TFile, WorkspaceLeaf } from "obsidian";
 import type SecondBrainSearch from "./main";
-import { DuplicatesPanel } from "../../zotero-plugin/ui-src/src/index.js";
+import { DuplicatesPanel } from "../../ui/src/index.js";
 import { panelFetch } from "./panel-rows";
 
 export const DUPLICATES_VIEW = "second-brain-duplicates";

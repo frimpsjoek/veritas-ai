@@ -1,8 +1,8 @@
 import { App, MarkdownView, Modal, Notice, Setting, SuggestModal } from "obsidian";
 import type SecondBrainSearch from "./main";
 import type { Hit } from "./api";
-import type { AgentService } from "../../zotero-plugin/agent-src/src/service";
-import type { UiHost, ContextItem, ContextCandidate, LibraryPaperRow, OutsidePaper, CollectionNode } from "../../zotero-plugin/ui-src/src/host";
+import type { AgentService } from "../../agent/src/service";
+import type { UiHost, ContextItem, ContextCandidate, LibraryPaperRow, OutsidePaper, CollectionNode } from "../../ui/src/host";
 import { debouncedChanges, selectionLabel, candidatesFromFiles } from "./context-sources";
 import { openZotero } from "./zotero";
 import { isListedPath, listedUrl } from "./listed-paths";

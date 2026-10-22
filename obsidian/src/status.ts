@@ -1,7 +1,7 @@
 import { ItemView, Modal, Notice, Setting, WorkspaceLeaf, App } from "obsidian";
 import type SecondBrainSearch from "./main";
-import { StateLine, StatusPanel, ago, duration, until } from "../../zotero-plugin/ui-src/src/index.js";
-import type { StatusSpec } from "../../zotero-plugin/ui-src/src/panels/panels.js";
+import { StateLine, StatusPanel, ago, duration, until } from "../../ui/src/index.js";
+import type { StatusSpec } from "../../ui/src/panels/panels.js";
 
 // The index at a glance: what it holds per source, how much is searchable by meaning, what indexing is doing
 // right now, and buttons to run, stop or re-read. Polls the server every 2 s while open (Mac and phone).

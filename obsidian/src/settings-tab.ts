@@ -4,7 +4,7 @@ import qrcode from "qrcode-generator";
 import type SecondBrainSearch from "./main";
 import { createObsidianHost } from "./ui-host";
 import { ownPrefs, type PrefStore } from "./own-prefs";
-import { SettingsView } from "../../zotero-plugin/ui-src/src/settings/settings-view.js";
+import { SettingsView } from "../../ui/src/settings/settings-view.js";
 
 // The Settings tab is the shared SettingsView (ui-src/src/settings/, spec 016) drawn by every app. This file only
 // supplies what the table leaves to Obsidian: where its own rows are stored, the phone QR and the buttons.

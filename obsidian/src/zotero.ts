@@ -2,7 +2,7 @@ import { ItemView, MarkdownRenderer, Menu, Notice, TFile, ViewStateResult, Works
 import type SecondBrainSearch from "./main";
 import type { NoteRef, Related } from "./api";
 import { openExternal } from "./links";
-import { ChipRow, Highlight, PaperCard, Row, Section, StateLine, Subhead, metaOf, closeness, titleOf } from "../../zotero-plugin/ui-src/src/index.js";
+import { ChipRow, Highlight, PaperCard, Row, Section, StateLine, Subhead, metaOf, closeness, titleOf } from "../../ui/src/index.js";
 import { wireRow } from "./panel-rows";
 
 // A Zotero item as an Obsidian tab: header, actions, abstract, the user's highlights and notes, related vault

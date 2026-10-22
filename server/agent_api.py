@@ -1,5 +1,5 @@
 """agent_api.py: the Python server's part. It does not run agents. It supervises the Node sidecar (agentd,
-agent-src/src/node/agentd.mjs), forwards /agent/* to it behind the existing auth, and owns the one new write:
+agent/src/node/agentd.mjs), forwards /agent/* to it behind the existing auth, and owns the one new write:
 reports into ai_notes/. The sidecar reaches the library through the existing agent routes (X-KB-Client: agent),
 so privacy.json and the audit log need no change. No stream ever holds LOCK: forwarding is byte copying on the
 request thread, and the sidecar's own long-poll (GET /agent/events) is just a slow ordinary response, not a
@@ -24,7 +24,7 @@ from pathlib import Path
 
 import paper_notes
 
-AGENTD_ENTRY = Path("zotero-plugin") / "agent-src" / "dist" / "agentd.mjs"  # built with `cd agent-src && node build.mjs`
+AGENTD_ENTRY = Path("..") / "agent" / "dist" / "agentd.mjs"  # beside server/ in the repo; built with `cd agent && npm run build`
 DEFAULT_KB_URL = "http://127.0.0.1:27182"
 BACKOFF = (1, 2, 4, 8, 16, 30)  # seconds between restarts; caps and repeats at the last value
 AI_NOTES_ROOT = "ai_notes"
@@ -51,9 +51,9 @@ def find_node() -> Path | None:
 
 
 def _agentd_entry() -> Path:
-    # The production default is AGENTD_ENTRY, built by `cd zotero-plugin && ./build.sh` (or, inside
-    # agent-src, `npm run build`); dist/ is gitignored there, same as editor-src's build output.
-    # SECOND_BRAIN_AGENTD_ENTRY overrides it for pointing at a worktree build while developing agent-src itself.
+    # The production default is AGENTD_ENTRY, built by `cd zotero && ./build.sh` (or, inside agent/,
+    # `npm run build`); dist/ is gitignored, same as editor-src's build output.
+    # SECOND_BRAIN_AGENTD_ENTRY overrides it for pointing at a worktree build while developing agent/ itself.
     override = os.environ.get("SECOND_BRAIN_AGENTD_ENTRY")
     return Path(override) if override else Path(__file__).parent / AGENTD_ENTRY
 
@@ -80,7 +80,7 @@ def _supervise_loop(sidecar: Sidecar, data_dir: Path, kb_url: str) -> None:
         if proc is None:
             # dist/agentd.mjs doesn't exist yet (never built, or a build is still in progress). Retrying with
             # the same backoff as a crash, instead of giving up this thread for good, means a server started
-            # before `agent-src` was ever built picks up dist/agentd.mjs on its own once it appears, with no
+            # before `agent` was ever built picks up dist/agentd.mjs on its own once it appears, with no
             # restart required.
             delay = BACKOFF[min(backoff_index, len(BACKOFF) - 1)]
             backoff_index += 1

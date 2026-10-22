@@ -1,7 +1,7 @@
 import { ItemView, WorkspaceLeaf } from "obsidian";
 import type SecondBrainSearch from "./main";
 import type { Hit } from "./api";
-import { IconButton, SearchPanel } from "../../zotero-plugin/ui-src/src/index.js";
+import { IconButton, SearchPanel } from "../../ui/src/index.js";
 
 export const SEARCH_VIEW = "second-brain-search";
 

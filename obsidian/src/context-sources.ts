@@ -1,8 +1,8 @@
 // src/context-sources.ts. What the chat's composer learns from Obsidian (spec 008 C1-C3), kept free of any
 // `obsidian` import so it runs under plain Node tests: the debounced "what the user is looking at changed"
 // signal, the selection chip's label, and the `+`/`@` picker's rows from the vault's files.
-import type { Attachment, Citekey, NotePath } from "../../zotero-plugin/agent-src/src/domain";
-import type { ContextCandidate } from "../../zotero-plugin/ui-src/src/host";
+import type { Attachment, Citekey, NotePath } from "../../agent/src/domain";
+import type { ContextCandidate } from "../../ui/src/host";
 
 /** A change source: subscribes `changed` and returns its unsubscribe. */
 export type ChangeSource = (changed: () => void) => () => void;
