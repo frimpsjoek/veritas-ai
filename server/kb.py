@@ -1771,6 +1771,9 @@ def main() -> None:
     p.add_argument("action", nargs="?", default="list", choices=["list", "add", "remove", "on", "off", "output"])
     p.add_argument("target", nargs="?", help="a folder path (add) or a folder name")
     p.add_argument("--name")
+    p = sub.add_parser("web-origins", help="web-app origins allowed to call this server (phase 3)")
+    p.add_argument("action", nargs="?", default="list", choices=["list", "add", "remove"])
+    p.add_argument("origin", nargs="?")
     args = parser.parse_args()
     if args.cmd == "index":
         import signal
@@ -1797,6 +1800,17 @@ def main() -> None:
         print(json.dumps(recent(args.days), indent=2, ensure_ascii=False))
     elif args.cmd == "audit":
         audit_report(args.days)
+    elif args.cmd == "web-origins":
+        import web_origins
+        try:
+            if args.action != "list":
+                if not args.origin:
+                    sys.exit("give the origin, such as https://example.org")
+                (web_origins.add if args.action == "add" else web_origins.remove)(args.origin)
+        except ValueError as error:
+            sys.exit(str(error))
+        for origin in sorted(web_origins.allowed()):
+            print(origin)
     elif args.cmd == "sources":
         sources_cli(args.action, args.target, args.name)
     else:

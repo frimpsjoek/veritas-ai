@@ -106,6 +106,7 @@ import skills
 import sources
 import paper_figures
 import pdf_route
+import web_origins
 import web_app
 import web_page
 
@@ -130,7 +131,7 @@ def token() -> str:
     return TOKEN_FILE.read_text().strip()
 
 
-RequestClass = Literal["foreign", "proxied", "local"]
+RequestClass = Literal["foreign", "proxied", "local", "app"]
 PROXY_HEADERS = ("x-forwarded-", "tailscale-", "forwarded")
 SESSIONS_FILE = kb.HOME / "data" / "web" / "sessions.json"
 SESSION_SECONDS = 365 * 24 * 3600
@@ -147,6 +148,13 @@ def request_class(headers: Mapping[str, str]) -> RequestClass:
     # either scheme on this same host is this app, not another website.
     own_origins = {f"http://{host}", f"https://{host}"} if proxied else {f"http://{host}"} if local else set()
     origin = h.get("origin", "")
+    # A listed web-app origin (the hosted web app, a Tauri window; web_origins.py): CORS, and the token always.
+    if origin and origin != "null":
+        try:
+            if web_origins.normalise(origin) in web_origins.allowed():
+                return "app"
+        except ValueError:
+            pass
     # Only http(s) origins are websites; the plugins send no Origin, or an app:// / "null" one.
     if h.get("sec-fetch-site") in ("cross-site", "same-site") or (
             origin.startswith(("http://", "https://")) and origin not in own_origins):
@@ -179,10 +187,15 @@ def new_session() -> str:
     return session
 
 
+def bearer_ok(headers: Mapping[str, str]) -> bool:
+    """The Authorization: Bearer header carries this server's token."""
+    sent = (headers.get("Authorization") or "").removeprefix("Bearer ").strip()
+    return bool(sent) and hmac.compare_digest(sent.encode(), token().encode())
+
+
 def authorized(headers: Mapping[str, str]) -> bool:
     """A Bearer token or a live sb_session cookie."""
-    sent = (headers.get("Authorization") or "").removeprefix("Bearer ").strip()
-    if sent and hmac.compare_digest(sent.encode(), token().encode()):
+    if bearer_ok(headers):
         return True
     try:
         morsel = SimpleCookie(headers.get("Cookie") or "").get(SESSION_COOKIE)
@@ -418,8 +431,39 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    _cors_origin: str | None = None  # set per request for a listed web-app origin; end_headers adds the CORS headers
+
+    def end_headers(self) -> None:
+        if self._cors_origin:
+            self.send_header("Access-Control-Allow-Origin", self._cors_origin)
+            self.send_header("Vary", "Origin")
+        super().end_headers()
+
+    def do_OPTIONS(self) -> None:
+        """CORS preflight: answered for listed web-app origins only."""
+        self._cors_origin = None
+        if request_class(self.headers) != "app":
+            return self._send(403, {"error": "requests from other websites are refused"})
+        self._cors_origin = self.headers.get("Origin")
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+        self.send_header("Access-Control-Max-Age", "600")
+        if self.headers.get("Access-Control-Request-Private-Network") == "true":
+            # Chrome asks before a public page may reach a server on this computer or the home network.
+            self.send_header("Access-Control-Allow-Private-Network", "true")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _allowed(self) -> bool:
         kind = request_class(self.headers)
+        self._cors_origin = self.headers.get("Origin") if kind == "app" else None
+        if kind == "app":
+            # Never the loopback pass or the cookie: a listed site still has to prove it holds the token.
+            if bearer_ok(self.headers):
+                return True
+            self._send(401, {"error": "a valid token is required"})
+            return False
         if kind == "foreign":
             # Logged so a real client that gets wrongly classed as a website shows up in serve.log.
             print(f"403 foreign {self.command} {urlparse(self.path).path} origin={self.headers.get('Origin')!r} "
