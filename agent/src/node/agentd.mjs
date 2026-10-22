@@ -8,6 +8,7 @@
 // Binds 127.0.0.1 only. Every control route (everything but /mcp) requires `Authorization: Bearer <secret>`,
 // where the secret is handed to this process by the Python supervisor (SECOND_BRAIN_AGENTD_SECRET) so it never
 // has to be discovered. Never touches the Python process's LOCK/WRITE_LOCK: this process doesn't know they exist.
+import { createSecretStore } from '../secrets.js';
 import http from 'node:http';
 import { URL } from 'node:url';
 import { createNodePlatform } from './platform.mjs';
@@ -274,7 +275,8 @@ async function main() {
   // T6.2: the one persisted settings.json under `dataDir` (settings.js) is what createLocalRuntime's own
   // internal store reads and writes from here on; this one read just seeds the gateway's McpHub with whatever
   // servers were already saved, so they're connected on this very startup, not just the next one.
-  const saved = await createSettingsStore(platform.fs, dataDir).get();
+  // with the secret store, so a saved key (a Valency token) reaches the hub; without it every restart connected keyless (401)
+  const saved = await createSettingsStore(platform.fs, dataDir, { secrets: createSecretStore(platform, dataDir) }).get();
   const gatewaySettings = { scholarly: ['openalex', 'arxiv', 'crossref', 'europepmc'], mcpUrl: /** @type {string | undefined} */ (undefined), spawn: platform.spawn, mcp: saved.mcp };
   const gateway = await createToolGateway(platform.fetch, library, gatewaySettings);
   const providers = createProviders(platform, { dataDir, home: process.env.HOME ?? '', codex: { binaryPath: process.env.CODEX_BINARY ?? null } });
