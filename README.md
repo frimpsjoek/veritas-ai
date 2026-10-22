@@ -5,7 +5,7 @@
 **An open-source research assistant you can check.** Veritas reads your own papers, notes and Zotero library, answers
 with citations you can open, and finds new papers for you, on your own machine.
 
-Built for the [OSI Hackathon 2026](https://scientificintelligence.org/campaigns/osi-hackathon-2026) by team
+Built during the [OSI Hackathon 2026](https://scientificintelligence.org/campaigns/osi-hackathon-2026) by team
 Veritas AI: Joseph Frimpong, Oded Asiedu and Huihuo Zheng.
 
 ![Veritas reading radar](docs/images/reading-radar.png)
