@@ -319,7 +319,8 @@ class Root:
 def roots() -> list[Root]:
     # The main folder always gets Obsidian rules: it is the vault, or the home folder Second Brain itself writes
     # ai_notes/ and digests into, whose folder labels and weights must stay.
-    return [Root("", VAULT, "obsidian")] + [Root(f.prefix, f.path, f.kind, f.name, tuple(f.skip)) for f in LAYOUT.others]
+    return [Root("", VAULT, "obsidian")] + [Root(f.prefix, f.path, sources.connectors.indexed_as(f.kind), f.name, tuple(f.skip))
+                                       for f in LAYOUT.others]
 
 
 def kept_prefixes() -> tuple[str, ...]:

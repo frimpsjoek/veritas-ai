@@ -24,6 +24,8 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import connectors
+
 ROOT = Path(__file__).resolve().parent
 FILE = Path(os.environ.get("KB_SOURCES", ROOT / "data" / "sources.json"))
 OUTPUT_DEFAULT = Path.home() / "Documents" / "Veritas"  # where notes go unless a listed vault is chosen
@@ -48,7 +50,7 @@ class Folder:
     path: Path
     enabled: bool = True
     skip: list[str] = field(default_factory=list)
-    kind: str = "plain"  # detected: zotero | obsidian | plain | missing
+    kind: str = "plain"  # detected through connectors.REGISTRY: zotero | obsidian | pdf | plain | ... | missing
     main: bool = False  # set on the vault seeded from today's setup, so it stays the main folder as it is
 
     @property
@@ -67,13 +69,13 @@ class Layout:
 
 
 def detect(path: Path) -> str:
-    if not path.is_dir():
-        return "missing"
-    if (path / "zotero.sqlite").is_file():
-        return "zotero"
-    if (path / ".obsidian").is_dir():
-        return "obsidian"
-    return "plain"
+    """The folder's kind from the connector registry (zotero, obsidian, pdf, plain, ...) or "missing"."""
+    return connectors.detect(path)
+
+
+def _notes(f: Folder) -> bool:
+    """Read by the notes stages (an Obsidian vault, a notes folder, a PDF folder, or a registered kind like them)."""
+    return connectors.indexed_as(f.kind) in ("obsidian", "plain")
 
 
 def zotero_prefs() -> Path | None:
@@ -177,9 +179,9 @@ def resolved() -> Layout:
     ignored += libraries[1:]
     # The folder marked main stays the output even without .obsidian/ (a vault never opened on this machine), so its
     # paths never change; otherwise ~/Documents/Veritas.
-    vaults = [f for f in enabled if f.main and f.kind in ("obsidian", "plain")]
+    vaults = [f for f in enabled if f.main and _notes(f)]
     main = vaults[0].path if vaults else OUTPUT_DEFAULT
-    others = [f for f in enabled if f.kind in ("obsidian", "plain") and f.path.resolve() != main.resolve()]
+    others = [f for f in enabled if _notes(f) and f.path.resolve() != main.resolve()]
     return Layout(main, bool(vaults), libraries[0].path if libraries else None, others, ignored, listed)
 
 
@@ -219,7 +221,8 @@ def set_output(name: str | None) -> None:
         match = next((e for e in entries if e["name"] == name), None)
         if match is None:
             raise SourceError(f"there is no folder named {name!r}")
-        if detect(Path(match["path"]).expanduser()) not in ("obsidian", "plain"):
+        kind = detect(Path(match["path"]).expanduser())
+        if kind not in connectors.REGISTRY or not connectors.REGISTRY[kind].writes_notes:
             raise SourceError(f"{name!r} is not a notes folder; pick an Obsidian vault or a folder of notes")
     for e in entries:
         e.pop("main", None)
