@@ -176,3 +176,41 @@ def test_sources_report_lists_accounts(account):
     report = kb.sources_report()
     [row] = [r for r in report["folders"] if r["kind"] == "zotero-web"]
     assert row["name"] == "online" and row["role"] == "online" and row["path"] is None
+
+
+def test_account_switched_back_on_is_read_again(account):
+    account.setattr(zotero_web, "OPENER", FakeApi(ITEMS))
+    kb._index(False, False, kb.Progress())
+    sources.update("online", enabled=False)
+    account.setattr(kb, "LAYOUT", sources.resolved())
+    kb._index(False, False, kb.Progress())
+    assert paths() == set()
+    sources.update("online", enabled=True)
+    account.setattr(kb, "LAYOUT", sources.resolved())
+    kb._index(False, False, kb.Progress())
+    assert paths() == {"online:/zotero/PAPERAAA", "online:/zotero/PAPERBBB"}
+
+
+def test_online_item_opens_from_the_index(account):
+    import http.client
+    import threading
+    from http.server import ThreadingHTTPServer
+
+    import http_api
+    account.setattr(zotero_web, "OPENER", FakeApi(ITEMS))
+    kb._index(False, False, kb.Progress())
+    account.setattr(kb, "index_running", lambda: False)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), http_api.Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+        conn.request("GET", "/zotero?key=online:/zotero/PAPERAAA")
+        res = conn.getresponse()
+        body = json.loads(res.read())
+        assert res.status == 200, body
+        assert body["key"] == "PAPERAAA" and body["title"] == "Quasiparticle band gaps" and body["library"] == "online"
+        assert body["doi"] == "10.1/x" and body["year"] == "2021" and body["abstract"] == "GW corrections to DFT gaps."
+        assert body["creators"] == [{"name": "Ada Lovelace", "role": "author"}] and body["notes"] == ["My note on GW."]
+        assert body["attachments"] == [] and body["zotero_uri"].startswith("https://www.zotero.org/")
+    finally:
+        server.shutdown()

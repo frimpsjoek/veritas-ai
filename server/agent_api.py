@@ -129,6 +129,17 @@ def supervise(data_dir: Path, kb_url: str = DEFAULT_KB_URL) -> Sidecar | None:
     return sidecar
 
 
+def restart(sidecar: Sidecar | None) -> None:
+    """Stops the current sidecar process; the supervisor starts a new one (with the current output folder as --notes).
+    A turn running at that moment is cut off, so this is only for a changed output folder."""
+    if sidecar is None:
+        return
+    with sidecar.lock:
+        proc = sidecar.proc
+    if proc is not None and proc.poll() is None:
+        proc.terminate()
+
+
 def shutdown(sidecar: Sidecar | None) -> None:
     if sidecar is None:
         return

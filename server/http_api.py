@@ -318,8 +318,12 @@ def zotero_files_plan(refresh: bool) -> dict:
 
 
 def sources_changed() -> None:
-    """After the folder list changed: this process follows it now, and an index run applies it."""
+    """After the folder list changed: this process follows it now, and an index run applies it. A new output folder
+    restarts the agent sidecar, which writes the chat mirror into <output>/chats (it gets the folder at start)."""
+    before = kb.VAULT
     kb.reload_layout()
+    if kb.VAULT != before:
+        agent_api.restart(AGENT_SIDECAR)
     _coverage.clear()
     if not kb.index_running():
         start_indexing(None)
@@ -590,10 +594,14 @@ class Handler(BaseHTTPRequestHandler):
                     max_chars = min(max_chars, int(rules.get("agent_read_max_chars", 12000)))
                 result = kb.read_note(guard(q["path"]), q.get("heading"), max_chars, int(q.get("offset", 0)))
             elif route == "/zotero":
-                lib, key = kb.zotero_ref(q["key"])
-                guard(q["key"] if ":/" in q["key"] else zotero.PREFIX + key)
-                with zotero.library(lib):
-                    result = zotero.item_detail(key, full_text=q.get("full_text") == "1")
+                online = kb.account_item(guard(q["key"])) if ":/" in q["key"] else None
+                if online is not None:  # an online library's item: from the index (phase 2)
+                    result = online
+                else:
+                    lib, key = kb.zotero_ref(q["key"])
+                    guard(q["key"] if ":/" in q["key"] else zotero.PREFIX + key)
+                    with zotero.library(lib):
+                        result = zotero.item_detail(key, full_text=q.get("full_text") == "1")
                 if result is None:
                     raise FileNotFoundError(f"no Zotero item {key!r}")
             elif route == "/zotero/pdf":

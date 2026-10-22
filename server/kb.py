@@ -499,6 +499,7 @@ class Progress:
         self.state["eta_seconds"] = round((total - done) / (done / elapsed)) if elapsed > 5 and done and total else None
         self.state["updated_at"] = now
         tmp = PROGRESS_FILE.with_suffix(".tmp")
+        tmp.parent.mkdir(parents=True, exist_ok=True)  # a fresh checkout has no data/ yet
         tmp.write_text(json.dumps(self.state))
         tmp.replace(PROGRESS_FILE)
 
@@ -544,7 +545,7 @@ def index(full: bool = False, verbose: bool = True, reread_zotero: bool = False,
             if reread_zotero or reread_media:
                 db = connect()
                 if reread_zotero:
-                    db.execute("DELETE FROM meta WHERE key='zotero_fingerprint'")
+                    db.execute(f"DELETE FROM meta WHERE {ZOTERO_STAMPS}")
                 if reread_media:
                     db.execute("DELETE FROM media_cache")
                 db.commit()
@@ -573,6 +574,7 @@ def _index_stages(full: bool, verbose: bool, progress: Progress) -> dict:
     db = connect()
     if full:
         db.executescript("DELETE FROM chunks; DELETE FROM vecs; DELETE FROM chunks_fts; DELETE FROM links; DELETE FROM notes;")
+        db.execute(f"DELETE FROM meta WHERE {ZOTERO_STAMPS}")  # or every library would be skipped as unchanged
     files, where = {}, {}
     for root in roots():
         for rel, st in vault_files(root.path, root.kind, root.skip).items():
@@ -626,6 +628,7 @@ def _index_stages(full: bool, verbose: bool, progress: Progress) -> dict:
     zotero_changed = index_zotero(db, verbose, progress)
     web_changed, web_errors = index_zotero_web(db, verbose, progress)
     zotero_changed += web_changed
+    prune_zotero(db)
     stamp(db, "indexed_at")
     db.commit()
     text_seconds = round(time.time() - started, 1)
@@ -743,12 +746,30 @@ def index_zotero(db: sqlite3.Connection, verbose: bool, progress: Progress) -> i
     for lib in others:
         with zotero.library(lib.path):
             changed += _index_library(db, verbose, progress, lib.prefix, f"zotero_fingerprint:{lib.name}")
-    keep = {lib.prefix for lib in others} | {a.prefix for a in LAYOUT.accounts}
-    for (path,) in db.execute("SELECT path FROM notes WHERE source='zotero' AND path LIKE '%:/%'").fetchall():
-        if path[:path.index(":/") + 2] not in keep and not path.startswith(kept_prefixes() or ("\0",)):
-            delete_note(db, path)
-    db.commit()
     return changed
+
+
+ZOTERO_STAMPS = "key LIKE 'zotero_fingerprint%' OR key LIKE 'zotero_web_version:%'"
+
+
+def prune_zotero(db: sqlite3.Connection) -> None:
+    """Removes the items of libraries and online accounts that are no longer listed or switched on, with their
+    change stamps, so a library switched on again is read again. A listed library on a drive that is not plugged in
+    keeps its items."""
+    keep = ({lib.prefix for lib in LAYOUT.libraries[1:]} | {a.prefix for a in LAYOUT.accounts}
+            | set(kept_prefixes()))
+    gone = set()
+    for (path,) in db.execute("SELECT path FROM notes WHERE source='zotero' AND path LIKE '%:/%'").fetchall():
+        prefix = path[:path.index(":/") + 2]
+        if prefix not in keep:
+            delete_note(db, path)
+            gone.add(prefix[:-2])
+    for name in gone:
+        db.execute("DELETE FROM meta WHERE key IN (?, ?)", (f"zotero_fingerprint:{name}", f"zotero_web_version:{name}"))
+    # A library read as a second one before (name:/zotero/KEY) may be the default now, and the other way round.
+    if not db.execute("SELECT 1 FROM notes WHERE source='zotero' AND path NOT LIKE '%:/%' LIMIT 1").fetchone():
+        db.execute("DELETE FROM meta WHERE key='zotero_fingerprint'")
+    db.commit()
 
 
 def _index_library(db: sqlite3.Connection, verbose: bool, progress: Progress, prefix: str, fingerprint_key: str) -> int:
@@ -842,12 +863,29 @@ def index_zotero_web(db: sqlite3.Connection, verbose: bool, progress: Progress) 
         db.commit()
         if verbose:
             print(f"zotero online {account.name}: {len(docs)} items", file=sys.stderr)
-    for (path,) in db.execute("SELECT path FROM notes WHERE source='zotero' AND path LIKE '%:/%'").fetchall():
-        prefix = path[:path.index(":/") + 2]
-        if prefix not in {a.prefix for a in LAYOUT.accounts} | {lib.prefix for lib in LAYOUT.libraries[1:]}:
-            delete_note(db, path)
     db.commit()
     return changed, errors
+
+
+def account_item(path: str) -> dict | None:
+    """An online library's item (<account>:/zotero/KEY) in the shape zotero.item_detail gives, from the index: there
+    is no local database to read. None when the path is not an online item."""
+    name, sep, rest = path.partition(":/")
+    account = next((a for a in LAYOUT.accounts if a.name == name), None) if sep else None
+    if account is None:
+        return None
+    row = connect().execute("SELECT title, tags, meta FROM notes WHERE path=? AND source='zotero'", (path,)).fetchone()
+    if row is None:
+        raise FileNotFoundError(f"no Zotero item {path!r}")
+    meta = json.loads(row[2] or "{}")
+    key = rest.removeprefix(zotero.PREFIX)
+    return {"key": key, "type": meta.get("item_type", ""), "title": row[0], "library": name,
+            "creators": [{"name": a, "role": "author"} for a in meta.get("authors", [])],
+            "date": meta.get("date", ""), "year": meta.get("year") or "", "venue": meta.get("venue", ""),
+            "volume": "", "issue": "", "pages": "", "doi": meta.get("doi") or "", "url": meta.get("url", ""),
+            "citekey": "", "abstract": meta.get("abstract", ""), "tags": [t for t in (row[1] or "").split() if t],
+            "collections": [], "notes": meta.get("notes", []), "note_keys": [], "attachments": [],
+            "zotero_uri": f"https://www.zotero.org/users/{account.user_id}/items/{key}"}
 
 
 def zotero_ref(path: str) -> tuple[Path, str]:

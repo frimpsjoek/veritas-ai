@@ -113,3 +113,23 @@ def test_output_route(home, monkeypatch):
         server.shutdown()
         monkeypatch.undo()
         kb.reload_layout()
+
+
+def test_new_output_folder_restarts_the_agent_so_chats_follow(home, monkeypatch):
+    v = vault(home / "notes")
+    sources.save([{"name": "notes", "path": str(v), "enabled": True, "skip": []}])
+    monkeypatch.setattr(kb, "DB_PATH", home / "data" / "kb.sqlite")
+    monkeypatch.setattr(kb, "index_running", lambda: True)  # no index run from this test
+    kb.reload_layout()
+    restarts = []
+    monkeypatch.setattr(http_api.agent_api, "restart", lambda sidecar: restarts.append(sidecar))
+    monkeypatch.setattr(http_api, "AGENT_SIDECAR", "sidecar")
+    try:
+        http_api.sources_changed()  # nothing moved
+        assert restarts == []
+        sources.set_output("notes")
+        http_api.sources_changed()
+        assert restarts == ["sidecar"]
+    finally:
+        monkeypatch.undo()
+        kb.reload_layout()

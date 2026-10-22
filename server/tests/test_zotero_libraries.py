@@ -115,3 +115,30 @@ def test_item_route_reads_the_named_library(libs, monkeypatch):
         assert status == 200 and body["library"] == str(main)
     finally:
         server.shutdown()
+
+
+def test_unplugged_second_library_keeps_its_items(libs):
+    main, lab, relayout = libs
+    kb._index(False, False, kb.Progress())
+    lab.rename(lab.with_name("LabZotero-unplugged"))  # the drive is gone
+    relayout()
+    kb._index(False, False, kb.Progress())
+    assert {"lab:/zotero/SAMEKEY1", "lab:/zotero/LABONLY2"} <= set(rows())
+
+
+def test_library_switched_back_on_is_read_again(libs):
+    main, lab, relayout = libs
+    kb._index(False, False, kb.Progress())
+    sources.update("lab", enabled=False)
+    relayout()
+    kb._index(False, False, kb.Progress())
+    sources.update("lab", enabled=True)
+    relayout()
+    kb._index(False, False, kb.Progress())
+    assert "lab:/zotero/LABONLY2" in rows()
+
+
+def test_full_reindex_keeps_every_library(libs):
+    kb._index(False, False, kb.Progress())
+    kb._index(True, False, kb.Progress())
+    assert {"zotero/SAMEKEY1", "lab:/zotero/SAMEKEY1", "lab:/zotero/LABONLY2"} <= set(rows())

@@ -144,7 +144,10 @@ def documents(entry: dict, client: Client) -> list[AccountDoc]:
         versions = [it.get("version", 0)] + [c.get("version", 0) for c in children.get(it["key"], [])]
         tags = [t["tag"] for t in data.get("tags", []) if t.get("tag")]
         meta = {"library": entry["name"], "doi": data.get("DOI") or None, "year": year, "authors": authors,
-                "item_type": data.get("itemType"), "collection_keys": list(data.get("collections", []))}
+                "item_type": data.get("itemType"), "collection_keys": list(data.get("collections", [])),
+                "abstract": data.get("abstractNote", ""), "notes": notes, "date": data.get("date", ""),
+                "venue": data.get("publicationTitle") or data.get("proceedingsTitle") or data.get("bookTitle") or "",
+                "url": data.get("url", ""), "user_id": entry.get("user_id", "")}
         docs.append(AccountDoc(it["key"], data.get("title") or "(untitled)", text, tags, float(max(versions)), meta,
                                prefix=prefix))
     return docs
