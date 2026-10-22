@@ -1,0 +1,4 @@
+{"type":"system","subtype":"init","session_id":"sess-1","tools":["mcp__lib__search_library"],"model":"claude-sonnet-5","apiKeySource":"none"}
+{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hel"}}}
+{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"lo there"}}}
+{"type":"result","subtype":"success","is_error":false,"result":"Hello there","total_cost_usd":0.0014,"usage":{"input_tokens":4,"output_tokens":10}}

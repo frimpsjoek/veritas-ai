@@ -1,0 +1,48 @@
+<!doctype html>
+<!-- ui-src/dev/harness/artifacts.html. The artifact panel in a real ChatView (spec 007 E3): a session with a paper set
+     and a table, two versions each, opened from result cards. ?tokens=zotero|obsidian, ?theme=dark, ?w=<px> (the
+     chat's width; with ?bare=1 the page has no padding, so the chat IS the viewport, for the 360 px measurement).
+     dev/run.mjs drives it (dev/artifacts-checks.mjs). -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Second Brain UI: artifacts</title>
+<link rel="stylesheet" href="/repo/content/sb-ui.css">
+<link id="tokens" rel="stylesheet" href="../../styles/tokens-zotero.css">
+<style id="standins">
+  /* Harness-only: stand-ins for the real host theme variables tokens-*.css maps from. Neither real app ships
+     this file; it exists so the harness page has *something* to render light and dark against. Declared where
+     each host declares them: Zotero on :root, Obsidian on body (the script below moves them for ?tokens=obsidian),
+     so a token map that reads them at the wrong level resolves empty here too, as it would in the app. */
+  :root {
+    --material-background: #ffffff; --material-sidepane: #f4f4f5; --material-button: #eeeeee;
+    --fill-primary: #1b1b1f; --fill-secondary: #55555c; --fill-tertiary: #8b8b93; --fill-quinary: #e2e2e6;
+    --color-accent: #3478f6; --accent-red: #d1453d; --accent-green: #2f9e44;
+    --background-primary: #ffffff; --background-secondary: #f4f4f5; --interactive-normal: #eeeeee;
+    --text-normal: #1b1b1f; --text-muted: #55555c; --text-faint: #8b8b93; --background-modifier-border: #e2e2e6;
+    --background-modifier-hover: #ececee; --interactive-accent: #7c6cf0; --text-on-accent: #ffffff;
+    --text-error: #d1453d; --color-green: #2f9e44; --font-interface: -apple-system, sans-serif; --font-monospace: monospace;
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --material-background: #1e1e20; --material-sidepane: #17171a; --material-button: #2a2a2e;
+    --fill-primary: #ededf0; --fill-secondary: #b2b2b8; --fill-tertiary: #7c7c84; --fill-quinary: #38383d;
+    --color-accent: #6ea1ff; --accent-red: #ff6b64; --accent-green: #5fd873;
+    --background-primary: #1e1e20; --background-secondary: #17171a; --interactive-normal: #2a2a2e;
+    --text-normal: #ededf0; --text-muted: #b2b2b8; --text-faint: #7c7c84; --background-modifier-border: #38383d;
+    --background-modifier-hover: #2f2f34; --interactive-accent: #9c8cff; --text-on-accent: #17171a;
+    --text-error: #ff6b64; --color-green: #5fd873;
+  }
+  /* the hosts style citations themselves (second-brain.js, the Obsidian plugin's CSS); the same look here, so a red one shows */
+  .sb-md .cite { color: var(--sb-ui-accent); cursor: pointer; }
+  .sb-md .cite.missing { color: var(--sb-ui-danger); cursor: default; }
+  body { margin: 0; padding: 16px; background: var(--sb-ui-bg, #fff); }
+  body.bare { padding: 0; }
+</style>
+<script src="/repo/content/sb-ui.js"></script>
+</head>
+<body>
+<div id="frame"></div>
+<script type="module" src="./artifacts.js"></script>
+</body>
+</html>

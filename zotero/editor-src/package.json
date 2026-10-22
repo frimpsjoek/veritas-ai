@@ -1,0 +1,16 @@
+{
+  "name": "second-brain-note-editor",
+  "private": true,
+  "scripts": { "build": "esbuild src/index.js --bundle --format=iife --global-name=SecondBrainCM --minify --outfile=../content/note-editor.js" },
+  "devDependencies": {
+    "@codemirror/autocomplete": "^6",
+    "@codemirror/commands": "^6",
+    "@codemirror/lang-markdown": "^6",
+    "@codemirror/language": "^6",
+    "@codemirror/state": "^6",
+    "@codemirror/view": "^6",
+    "@lezer/highlight": "^1",
+    "@lezer/markdown": "^1",
+    "esbuild": "^0.25"
+  }
+}

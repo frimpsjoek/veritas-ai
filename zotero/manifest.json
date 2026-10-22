@@ -1,0 +1,20 @@
+{
+  "manifest_version": 2,
+  "name": "Second Brain",
+  "version": "0.53.0",
+  "description": "Write notes on each paper right in Zotero, with highlights, citations and images; similar papers and search by meaning on your own computer; free PDFs from Unpaywall, arXiv, OpenAlex, Semantic Scholar and Europe PMC. Works alone, and syncs with Obsidian when the Second Brain server runs.",
+  "author": "frimpsjoe",
+  "icons": {
+    "48": "content/icon.svg",
+    "96": "content/icon.svg"
+  },
+  "applications": {
+    "zotero": {
+      "id": "second-brain@frimpsjoe.local",
+      "update_url": "https://github.com/frimpsjoek/zotero-second-brain/releases/latest/download/update.json",
+      "strict_min_version": "7.0",
+      "strict_max_version": "10.*"
+    }
+  },
+  "homepage_url": "https://github.com/frimpsjoek/zotero-second-brain"
+}

@@ -1,0 +1,11 @@
+node_modules/
+dist/
+dist-web/
+dist-versions/
+.venv/
+__pycache__/
+.pytest_cache/
+.DS_Store
+server/data/
+server/models/
+.superpowers/

@@ -1,0 +1,9 @@
+{
+  "id": "second-brain-search",
+  "name": "Second Brain Search",
+  "version": "0.53.0",
+  "minAppVersion": "1.5.0",
+  "description": "Search notes and your Zotero library by words or meaning; see linked, similar and section-related notes; find duplicates; copy notes for AI. Uses the local index the agents use.",
+  "author": "frimpsjoe",
+  "isDesktopOnly": false
+}

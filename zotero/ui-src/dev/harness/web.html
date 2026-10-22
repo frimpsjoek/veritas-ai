@@ -1,0 +1,50 @@
+<!doctype html>
+<!-- ui-src/dev/harness/web.html. The web shell (dist-web bundle) on the fake web host (fake-host.js, kind 'web'):
+     the shell, router and pages run for real, the engine is scripted. dev/web-checks.mjs passes the built bundle's
+     hashed file names in ?js= and ?css=. Invented content only. -->
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Second Brain web harness</title>
+<link rel="icon" href="data:,">
+</head>
+<body>
+<script type="module">
+  import { createFakeHost } from './fake-host.js';
+  import { webStore } from './web-store.js';
+
+  const params = new URLSearchParams(location.search);
+  if (params.get('theme') === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+  document.head.append(Object.assign(document.createElement('link'), { rel: 'stylesheet', href: params.get('css') }));
+  globalThis.__SB_NO_AUTOSTART__ = true;
+  const bundle = await import(params.get('js'));
+
+  const store = webStore(params);
+  window.__store = store;
+  const calls = [];
+  const answer = (text) => ({ text, citations: [], structured: null, usage: {} });
+  const host = createFakeHost({
+    kind: 'web', calls, sessionStore: store,
+    reply: (input) => (async function* () { yield { type: 'done', answer: answer(`Echo: ${input.text}`) }; })(),
+  });
+  // The web host's own server call, so Library, Notes and the readers make real requests (dev/web-fixtures.mjs answers them).
+  const stubbed = host.json;
+  host.json = async (path, method, body) => {
+    // checks can stand in a build in progress (spec 019): window.__status replaces the stub's reply
+    if (path === '/status') return window.__status ? structuredClone(window.__status) : stubbed();
+    if (path === '/index/stop') { window.__stopped = (window.__stopped ?? 0) + 1; return { stopping: true }; }
+    const response = await fetch(path, { method: method ?? 'GET', ...(body !== undefined ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}) });
+    const text = await response.text();
+    if (!response.ok) throw Object.assign(new Error((() => { try { return JSON.parse(text).error; } catch { return `HTTP ${response.status}`; } })()), { status: response.status });
+    return text ? JSON.parse(text) : null;
+  };
+  window.__host = host;
+  window.__calls = calls;
+  const shell = bundle.createShell({ host });
+  window.__shell = shell;
+  await shell.start();
+  window.__sbWebReady = true;
+</script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{"id":1,"result":{"userAgent":"second-brain-test/0","codexHome":"/tmp/codex-home","platformFamily":"unix","platformOs":"macos"}}
+{"id":2,"result":{"thread":{"id":"thread-text-1","model":"gpt-6-luna","turns":[]}}}
+{"method":"thread/started","params":{"thread":{"id":"thread-text-1"}}}
+{"id":3,"result":{"turn":{"id":"turn-text-1","items":[],"status":"inProgress"}}}
+{"method":"item/started","params":{"item":{"type":"agentMessage","id":"msg-1","text":"","phase":"final_answer"}}}
+{"method":"item/agentMessage/delta","params":{"itemId":"msg-1","delta":"Hel"}}
+{"method":"item/agentMessage/delta","params":{"itemId":"msg-1","delta":"lo"}}
+{"method":"item/agentMessage/delta","params":{"itemId":"msg-1","delta":" there"}}
+{"method":"item/completed","params":{"item":{"type":"agentMessage","id":"msg-1","text":"Hello there","phase":"final_answer"}}}
+{"method":"turn/completed","params":{"turn":{"id":"turn-text-1","items":[{"type":"agentMessage","id":"msg-1","text":"Hello there","phase":"final_answer"}],"status":"completed"}}}

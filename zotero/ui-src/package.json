@@ -1,0 +1,21 @@
+{
+  "name": "second-brain-ui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test test/*.test.js && node dev/run.mjs",
+    "perf": "node dev/perf.mjs",
+    "typecheck": "tsc --noEmit -p .",
+    "build:web": "node build-web.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "esbuild": "^0.25",
+    "playwright": "^1.47",
+    "typescript": "^5.7"
+  },
+  "dependencies": {
+    "katex": "^0.19.0"
+  }
+}

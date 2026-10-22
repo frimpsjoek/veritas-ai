@@ -1,0 +1,8 @@
+# Vole foraging models
+
+| Item | Approach | Main limitation |
+| --- | --- | --- |
+| Patch-leaving model | Leave when the return drops below the average. [@bramblewood2021] | Assumes the vole knows the meadow average. |
+| Central-place model | Carry food back to a nest; load size grows with distance. [@hoarding2018][^1] | *Not discussed* |
+
+[^1]: “load size grows with distance” (from abstract) [@hoarding2018]

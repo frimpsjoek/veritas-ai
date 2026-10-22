@@ -1,0 +1,13 @@
+{
+  "manifest_version": 2,
+  "name": "Second Brain test runner",
+  "version": "0.0.1",
+  "applications": {
+    "zotero": {
+      "id": "sb-test@local",
+      "update_url": "https://example.invalid/update.json",
+      "strict_min_version": "7.0",
+      "strict_max_version": "11.*"
+    }
+  }
+}

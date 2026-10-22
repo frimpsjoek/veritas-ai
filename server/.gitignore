@@ -1,0 +1,14 @@
+.venv/
+.wt/
+__pycache__/
+.pytest_cache/
+data/
+models/
+privacy.json
+*.xpi
+zotero-plugin/
+obsidian-plugin/
+perf/history.jsonl
+perf/reports/
+perf/run.log
+perf/*.lock

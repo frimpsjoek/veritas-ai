@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","session_id":"sess-2","tools":["mcp__lib__search_library"]}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"mcp__lib__search_library","input":{"query":"graphene"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":[{"type":"text","text":"1 paper found for 'graphene'"}],"is_error":false}]}}
+{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"1 paper found for 'graphene' [@smith2021]"}}}
+{"type":"result","subtype":"success","is_error":false,"result":"1 paper found for 'graphene' [@smith2021]","total_cost_usd":0.0144,"usage":{"input_tokens":10,"output_tokens":20}}

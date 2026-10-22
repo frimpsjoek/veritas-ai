@@ -1,0 +1,26 @@
+/* ui-src/styles/tokens-zotero.css. Zotero's mapping from --sb-ui-* to its own chrome variables (spec 005 §3
+   table). No color literal here except #fff for --sb-ui-on-accent, which the table specifies directly (Zotero
+   has no separate "text on accent" variable). Injected once per chrome document (host.mount), so it always
+   tracks Zotero's own light/dark switch with no dark-mode rule of our own. */
+:root {
+  --sb-ui-bg: var(--material-background);
+  --sb-ui-bg-side: var(--material-sidepane);
+  --sb-ui-control: var(--material-button);
+  --sb-ui-text: var(--fill-primary);
+  --sb-ui-muted: var(--fill-secondary);
+  --sb-ui-faint: var(--fill-tertiary);
+  --sb-ui-line: var(--fill-quinary);
+  --sb-ui-hover: var(--fill-quinary);
+  --sb-ui-accent: var(--color-accent);
+  --sb-ui-accent-tint: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  --sb-ui-on-accent: #fff;
+  --sb-ui-danger: var(--accent-red);
+  --sb-ui-ok: var(--accent-green);
+  --sb-ui-shadow: 0 4px 16px color-mix(in srgb, var(--fill-primary) 18%, transparent);
+  --sb-ui-font: inherit;
+  --sb-ui-mono: monospace;
+}
+
+/* Zotero caps every <button> at 25px tall (max-height), so a button with a title and a line under it (Skills'
+   create routes, clarify choices, starter cards) spilled over the next one. Ours size to their content. */
+button[class*="sb-"] { max-height: none; }

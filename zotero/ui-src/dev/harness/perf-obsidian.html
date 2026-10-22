@@ -1,0 +1,48 @@
+<!doctype html>
+<!-- ui-src/dev/harness/perf-obsidian.html. Scenario A only (spec 009's "Obsidian CSS" row): the same ChatView +
+     perf-common.js driver as perf.html, but styled against Obsidian's own app.css + the vault's theme (Blue
+     Topaz) + its enabled snippets + the plugin's styles.css, instead of the harness-only token stand-ins.
+     dev/perf.mjs extracts those files fresh into dev/.perf-cache/ before each run and writes
+     dev/.perf-cache/manifest.json listing what it found; this page loads them from that manifest so it never
+     needs regenerating by hand. Shape (link order, body classes) follows the reference probe read from
+     /private/tmp/claude-501/.../scratchpad/obs/page.html: app.css, theme.css, snippets.css, plugin.css, then
+     body class="theme-dark mod-macos is-translucent is-focused show-view-header" -- a reasonable approximation of
+     a real Obsidian window's classing, not Obsidian's own generated markup. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Second Brain UI perf harness (Obsidian CSS)</title>
+<link rel="stylesheet" href="/repo/content/sb-ui.css">
+<link rel="stylesheet" href="../../styles/tokens-obsidian.css">
+<script src="/repo/content/sb-ui.js"></script>
+</head>
+<body class="theme-dark mod-macos is-translucent is-focused show-view-header">
+<div id="root" style="width:640px;height:720px;"></div>
+<script type="module">
+  window.__perfCssKind = 'obsidian';
+  async function loadObsidianCss() {
+    try {
+      const res = await fetch('../.perf-cache/manifest.json');
+      if (!res.ok) throw new Error(`manifest ${res.status}`);
+      const manifest = await res.json();
+      for (const file of manifest.files ?? []) {
+        const link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = `../.perf-cache/${file}`;
+        document.head.append(link);
+      }
+    } catch (err) {
+      // No manifest yet (perf.mjs's extraction step didn't run, or every source file was missing): fall back to
+      // the plain harness-only stand-in variables so the page still renders something instead of unstyled chaos.
+      console.warn('perf-obsidian: no Obsidian CSS manifest, falling back to bare styles', err);
+      const style = document.createElement('style');
+      style.textContent = ':root{--background-primary:#1e1e20;--text-normal:#ededf0;--background-modifier-border:#38383d;}';
+      document.head.append(style);
+    }
+  }
+  await loadObsidianCss();
+  const mod = await import('./perf-common.js');
+  window.__sbPerfReady = true;
+</script>
+</body>
+</html>

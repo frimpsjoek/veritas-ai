@@ -1,0 +1,13 @@
+{"id":1,"result":{"userAgent":"second-brain-test/0","codexHome":"/tmp/codex-home","platformFamily":"unix","platformOs":"macos"}}
+{"id":2,"result":{"thread":{"id":"thread-two-turns","model":"gpt-6-luna","turns":[]}}}
+{"method":"thread/started","params":{"thread":{"id":"thread-two-turns"}}}
+{"id":3,"result":{"turn":{"id":"turn-1","items":[],"status":"inProgress"}}}
+{"method":"item/started","params":{"item":{"type":"agentMessage","id":"msg-1","text":"","phase":"final_answer"}}}
+{"method":"item/agentMessage/delta","params":{"itemId":"msg-1","delta":"The oldest note is Notes on Catalyst Screening."}}
+{"method":"item/completed","params":{"item":{"type":"agentMessage","id":"msg-1","text":"The oldest note is Notes on Catalyst Screening.","phase":"final_answer"}}}
+{"method":"turn/completed","params":{"turn":{"id":"turn-1","items":[{"type":"agentMessage","id":"msg-1","text":"The oldest note is Notes on Catalyst Screening.","phase":"final_answer"}],"status":"completed"}}}
+---TURN---
+{"method":"item/started","params":{"item":{"type":"agentMessage","id":"msg-2","text":"","phase":"final_answer"}}}
+{"method":"item/agentMessage/delta","params":{"itemId":"msg-2","delta":"Yes, it is from 2023."}}
+{"method":"item/completed","params":{"item":{"type":"agentMessage","id":"msg-2","text":"Yes, it is from 2023.","phase":"final_answer"}}}
+{"method":"turn/completed","params":{"turn":{"id":"turn-2","items":[{"type":"agentMessage","id":"msg-2","text":"Yes, it is from 2023.","phase":"final_answer"}],"status":"completed"}}}

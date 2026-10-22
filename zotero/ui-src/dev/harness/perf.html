@@ -1,0 +1,31 @@
+<!doctype html>
+<!-- ui-src/dev/harness/perf.html. Minimal perf-only harness page (spec 009): sb-ui.js + sb-ui.css + one token
+     map, fake host, a mounted ChatView, then dev/harness/perf-common.js's window.__perfHarness for dev/perf.mjs
+     to drive. Deliberately leaner than dev/harness/index.html, which does a lot of unrelated parity-check
+     fixture work this page has no need for. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Second Brain UI perf harness</title>
+<link rel="stylesheet" href="/repo/content/sb-ui.css">
+<link rel="stylesheet" href="../../styles/tokens-zotero.css">
+<style>
+  :root {
+    --material-background: #ffffff; --material-sidepane: #f4f4f5; --material-button: #eeeeee;
+    --fill-primary: #1b1b1f; --fill-secondary: #55555c; --fill-tertiary: #8b8b93; --fill-quinary: #e2e2e6;
+    --color-accent: #3478f6; --accent-red: #d1453d; --accent-green: #2f9e44;
+    --font-interface: -apple-system, sans-serif; --font-monospace: monospace;
+  }
+  body { margin: 0; padding: 0; background: #fff; }
+  #root { width: 640px; height: 720px; border: 1px solid #ccc; }
+</style>
+<script src="/repo/content/sb-ui.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="module">
+  window.__perfCssKind = 'zotero';
+  import('./perf-common.js').then(() => { window.__sbPerfReady = true; });
+</script>
+</body>
+</html>

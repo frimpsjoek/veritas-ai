@@ -1,0 +1,21 @@
+<!doctype html>
+<!-- ui-src/dev/harness/perf-web.html. The stream rows for the web app's token map (spec 013 W5): the same ChatView and
+     perf-common.js driver as perf.html, styled by tokens-web.css and the shell sheet instead of the Zotero stand-ins,
+     on a fake host of kind "web". dev/perf.mjs runs scenario A here. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Second Brain UI perf harness (web)</title>
+<link rel="stylesheet" href="/repo/content/sb-ui.css">
+<link rel="stylesheet" href="../../styles/tokens-web.css">
+<link rel="stylesheet" href="../../src/web/shell.css">
+<script src="/repo/content/sb-ui.js"></script>
+</head>
+<body>
+<div id="root" style="width:640px;height:720px;"></div>
+<script type="module">
+  window.__perfCssKind = 'web';
+  import('./perf-common.js').then(() => { window.__sbPerfReady = true; });
+</script>
+</body>
+</html>

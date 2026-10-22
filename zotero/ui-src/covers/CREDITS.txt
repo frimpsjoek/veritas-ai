@@ -1,0 +1,21 @@
+Cover photos from the NASA Image and Video Library (images.nasa.gov). NASA imagery is not copyrighted in the US; NASA asks for credit and no implied endorsement.
+sky-01.webp: Hubble reveals heart of Lagoon Nebula (NASA GSFC, nasa_id GSFC_20171208_Archive_e001955), https://images.nasa.gov/details/GSFC_20171208_Archive_e001955
+sky-02.webp: Most Detailed Image of the Crab Nebula (NASA JPL, nasa_id PIA03606), https://images.nasa.gov/details/PIA03606
+sky-03.webp: Hubble Captures Spectacular "Landscape" in the Carina Nebula (NASA GSFC, nasa_id GSFC_20171208_Archive_e002076), https://images.nasa.gov/details/GSFC_20171208_Archive_e002076
+sky-04.webp: Webb_first_deep_field_SMACS_0723 (NASA STScI, nasa_id webb_first_deep_field), https://images.nasa.gov/details/webb_first_deep_field
+sky-05.webp: STS-47 view of the Aurora Australis (NASA JSC, nasa_id STS047-20-015), https://images.nasa.gov/details/STS047-20-015
+sky-06.webp: Aurora Australis, Spiked, Sinuous Green Airglow (NASA JSC, nasa_id S39-25-006), https://images.nasa.gov/details/S39-25-006
+earth-01.webp: Night Earth Observation taken by the Expedition 25 crew (NASA JSC, nasa_id iss025e009858), https://images.nasa.gov/details/iss025e009858
+earth-02.webp: A bright airglow blankets Earth's horizon as the Milky Way illuminates the night sky (NASA JSC, nasa_id iss073e0982823), https://images.nasa.gov/details/iss073e0982823
+earth-03.webp: James Webb Space Telescope Mirror Halfway Complete (NASA GSFC, nasa_id GSFC_20171208_Archive_e000493), https://images.nasa.gov/details/GSFC_20171208_Archive_e000493
+earth-04.webp: James Webb Space Telescope Mirror Halfway Complete (NASA GSFC, nasa_id GSFC_20171208_Archive_e000495), https://images.nasa.gov/details/GSFC_20171208_Archive_e000495
+earth-05.webp: Discover Supercomputer 3 (NASA GSFC, nasa_id GSFC_20171208_Archive_e002030), https://images.nasa.gov/details/GSFC_20171208_Archive_e002030
+earth-06.webp: Discover Supercomputer 5 (NASA GSFC, nasa_id GSFC_20171208_Archive_e002027), https://images.nasa.gov/details/GSFC_20171208_Archive_e002027
+earth-07.webp: ARC-2008-ACD08-0272-005 (NASA ARC, nasa_id ARC-2008-ACD08-0272-005), https://images.nasa.gov/details/ARC-2008-ACD08-0272-005
+earth-08.webp: Moon Microscope (NASA JSC, nasa_id jsc2022e083574), https://images.nasa.gov/details/jsc2022e083574
+earth-09.webp:  Image of Sun From NASA's Solar Dynamics Observatory (NASA JPL, nasa_id PIA26681), https://images.nasa.gov/details/PIA26681
+earth-11.webp: Microgravity (NASA MSFC, nasa_id 9250123), https://images.nasa.gov/details/9250123
+earth-12.webp: Microgravity (NASA MSFC, nasa_id 438290), https://images.nasa.gov/details/438290
+earth-13.webp: Microgravity (NASA MSFC, nasa_id 9008444), https://images.nasa.gov/details/9008444
+earth-14.webp: Hubble View of a Nitrogen-Rich Nebula (NASA GSFC, nasa_id GSFC_20171208_Archive_e000699), https://images.nasa.gov/details/GSFC_20171208_Archive_e000699
+earth-10.webp: James Webb Space Telescope Mirror Halfway Complete (NASA GSFC, nasa_id GSFC_20171208_Archive_e000494), https://images.nasa.gov/details/GSFC_20171208_Archive_e000494

@@ -1,0 +1,14 @@
+{
+  "name": "second-brain-engine",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/engine.js --bundle --format=iife --platform=browser --outfile=../content/engine.js && esbuild src/worker.js --bundle --format=iife --platform=browser --outfile=../content/engine-worker.js --legal-comments=eof"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.7.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

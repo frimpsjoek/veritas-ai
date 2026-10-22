@@ -1,0 +1,8 @@
+/* The Second Brain search window: layout only. Everything inside #app is the shared UI (ui-src SearchPanel, sb-ui.css). */
+html, body { margin: 0; }
+#app { display: flex; flex-direction: column; height: 100vh; }
+#app .sb-p-search { flex: 1; }
+.sb-win-modes { padding: 12px 12px 0; }
+/* a citation inside a snippet (second-brain.js renderSnippet) */
+.sb-cite-chip { display: inline; color: var(--sb-ui-accent); cursor: pointer; }
+.sb-cite-chip:hover { text-decoration: underline; }

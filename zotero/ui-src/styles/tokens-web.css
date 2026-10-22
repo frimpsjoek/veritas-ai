@@ -1,0 +1,64 @@
+/* ui-src/styles/tokens-web.css. The browser app's mapping for --sb-ui-*: it owns its palette (there is no host theme
+   to read), light by default and dark with the system, unless the user picked one (:root[data-theme]). Bundled
+   with ui.css and the shell sheet into app.css by build-web.mjs.
+   Spec 013 ledger 11: four neutral steps (bg, raised, hairline, muted), flat near-black dark, no gradients or blur.
+   Ledger 6: --sb-ui-accent is the one accent. Scales (ledger 1, 13): space 4/8/12/16/24/40, radius 6/12/20,
+   type 15 body / 13 small / 24 page title (the scale and the fonts live in src/home/type.css, shared with the plugins). */
+
+:root {
+  color-scheme: light;
+  --sb-ui-bg: #ffffff;
+  --sb-ui-bg-side: #f7f7f6;
+  --sb-ui-control: #f7f7f6;
+  --sb-ui-text: #19191a;
+  --sb-ui-muted: #66666b;
+  --sb-ui-faint: #9a9aa0;
+  --sb-ui-line: #e7e7e5;
+  --sb-ui-hover: #f0f0ee;
+  --sb-ui-accent: #0f766e;
+  --sb-ui-accent-tint: rgba(15, 118, 110, 0.1);
+  --sb-ui-on-accent: #ffffff;
+  --sb-ui-danger: #c9372c;
+  --sb-ui-ok: #2b8a3e;
+  --sb-ui-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  --sb-ui-font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --sb-ui-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --sb-ui-bg: #0f0f10;
+    --sb-ui-bg-side: #161618;
+    --sb-ui-control: #1c1c1f;
+    --sb-ui-text: #ececee;
+    --sb-ui-muted: #9a9aa2;
+    --sb-ui-faint: #6c6c74;
+    --sb-ui-line: #26262a;
+    --sb-ui-hover: #1d1d20;
+    --sb-ui-accent: #3dc2b2;
+    --sb-ui-accent-tint: rgba(61, 194, 178, 0.14);
+    --sb-ui-on-accent: #07201d;
+    --sb-ui-danger: #ff6b64;
+    --sb-ui-ok: #5fd873;
+    --sb-ui-shadow: none;
+  }
+}
+
+:root[data-theme="dark"] {
+    color-scheme: dark;
+    --sb-ui-bg: #0f0f10;
+    --sb-ui-bg-side: #161618;
+    --sb-ui-control: #1c1c1f;
+    --sb-ui-text: #ececee;
+    --sb-ui-muted: #9a9aa2;
+    --sb-ui-faint: #6c6c74;
+    --sb-ui-line: #26262a;
+    --sb-ui-hover: #1d1d20;
+    --sb-ui-accent: #3dc2b2;
+    --sb-ui-accent-tint: rgba(61, 194, 178, 0.14);
+    --sb-ui-on-accent: #07201d;
+    --sb-ui-danger: #ff6b64;
+    --sb-ui-ok: #5fd873;
+    --sb-ui-shadow: none;
+}

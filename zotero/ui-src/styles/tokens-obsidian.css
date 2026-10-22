@@ -1,0 +1,29 @@
+/* ui-src/styles/tokens-obsidian.css. Obsidian's mapping from --sb-ui-* to its own theme variables (spec 005 §3
+   table). Concatenated into styles.css by esbuild.config.mjs; needs no injection step since Obsidian only ever
+   loads styles.css. --sb-ui-font uses Obsidian's own interface font size (decision 3: Obsidian follows the
+   host's font-size setting rather than the fixed 13 px this package's own .css files hard-code elsewhere).
+   On body, not :root: Obsidian (and themes) define --background-primary etc. on body, and a var() in a custom
+   property resolves where it is declared, so at :root every token came out empty and the chat lost its styling. */
+body {
+  --sb-ui-bg: var(--background-primary);
+  --sb-ui-bg-side: var(--background-secondary);
+  --sb-ui-control: var(--interactive-normal);
+  --sb-ui-text: var(--text-normal);
+  --sb-ui-muted: var(--text-muted);
+  --sb-ui-faint: var(--text-faint);
+  --sb-ui-line: var(--background-modifier-border);
+  --sb-ui-hover: var(--background-modifier-hover);
+  --sb-ui-accent: var(--interactive-accent);
+  --sb-ui-accent-tint: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
+  --sb-ui-on-accent: var(--text-on-accent);
+  --sb-ui-danger: var(--text-error);
+  --sb-ui-ok: var(--color-green);
+  --sb-ui-shadow: var(--shadow-s);
+  --sb-ui-font: var(--font-interface);
+  --sb-ui-mono: var(--font-monospace);
+}
+
+/* Obsidian gives every <button> the same grey fill, so a main action ("Run now", "Use skill") looked like the others.
+   Ours use the accent fill, as Obsidian's own main buttons (mod-cta) do. */
+.sb-ai .sb-button.is-primary { background: var(--sb-ui-accent); color: var(--sb-ui-on-accent); }
+.sb-ai .sb-button.is-primary:hover { background: var(--sb-ui-accent); filter: brightness(1.08); }

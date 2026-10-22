@@ -1,0 +1,13 @@
+<vbox id="second-brain-prefs"
+	xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul" xmlns:html="http://www.w3.org/1999/xhtml">
+	<html:div id="sb-settings" class="sb-pref-settings"/>
+	<html:style>
+		.sb-pref-settings { min-height: 560px; }
+		.sb-pref-hint { color: var(--fill-secondary); margin: 2px 0 6px; }
+		.sb-pref-colors { display: grid; grid-template-columns: max-content 44px max-content; gap: 8px 12px; align-items: center; }
+		.sb-pref-colors input[type=color] { width: 40px; height: 24px; padding: 0; border: 1px solid var(--sb-ui-line, var(--fill-quinary)); border-radius: 4px; }
+		.sb-pref-colors .is-default { opacity: 0.6; }
+		.sb-pref-folder { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+		.sb-pref-folder input[type=text] { flex: 1 1 14em; min-width: 0; }
+	</html:style>
+</vbox>

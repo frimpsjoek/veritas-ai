@@ -1,0 +1,25 @@
+/* This plugin's own CSS (spec 005 D5). Everything a panel looks like comes from ui-src (ui.css + tokens-obsidian.css); what is
+   left here is Obsidian-specific: how the panel views fill their leaf, and the settings tab / status bar. */
+
+/* Settings tab: the phone QR code and the MCP tool catalogue. */
+.sb-set-qr { width: 200px; margin: var(--size-4-2) 0 var(--size-4-4); background: white; border-radius: var(--radius-m); padding: var(--size-4-1); }
+.sb-set-qr svg { width: 100%; height: auto; display: block; }
+.sb-set-mcp { margin: var(--size-4-2) 0; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); padding: var(--size-4-2) var(--size-4-3); }
+.sb-set-mcp summary { cursor: pointer; font-weight: var(--font-semibold); }
+.sb-set-mcp-tools { margin: var(--size-4-1) 0 var(--size-4-2); padding-inline-start: 1.4em; font-size: var(--font-ui-smaller); color: var(--text-muted); }
+.sb-set-mcp-tools li.sb-set-mcp-hidden { color: var(--text-faint); }
+.sb-set-statusbar { cursor: pointer; }
+
+/* Panel views fill their leaf; Obsidian's own .view-content padding would double up with the panel's. */
+.view-content:has(> .sb-p-search) { padding: 0; overflow: hidden; display: flex; }
+.view-content > .sb-p-search { flex: 1; }
+.view-content.sb-p { padding: 12px; overflow-y: auto; }
+.view-content.sb-p-scroll { padding: 0; overflow-y: auto; }
+.view-content.sb-p-pane-view { padding: 12px; overflow-y: auto; }
+
+/* Second Brain AI (spec 005 C3): the shared ChatView mounts its own "sb-ai" root, which already sizes itself to 100% height/flex
+   (its CSS, injected at runtime by ChatView.style()). Obsidian's own .view-content adds padding and scrolling that would
+   otherwise double up with the chat's own layout, so both are cleared only for the leaf that holds it. */
+.view-content:has(> .sb-chat-root) { display: flex; padding: 0; overflow: hidden; }
+.sb-chat-root { display: flex; flex: 1; min-height: 0; min-width: 0; }
+.sb-chat-root .sb-ai { border-radius: 0; }

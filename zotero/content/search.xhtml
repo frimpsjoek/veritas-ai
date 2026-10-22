@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet href="chrome://global/skin/global.css"?>
+<?xml-stylesheet href="chrome://zotero-platform/content/zotero.css"?>
+<window xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+        xmlns:html="http://www.w3.org/1999/xhtml"
+        windowtype="second-brain:search" title="Second Brain" width="680" height="760">
+  <!-- The shared UI (ui-src): Zotero's token map first, then the component sheet, then only this window's layout. -->
+  <html:link rel="stylesheet" href="chrome://second-brain/content/sb-ui-zotero-tokens.css"/>
+  <html:link rel="stylesheet" href="chrome://second-brain/content/sb-ui.css"/>
+  <html:link rel="stylesheet" href="chrome://second-brain/content/search.css"/>
+  <script src="chrome://second-brain/content/sb-ui.js"/>
+  <script src="chrome://second-brain/content/search.js"/>
+  <html:div id="app" class="sb-p"></html:div>
+</window>

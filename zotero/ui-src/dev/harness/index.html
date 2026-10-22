@@ -1,0 +1,290 @@
+<!doctype html>
+<!-- ui-src/dev/harness/index.html. Loads the shared UI exactly the way each host does: sb-ui.js (built by
+     build.mjs) + one token map (?tokens=zotero|obsidian in the query string) + sb-ui.css, then a fake host
+     (spec 005 §7). dev/run.mjs drives this with Playwright for both maps, light and dark. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Second Brain UI harness</title>
+<link rel="stylesheet" href="/repo/content/sb-ui.css">
+<link id="tokens" rel="stylesheet" href="../../styles/tokens-zotero.css">
+<style id="standins">
+  /* Harness-only: stand-ins for the real host theme variables tokens-*.css maps from. Neither real app ships
+     this file; it exists so the harness page has *something* to render light and dark against. Declared where
+     each host declares them: Zotero on :root, Obsidian on body (the script below moves them for ?tokens=obsidian),
+     so a token map that reads them at the wrong level resolves empty here too, as it would in the app. */
+  :root {
+    --material-background: #ffffff; --material-sidepane: #f4f4f5; --material-button: #eeeeee;
+    --fill-primary: #1b1b1f; --fill-secondary: #55555c; --fill-tertiary: #8b8b93; --fill-quinary: #e2e2e6;
+    --color-accent: #3478f6; --accent-red: #d1453d; --accent-green: #2f9e44;
+    --background-primary: #ffffff; --background-secondary: #f4f4f5; --interactive-normal: #eeeeee;
+    --text-normal: #1b1b1f; --text-muted: #55555c; --text-faint: #8b8b93; --background-modifier-border: #e2e2e6;
+    --background-modifier-hover: #ececee; --interactive-accent: #7c6cf0; --text-on-accent: #ffffff;
+    --text-error: #d1453d; --color-green: #2f9e44; --font-interface: -apple-system, sans-serif; --font-monospace: monospace;
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --material-background: #1e1e20; --material-sidepane: #17171a; --material-button: #2a2a2e;
+    --fill-primary: #ededf0; --fill-secondary: #b2b2b8; --fill-tertiary: #7c7c84; --fill-quinary: #38383d;
+    --color-accent: #6ea1ff; --accent-red: #ff6b64; --accent-green: #5fd873;
+    --background-primary: #1e1e20; --background-secondary: #17171a; --interactive-normal: #2a2a2e;
+    --text-normal: #ededf0; --text-muted: #b2b2b8; --text-faint: #7c7c84; --background-modifier-border: #38383d;
+    --background-modifier-hover: #2f2f34; --interactive-accent: #9c8cff; --text-on-accent: #17171a;
+    --text-error: #ff6b64; --color-green: #5fd873;
+  }
+  body { margin: 0; padding: 16px; background: var(--sb-ui-bg, #fff); }
+</style>
+<!-- The built bundle, exactly what Zotero loads (loadSubScript) and Obsidian's esbuild imports — not the raw
+     src/ modules, so the harness tests the shipped artifact and its cross-package import (agent-src/src/*)
+     already resolved by esbuild, the same way it will be resolved once. -->
+<script src="/repo/content/sb-ui.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="module">
+  import { createFakeHost } from './fake-host.js';
+
+  const params = new URLSearchParams(location.search);
+  const tokens = params.get('tokens') === 'obsidian' ? '../../styles/tokens-obsidian.css' : '../../styles/tokens-zotero.css';
+  document.getElementById('tokens').setAttribute('href', tokens);
+  if (params.get('theme') === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+  if (params.get('tokens') === 'obsidian') {
+    const standins = document.getElementById('standins');
+    standins.textContent = standins.textContent
+      .replace(':root[data-theme="dark"] {', ':root[data-theme="dark"] body {')
+      .replace(/:root \{/, 'body {');
+  }
+
+  const host = createFakeHost({ kind: params.get('tokens') === 'obsidian' ? 'obsidian' : 'zotero' });
+  const root = SecondBrainUI.renderDemo(document, host);
+  root.id = 'demo';
+
+  // spec 005 C1: the real chat, not just the trivial demo. One ChatView per mode's empty state, so a class-tree
+  // or CSS regression in the moved code shows up here before it reaches either app.
+  const chatHost = createFakeHost({ kind: params.get('tokens') === 'obsidian' ? 'obsidian' : 'zotero', placement: 'tab' });
+  const chats = document.createElement('div');
+  chats.id = 'chats';
+  chats.style.cssText = 'display:flex; flex-direction:column; gap:16px; margin-top:16px;';
+  for (const mode of SecondBrainUI.ChatView.MODES) {
+    const wrap = document.createElement('div');
+    wrap.className = `chat-mode-${mode.id}`;
+    wrap.style.cssText = 'height:320px; border:1px solid var(--sb-ui-line,#ccc);';
+    chats.append(wrap);
+    const view = new SecondBrainUI.ChatView(chatHost, document);
+    view.setMode(mode.id);
+    wrap.append(view.root);
+  }
+  document.body.append(chats);
+
+  // spec 007 E2: a visible fixture for the collapsed/expanded activity-line screenshots (plan's E2 verify step:
+  // "harness pictures collapsed / expanded, both maps"). Two turns: one line collapsed, one expanded by click.
+  const activityDemoHost = createFakeHost({ kind: params.get('tokens') === 'obsidian' ? 'obsidian' : 'zotero', placement: 'tab' });
+  const activityDemo = document.createElement('div');
+  activityDemo.id = 'activity-demo';
+  activityDemo.style.cssText = 'margin-top:16px; padding:12px; border:1px solid var(--sb-ui-line,#ccc); max-width:420px;';
+  const activityDemoChat = new SecondBrainUI.ChatView(activityDemoHost, document);
+  const collapsedTurn = activityDemoChat.addAnswer();
+  activityDemoChat.paintActivityLines(collapsedTurn, [
+    { id: 'a', icon: 'library', title: 'Ran analysis', detail: 'Conducted 4 searches', state: 'done', items: ['Searching your papers for "DeepH"', 'Searching the literature for "DeepH"'], reasoning: 'Weighing which sources to check first.' },
+  ]);
+  const expandedTurn = activityDemoChat.addAnswer();
+  activityDemoChat.paintActivityLines(expandedTurn, [
+    { id: 'b', icon: 'result', title: 'Read context', detail: 'Referenced “Excited-state ML” V3', state: 'done', items: ['Referenced result R2'], reasoning: 'The session already holds this paper set, so read_result instead of searching again.' },
+  ]);
+  expandedTurn.expanded.add('b');
+  activityDemoChat.paintActivityLines(expandedTurn, [
+    { id: 'b', icon: 'result', title: 'Read context', detail: 'Referenced “Excited-state ML” V3', state: 'done', items: ['Referenced result R2'], reasoning: 'The session already holds this paper set, so read_result instead of searching again.' },
+  ]);
+  activityDemo.append(collapsedTurn.root, expandedTurn.root);
+  document.body.append(activityDemo);
+
+  // spec 005 C4 (drift guard): the DOM ui-src builds must depend only on a host's CAPABILITIES (can.scopes etc.),
+  // never on which token map is loaded or which host kind rendered it -- a class-tree difference here would mean
+  // the shared code branched on host.kind somewhere instead of going through host.can/host.*, defeating the
+  // point of one shared implementation. Rendered with identical `can` under both host kinds; dev/run.mjs
+  // compares the serialized tree from a tokens=zotero run against a tokens=obsidian run.
+  window.__sbParityTree = (() => {
+    const classTree = (node) => {
+      if (node.nodeType !== 1) return null;
+      const el = /** @type {Element} */ (node);
+      const kids = [...el.childNodes].map(classTree).filter(Boolean);
+      return { tag: el.tagName.toLowerCase(), cls: [...el.classList].sort(), kids };
+    };
+    const can = { scopes: true, addToLibrary: true, openInTab: true, notesWithoutServer: false, linksInside: false };
+    const kind = params.get('tokens') === 'obsidian' ? 'obsidian' : 'zotero';
+    const parityHost = createFakeHost({ kind, placement: 'tab', can });
+    const out = {};
+    for (const mode of SecondBrainUI.ChatView.MODES) {
+      const view = new SecondBrainUI.ChatView(parityHost, document);
+      view.setMode(mode.id);
+      out[`empty-${mode.id}`] = classTree(view.root);
+    }
+    const findChat = new SecondBrainUI.ChatView(parityHost, document);
+    const findView = new SecondBrainUI.FindView(findChat, {
+      saved: {
+        id: 'find-parity', query: 'parity', at: new Date(0).toISOString(), scope: { kind: 'library' },
+        sources: { papers: true, scholarly: true }, failed: [],
+        rows: [{ title: 'A Paper', authors: ['A. Author'], year: 2024, venue: 'A Venue', doi: null,
+          abstract: 'An abstract.', key: 'K1', citekey: 'author2024', sources: ['Your library'] }],
+        summary: null,
+      },
+    });
+    out['find-table'] = classTree(findView.root);
+    const reportChat = new SecondBrainUI.ChatView(parityHost, document);
+    const reportView = new SecondBrainUI.ReportView(reportChat, 'review-parity');
+    reportView.render({
+      id: 'review-parity', question: 'A question', started: new Date(0).toISOString(), outside: [],
+      status: { state: 'awaiting_approval', plan: { subQuestions: [{ id: 'sq-1', question: 'Sub-question one', strategy: 'Look here', sources: ['papers'] }] } },
+    });
+    out['report-plan'] = classTree(reportView.root);
+
+    // spec 007 E2: activity lines + folded reasoning. One collapsed line (a search group), one expanded line
+    // (a read_result group with reasoning + more than one label), fed through the same paintActivityLines the
+    // live chat and a reopened chat both call.
+    const activityChat = new SecondBrainUI.ChatView(parityHost, document);
+    const activityTurn = activityChat.addAnswer();
+    const activityLines = [
+      { id: 'line-1', icon: 'library', title: 'Ran analysis', detail: 'Conducted 4 searches', state: 'done', items: ['Searching your papers for "DeepH"'], reasoning: null },
+      { id: 'line-2', icon: 'result', title: 'Read context', detail: 'Referenced “Excited-state ML” V3', state: 'done',
+        items: ['Referenced result R2', 'Reading a source'], reasoning: 'Checking whether the session already has this paper set before searching again.' },
+    ];
+    activityChat.paintActivityLines(activityTurn, activityLines);
+    activityTurn.expanded.add('line-2');
+    activityChat.paintActivityLines(activityTurn, activityLines); // re-paint with line-2 expanded, as a click would
+    out['activity-lines'] = classTree(activityTurn.root);
+    // the live feed: a running turn's newest line is open with one row per step (icon, label, detail, mark)
+    const feedChat = new SecondBrainUI.ChatView(parityHost, document);
+    const feedTurn = feedChat.addAnswer();
+    feedTurn.live = { status: 'running', thinking: new Map(), time: null, frame: null, ticker: null };
+    feedChat.paintActivityLines(feedTurn, [{ id: 'line-1', icon: 'library', title: 'Ran analysis', detail: 'Searching the web', state: 'running', reasoning: 'Thinking it over.', items: [],
+      entries: [
+        { id: 'e1', kind: 'library', state: 'done', label: 'Searching your papers for "x"', detail: '12 papers' },
+        { id: 'e2', kind: 'read', state: 'done', label: 'Reading a page', source: { kind: 'web', title: 'A page', host: 'example.org' } },
+        { id: 'e3', kind: 'read', state: 'failed', label: 'Reading a source' },
+        { id: 'e4', kind: 'web', state: 'running', label: 'Searching the web for "y"' }] }]);
+    out['activity-live'] = classTree(feedTurn.root);
+    return out;
+  })();
+
+  // spec 005 C2: the four source pills. Only run once (tokens=zotero&theme=light call of the harness), not per
+  // token map/theme combination — this is behaviour, not pixels.
+  window.__sbSourceChecks = [];
+  if (params.get('tokens') !== 'obsidian' && params.get('theme') !== 'dark') {
+    const check = (name, ok, detail) => window.__sbSourceChecks.push({ name, ok: !!ok, detail });
+
+    // default sources
+    const freshHost = createFakeHost({ placement: 'tab' });
+    const freshView = new SecondBrainUI.ChatView(freshHost, document);
+    check('default sources: papers, notes, scholarly on, web off', JSON.stringify(freshView.sources) === JSON.stringify({ papers: true, notes: true, scholarly: true, web: false }), freshView.sources);
+
+    // pre-005 pref migration: { library, scholarly, web } -> { papers, notes, scholarly, web }
+    const migrateHost = createFakeHost({ placement: 'tab' });
+    migrateHost.prefs.set('chatSources', { library: false, scholarly: true, web: true });
+    const migrateView = new SecondBrainUI.ChatView(migrateHost, document);
+    check('legacy { library, scholarly, web } pref migrates to papers+notes', JSON.stringify(migrateView.sources) === JSON.stringify({ papers: false, notes: false, scholarly: true, web: true }), migrateView.sources);
+
+    // toggling a pill persists to host.prefs, in the new shape
+    const toggleHost = createFakeHost({ placement: 'tab' });
+    const toggleView = new SecondBrainUI.ChatView(toggleHost, document);
+    toggleView.toggleSource('web');
+    check('toggling a pill writes the new shape to prefs', JSON.stringify(toggleHost.prefs.get('chatSources')) === JSON.stringify({ papers: true, notes: true, scholarly: true, web: true }), toggleHost.prefs.get('chatSources'));
+
+    // Find papers disables Notes and Web, with a reason
+    const findHost = createFakeHost({ placement: 'tab' });
+    const findView = new SecondBrainUI.ChatView(findHost, document);
+    findView.setMode('find');
+    check('Find papers disables Notes and Web', findView.sourceButtons.notes.disabled && findView.sourceButtons.web.disabled
+      && !findView.sourceButtons.papers.disabled && !findView.sourceButtons.scholarly.disabled,
+      Object.fromEntries(Object.entries(findView.sourceButtons).map(([k, b]) => [k, b.disabled])));
+    check('the disabled pills have a reason in their tooltip', findView.sourceButtons.notes.title.length > 0 && findView.sourceButtons.web.title.length > 0,
+      { notes: findView.sourceButtons.notes.title, web: findView.sourceButtons.web.title });
+
+    // offline mark: host.where() === "local" (Zotero standalone, server down)
+    const offlineHost = createFakeHost({ placement: 'tab', where: 'local' });
+    const offlineView = new SecondBrainUI.ChatView(offlineHost, document);
+    check('Notes gets an offline mark when host.where() is "local"', offlineView.sourceButtons.notes.classList.contains('is-offline')
+      && !offlineView.sourceButtons.papers.classList.contains('is-offline'), offlineView.sourceButtons.notes.className);
+
+    // Send disabled when every source is off
+    const noneHost = createFakeHost({ placement: 'tab' });
+    const noneView = new SecondBrainUI.ChatView(noneHost, document);
+    // starts { papers: true, notes: true, scholarly: true, web: false } (the default): toggle only what's on.
+    for (const id of ['papers', 'notes', 'scholarly']) noneView.toggleSource(id);
+    noneView.input.value = 'a question';
+    noneView.input.dispatchEvent(new Event('input'));
+    check('Send is disabled when every source is off', noneView.send.disabled, { sources: noneView.sources, sendDisabled: noneView.send.disabled });
+    check('the empty state explains why', noneView.thread.querySelector('.sb-ai-empty-text')?.textContent === 'Turn on at least one source.',
+      noneView.thread.querySelector('.sb-ai-empty-text')?.textContent);
+
+    // a sent chat message carries `sources`
+    (async () => {
+      const calls = [];
+      const sendHost = createFakeHost({ placement: 'tab', calls });
+      const sendView = new SecondBrainUI.ChatView(sendHost, document);
+      sendView.toggleSource('notes'); // papers-only + scholarly (web stays off)
+      sendView.input.value = 'What does my library say?';
+      sendView.input.dispatchEvent(new Event('input'));
+      await sendView.submit();
+      const sent = calls.find((c) => c.kind === 'send');
+      check('a sent chat message carries the chosen sources', sent && JSON.stringify(sent.input.sources) === JSON.stringify({ papers: true, notes: false, scholarly: true, web: false }), sent?.input.sources);
+
+      const askCalls = [];
+      const askHost = createFakeHost({ placement: 'tab', calls: askCalls });
+      const askView = new SecondBrainUI.ChatView(askHost, document);
+      askView.setMode('ask');
+      askView.input.value = 'Quick question';
+      askView.input.dispatchEvent(new Event('input'));
+      await askView.submit();
+      const asked = askCalls.find((c) => c.kind === 'ask');
+      check('a Quick answer carries the chosen sources', asked && JSON.stringify(asked.opts.sources) === JSON.stringify({ papers: true, notes: true, scholarly: true, web: false }), asked?.opts.sources);
+
+      // spec 008 Z4: the collection-tree scope picker. COLLECTIONS (fake-host.js) is one root (Ecology, with
+      // children Foraging and Migration) plus a lone root (Doorknob Design).
+      const settle = () => new Promise((resolve) => setTimeout(resolve, 0)); // flushes host.collections()'s .then chain
+      const scopeCalls = [];
+      const scopeHost = createFakeHost({ placement: 'tab', calls: scopeCalls });
+      const scopeView = new SecondBrainUI.ChatView(scopeHost, document);
+      scopeView.scopeKind.value = 'collections';
+      scopeView.scopeKind.dispatchEvent(new Event('change'));
+      await settle();
+      const tree = scopeView.scopeTree;
+      const box = (key) => tree.boxes.get(key);
+
+      tree.toggle('foraging');
+      tree.toggle('migration');
+      check('tri-state: ticking every child ticks the parent too', box('ecology').checked && !box('ecology').indeterminate,
+        { ecology: { checked: box('ecology').checked, indeterminate: box('ecology').indeterminate } });
+      tree.toggle('migration');
+      check('tri-state: unticking one child leaves the parent indeterminate', !box('ecology').checked && box('ecology').indeterminate,
+        { ecology: { checked: box('ecology').checked, indeterminate: box('ecology').indeterminate } });
+      check('getKeys() keeps only the topmost ticked key (parent not ticked here, so the child alone)', JSON.stringify(tree.getKeys()) === JSON.stringify(['foraging']), tree.getKeys());
+      tree.toggle('migration'); // back to both children ticked -> parent ticked, children redundant
+      check('getKeys() drops a checked child once its parent is also checked', JSON.stringify(tree.getKeys()) === JSON.stringify(['ecology']), tree.getKeys());
+
+      tree.filterInput.value = 'forag';
+      tree.filterInput.dispatchEvent(new Event('input'));
+      check('filter: a match and its ancestor stay visible, an unrelated branch hides', !tree.rows.get('foraging').hidden && !tree.rows.get('ecology').hidden && tree.rows.get('design').hidden,
+        { foraging: tree.rows.get('foraging').hidden, ecology: tree.rows.get('ecology').hidden, design: tree.rows.get('design').hidden });
+      tree.filterInput.value = '';
+      tree.filterInput.dispatchEvent(new Event('input'));
+
+      tree.setKeys([]);
+      tree.toggle('design');
+      check('button label: a single ticked collection shows its name', scopeView.optionsButton.textContent.startsWith('Doorknob Design'), scopeView.optionsButton.textContent);
+      tree.toggle('ecology');
+      check('button label: more than one shows "N collections"', scopeView.optionsButton.textContent.startsWith('2 collections'), scopeView.optionsButton.textContent);
+
+      scopeView.input.value = 'What does Ecology say?';
+      scopeView.input.dispatchEvent(new Event('input'));
+      await scopeView.submit();
+      const scopedSend = scopeCalls.find((c) => c.kind === 'send');
+      check('a sent message carries the scope as collection keys', scopedSend && JSON.stringify(scopedSend.input.scope) === JSON.stringify({ kind: 'collections', keys: ['design', 'ecology'] }), scopedSend?.input.scope);
+
+      window.__sbHarnessReady = true;
+    })();
+  } else {
+    window.__sbHarnessReady = true;
+  }
+</script>
+</body>
+</html>

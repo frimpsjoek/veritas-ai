@@ -1,0 +1,5 @@
+{"id":1,"result":{"userAgent":"second-brain-test/0","codexHome":"/tmp/codex-home","platformFamily":"unix","platformOs":"macos"}}
+{"id":2,"result":{"thread":{"id":"thread-interrupt-1","model":"gpt-6-luna","turns":[]}}}
+{"method":"thread/started","params":{"thread":{"id":"thread-interrupt-1"}}}
+{"id":3,"result":{"turn":{"id":"turn-interrupt-1","items":[],"status":"inProgress"}}}
+{"method":"item/agentMessage/delta","params":{"itemId":"msg-1","delta":"Still thi"}}
