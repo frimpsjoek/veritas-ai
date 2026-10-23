@@ -12,7 +12,7 @@ Veritas AI: Joseph Frimpong, Oded Asiedu and Huihuo Zheng.
 
 **Watch the film (3 min):** the story, the team and a walkthrough of Veritas.
 
-[![Veritas AI: watch the film](docs/images/demo-thumbnail.png)](https://cdn.jsdelivr.net/gh/frimpsjoek/veritas-ai@main/docs/video/veritas-ai-demo.mp4)
+https://github.com/user-attachments/assets/c71f4e75-0a38-4247-861f-acf0bda036f9
 
 Earlier screen recording (2 min): [docs/video/veritas-demo.mp4](https://github.com/frimpsjoek/veritas-ai/blob/main/docs/video/veritas-demo.mp4)
 
