@@ -154,3 +154,37 @@ test('the Connect guide fills a catalog entry: prefix, trimming, optional and re
   assert.ok(!file.includes('exa-key-99998888') && file.includes('me@uni.edu'));
   assert.equal(platform.items.get('mcp:exa:header:Authorization'), 'Bearer exa-key-99998888');
 });
+
+test('no Keychain for this login: the key goes to the owner-only file and reads back from it', async () => {
+  const fs = memoryFs();
+  const platform = {
+    fs, homeDir: '/home/me',
+    async which() { return '/usr/bin/security'; },
+    async spawn({ args }) {
+      const code = args[0] === '-i' ? 36 : 44;
+      return {
+        lines() { return (async function* () {})(); },
+        async write() {}, async closeInput() {},
+        exited: Promise.resolve(code),
+        stderrTail() { return args[0] === '-i' ? 'security: SecKeychainItemCreateFromContent (<default>): A keychain cannot be found to store "mcp:valency:header:Authorization".' : ''; },
+      };
+    },
+  };
+  const store = createSecretStore(platform, '/data');
+  await store.set('mcp:valency:header:Authorization', 'Bearer tok_123');
+  const again = createSecretStore(platform, '/data');
+  assert.equal(await again.get('mcp:valency:header:Authorization'), 'Bearer tok_123');
+  await again.remove('mcp:valency:header:Authorization');
+  assert.equal(await createSecretStore(platform, '/data').get('mcp:valency:header:Authorization'), null);
+});
+
+test('any other Keychain error still says so', async () => {
+  const platform = {
+    fs: memoryFs(), homeDir: '/home/me',
+    async which() { return '/usr/bin/security'; },
+    async spawn() {
+      return { lines() { return (async function* () {})(); }, async write() {}, async closeInput() {}, exited: Promise.resolve(1), stderrTail() { return 'security: disk full'; } };
+    },
+  };
+  await assert.rejects(createSecretStore(platform, '/data').set('k', 'v'), (e) => e instanceof SecretError && /disk full/.test(e.message));
+});

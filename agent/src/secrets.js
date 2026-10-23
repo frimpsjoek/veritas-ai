@@ -11,6 +11,8 @@ const SERVICE = 'second-brain';
 const SECURITY = '/usr/bin/security';
 const FILE = 'secrets.json';
 const NOT_FOUND = 44;  // security's exit code for "no such item"
+/** What `security` says when there is no Keychain it may use; the key then goes to the owner-only file. */
+const NO_KEYCHAIN = /keychain cannot be found|no default keychain|user interaction is not allowed|authorization was canceled|could not be found in the keychain/i;
 
 /** A name is one short token: what kind of key and whose ("openalex", "endpoint:lm-studio", "mcp:nasa-ads:env:ADS_API_KEY"). */
 const NAME = /^[A-Za-z0-9][A-Za-z0-9:._-]{0,127}$/;
@@ -74,7 +76,10 @@ export function createSecretStore(platform, dataDir, opts = {}) {
       if (cache.get(name) === value) return;
       if (await keychain()) {
         const { code, err } = await security(['-i'], `add-generic-password -U -s ${SERVICE} -a ${name} -w "${value}"`);
-        if (code !== 0) throw new SecretError(`Couldn't save the key in the Keychain (${err.trim() || `exit ${code}`}).`);
+        if (code === 0) { cache.set(name, value); return; }
+        // No usable Keychain (none for this login, a locked one over SSH, no session to ask): the owner-only file.
+        if (!NO_KEYCHAIN.test(err)) throw new SecretError(`Couldn't save the key in the Keychain (${err.trim() || `exit ${code}`}).`);
+        await writeFile({ ...(await readFile()), [name]: value });
       } else {
         await writeFile({ ...(await readFile()), [name]: value });
       }
@@ -88,7 +93,8 @@ export function createSecretStore(platform, dataDir, opts = {}) {
       let value = null;
       if (await keychain()) {
         const { code, out } = await security(['find-generic-password', '-s', SERVICE, '-a', name, '-w']);
-        value = code === 0 ? out : null;
+        // a key kept in the file because there was no Keychain when it was saved
+        value = code === 0 ? out : (await readFile())[name] ?? null;
       } else {
         value = (await readFile())[name] ?? null;
       }
@@ -102,6 +108,8 @@ export function createSecretStore(platform, dataDir, opts = {}) {
       if (await keychain()) {
         const { code, err } = await security(['delete-generic-password', '-s', SERVICE, '-a', name]);
         if (code !== 0 && code !== NOT_FOUND) throw new SecretError(`Couldn't remove the key from the Keychain (${err.trim() || `exit ${code}`}).`);
+        const { [name]: _inFile, ...others } = await readFile();
+        if (_inFile !== undefined) await writeFile(others);
       } else {
         const { [name]: _gone, ...rest } = await readFile();
         await writeFile(rest);
