@@ -1,5 +1,6 @@
 #!/bin/sh
-# Builds dist/second-brain-<version>.xpi and dist/update.json (the file Zotero checks for updates).
+# Builds dist/second-brain-<version>.xpi and dist/update.json (the file Zotero checks for updates). Releases publish
+# the xpi as veritas-zotero-<version>.xpi, the name update.json links to.
 set -e
 cd "$(dirname "$0")"
 (cd editor-src && npm ci --silent && npm run build --silent)
@@ -22,7 +23,7 @@ cat > dist/update.json <<JSON
     "second-brain@frimpsjoe.local": {
       "updates": [{
         "version": "$version",
-        "update_link": "https://github.com/frimpsjoek/veritas-ai/releases/download/v$version/second-brain-$version.xpi",
+        "update_link": "https://github.com/frimpsjoek/veritas-ai/releases/download/v$version/veritas-zotero-$version.xpi",
         "update_hash": "sha256:$hash",
         "applications": { "zotero": { "strict_min_version": "7.0", "strict_max_version": "10.*" } }
       }]
