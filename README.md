@@ -68,10 +68,18 @@ cd server && KB_BACKEND=onnx .venv/bin/python kb.py serve
 Open http://localhost:27182/app/. Veritas finds a Zotero library in `~/Zotero` by itself and writes its notes to
 `~/Documents/Veritas`.
 
-**Zotero plugin (optional):** `cd zotero && npm ci && ./build.sh`, then in Zotero: Tools > Plugins > gear >
-Install Plugin From File, and pick the `.xpi` in `zotero/dist/`.
-**Obsidian plugin (optional):** `cd obsidian && npm ci && npx tsc -p . && node esbuild.config.mjs`, then copy
-`main.js`, `manifest.json` and `styles.css` into `<your vault>/.obsidian/plugins/veritas/` and enable it.
+### Zotero and Obsidian plugins
+
+Download from the [latest release](https://github.com/frimpsjoek/veritas-ai/releases/latest) (they talk to the
+Veritas server above):
+
+- **Zotero 7:** [veritas-zotero-0.53.0.xpi](https://github.com/frimpsjoek/veritas-ai/releases/latest/download/veritas-zotero-0.53.0.xpi).
+  In Zotero: Tools > Plugins > gear > Install Plugin From File, and pick the `.xpi`.
+- **Obsidian:** [veritas-obsidian-0.53.0.zip](https://github.com/frimpsjoek/veritas-ai/releases/latest/download/veritas-obsidian-0.53.0.zip).
+  Unzip it into `<your vault>/.obsidian/plugins/`, then enable **Veritas** under Settings > Community plugins.
+
+To build them yourself: `cd zotero && npm ci && ./build.sh` (writes `zotero/dist/*.xpi`), and
+`cd obsidian && npm ci && npx tsc -p . && node esbuild.config.mjs`.
 
 ## Use
 

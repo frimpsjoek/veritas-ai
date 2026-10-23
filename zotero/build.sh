@@ -22,7 +22,7 @@ cat > dist/update.json <<JSON
     "second-brain@frimpsjoe.local": {
       "updates": [{
         "version": "$version",
-        "update_link": "https://github.com/frimpsjoek/zotero-second-brain/releases/download/v$version/second-brain-$version.xpi",
+        "update_link": "https://github.com/frimpsjoek/veritas-ai/releases/download/v$version/second-brain-$version.xpi",
         "update_hash": "sha256:$hash",
         "applications": { "zotero": { "strict_min_version": "7.0", "strict_max_version": "10.*" } }
       }]

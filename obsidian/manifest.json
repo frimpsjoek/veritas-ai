@@ -1,9 +1,9 @@
 {
   "id": "second-brain-search",
-  "name": "Second Brain Search",
+  "name": "Veritas",
   "version": "0.53.0",
   "minAppVersion": "1.5.0",
-  "description": "Search notes and your Zotero library by words or meaning; see linked, similar and section-related notes; find duplicates; copy notes for AI. Uses the local index the agents use.",
+  "description": "Veritas in Obsidian: search your notes and Zotero library by words or meaning, see related notes, and chat with citations, from the Veritas server on your own computer.",
   "author": "frimpsjoe",
   "isDesktopOnly": false
 }
