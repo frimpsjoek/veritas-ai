@@ -51,6 +51,16 @@ Run `./check.sh` to build and test everything.
 
 ## Install
 
+**Homebrew (macOS and Linux):**
+
+```sh
+brew install frimpsjoek/veritas/veritas
+brew services start veritas     # start now and at login
+veritas open                    # http://localhost:27182/app/
+```
+
+**From source:**
+
 Needs macOS, Python 3.12 with [uv](https://docs.astral.sh/uv/), and Node 22.
 
 ```sh

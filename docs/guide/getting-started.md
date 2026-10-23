@@ -8,7 +8,17 @@
 - About 1 GB of disk for the search model and the index
 - For chat: a Claude or ChatGPT (Codex) sign-in on this computer, or a local model
 
-## Install
+## Install with Homebrew (macOS and Linux)
+
+```sh
+brew install frimpsjoek/veritas/veritas
+brew services start veritas     # start now and at login (downloads the search model the first time)
+veritas open
+```
+
+Data and the search model live in `$(brew --prefix)/var/veritas`; upgrades (`brew upgrade veritas`) keep them.
+
+## Install from source
 
 ```sh
 git clone https://github.com/frimpsjoek/veritas-ai.git && cd veritas-ai
