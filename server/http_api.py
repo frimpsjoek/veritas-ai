@@ -474,8 +474,9 @@ class Handler(BaseHTTPRequestHandler):
             if q.get("ticket") and parsed.path in tickets.ROUTES:
                 if tickets.redeem(q["ticket"], parsed.path, q):
                     return True
-                self._send(403, {"error": "this link has expired; open it again"})
-                return False
+                if not authorized(self.headers):  # a stale ticket next to a valid token or cookie is just ignored
+                    self._send(403, {"error": "this link has expired; open it again"})
+                    return False
         if kind == "app":
             # Never the loopback pass or the cookie: a listed site still has to prove it holds the token.
             if bearer_ok(self.headers):

@@ -56,11 +56,25 @@ def test_ticket_opens_its_route_once(server, monkeypatch):
     assert server("GET", f"/ping?ticket={t}", CROSS)[0] == 200
 
 
-def test_ticket_is_single_use(server, monkeypatch):
+def test_ticket_serves_repeat_reads_of_its_file_until_it_expires(server, monkeypatch):
+    # A browser PDF viewer reads one file in several Range requests to the same URL.
     monkeypatch.setattr(tickets, "ROUTES", tickets.ROUTES | {"/ping"})
     t = issue(server, "/ping")
     assert server("GET", f"/ping?ticket={t}", CROSS)[0] == 200
-    assert server("GET", f"/ping?ticket={t}", CROSS)[0] == 403
+    assert server("GET", f"/ping?ticket={t}", {**CROSS, "Range": "bytes=0-99"})[0] == 200
+
+
+def test_a_spent_ticket_never_opens_another_file(server, monkeypatch):
+    monkeypatch.setattr(tickets, "ROUTES", tickets.ROUTES | {"/ping"})
+    t = issue(server, "/ping", {"a": "1"})
+    assert server("GET", f"/ping?{urlencode({'a': '1', 'ticket': t})}", CROSS)[0] == 200
+    assert server("GET", f"/ping?{urlencode({'a': '2', 'ticket': t})}", CROSS)[0] == 403
+    assert server("GET", f"/ping?{urlencode({'a': '1', 'ticket': t})}", CROSS)[0] == 403  # tried elsewhere: withdrawn
+
+
+def test_a_bad_ticket_does_not_block_a_signed_in_request(server, monkeypatch):
+    monkeypatch.setattr(tickets, "ROUTES", tickets.ROUTES | {"/ping"})
+    assert server("GET", "/ping?ticket=nonsense", {"Origin": APP, "Authorization": "Bearer tok"})[0] == 200
 
 
 def test_ticket_bound_to_route_and_query(server, monkeypatch):
@@ -75,6 +89,7 @@ def test_ticket_expires(monkeypatch):
     clock = [1000.0]
     monkeypatch.setattr(tickets.time, "monotonic", lambda: clock[0])
     t = tickets.issue("/web/page", {"url": "https://x.org"})
+    assert tickets.redeem(t, "/web/page", {"url": "https://x.org"})
     clock[0] += 121
     assert not tickets.redeem(t, "/web/page", {"url": "https://x.org"})
 
