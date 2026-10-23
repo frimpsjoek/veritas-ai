@@ -43,18 +43,44 @@ Valency connector, the research personas, and Veritas itself: one repository and
 
 Run `./check.sh` to build and test everything.
 
-## Run it
+## Install
 
-Needs Python 3.12 with [uv](https://docs.astral.sh/uv/) and Node 22.
+Needs macOS, Python 3.12 with [uv](https://docs.astral.sh/uv/), and Node 22.
 
 ```sh
-(cd server && uv venv && uv pip install -r requirements.txt)
+git clone https://github.com/frimpsjoek/veritas-ai.git && cd veritas-ai
+
+# 1. server and its search model (133 MB, from Hugging Face)
+(cd server && uv venv && uv pip install --python .venv/bin/python -r requirements.txt)
+M=server/models/snowflake-arctic-embed-s && mkdir -p $M/onnx
+for f in onnx/model.onnx tokenizer.json config.json; do
+  curl -fL -o $M/$f https://huggingface.co/Snowflake/snowflake-arctic-embed-s/resolve/main/$f
+done
+
+# 2. the assistant and the web app
 (cd agent && npm ci && npm run build)
 (cd web && npm ci && ./install.sh)
-cd server && .venv/bin/python kb.py serve
+
+# 3. start
+cd server && KB_BACKEND=onnx .venv/bin/python kb.py serve
 ```
 
-Open http://localhost:27182/app/, then add your folders and Zotero library in Settings.
+Open http://localhost:27182/app/. Veritas finds a Zotero library in `~/Zotero` by itself and writes its notes to
+`~/Documents/Veritas`.
+
+**Zotero plugin (optional):** `cd zotero && npm ci && ./build.sh`, then in Zotero: Tools > Plugins > gear >
+Install Plugin From File, and pick the `.xpi` in `zotero/dist/`.
+**Obsidian plugin (optional):** `cd obsidian && npm ci && npx tsc -p . && node esbuild.config.mjs`, then copy
+`main.js`, `manifest.json` and `styles.css` into `<your vault>/.obsidian/plugins/veritas/` and enable it.
+
+## Use
+
+1. **Settings > Folders:** add your Obsidian vault and any folder of notes and PDFs.
+2. **Settings > Models:** pick the AI (Claude, Codex or a local model).
+3. **Settings > Reading radar:** find your own papers, follow topics, journals and RSS feeds.
+4. **Settings > Sources and tools:** connect Valency Bond with the token from
+   [app.valency.io/settings](https://app.valency.io/settings).
+5. **Home** shows the daily reading radar; **Chat** answers from your library with citations you can open.
 
 ## License
 
