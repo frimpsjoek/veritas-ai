@@ -143,8 +143,8 @@ export async function setupCard(doc, host) {
       lead('Valency Bond adds 500M+ papers and preprints (ChemRxiv included) to your searches. It is free for researchers.');
       const link = /** @type {HTMLAnchorElement} */ (h(doc, 'a', 'sbw-setup-link', 'Get your free token at app.valency.io'));
       link.href = 'https://app.valency.io/settings';
-      link.target = '_blank';
-      link.rel = 'noopener';
+      // every link goes through the host (spec 015 guard): it opens outside, in the user's browser
+      link.addEventListener('click', (event) => { event.preventDefault(); host.openLink(link.href, { outside: true }); });
       const row = h(doc, 'div', 'sbw-setup-row');
       const token = /** @type {HTMLInputElement} */ (h(doc, 'input', 'sb-input sbw-setup-path'));
       token.type = 'password';
