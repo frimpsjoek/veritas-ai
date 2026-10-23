@@ -1480,7 +1480,9 @@ def note_path(path: str) -> str:
     if path.startswith(zotero.PREFIX) or path.partition(":/")[2].startswith(zotero.PREFIX):  # <name>:/zotero/KEY too
         if db.execute("SELECT 1 FROM notes WHERE path=? AND source='zotero'", (path,)).fetchone():
             return path
-        raise FileNotFoundError(f"no Zotero item {path!r}")
+        if path.startswith(zotero.PREFIX):
+            raise FileNotFoundError(f"no Zotero item {path!r}")
+        # else a listed folder's own subfolder that happens to be called zotero/: an ordinary note path
     return index_path(resolve(path))
 
 

@@ -62,3 +62,13 @@ def test_add_goes_to_web_library_when_default(setup):
     assert item["creators"][0] == {"creatorType": "author", "name": "Ada Lovelace"} and item["date"] == "2021"
     assert item["publicationTitle"] == "J. Chem. Phys." and item["tags"] == [{"tag": "read-later"}]
     assert pending_adds.pending() == []  # nothing queued for the local plugin
+
+
+def test_switched_off_online_default_says_so(setup):
+    created, relayout = setup
+    sources.set_default_library("online")
+    sources.update("online", enabled=False)
+    relayout()
+    [result] = pending_adds.add_papers([PAPER])
+    assert result["status"] == "failed" and "switched off" in result["message"] and created == []
+    assert pending_adds.pending() == []

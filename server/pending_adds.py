@@ -154,9 +154,10 @@ def _outcome(entry_id: str, applied: dict[str, dict]) -> dict:
 
 
 def default_account():
-    """The online library "+ Add" goes to, when the default library is one (else None: the local plugin queue)."""
-    import kb
-    return next((a for a in kb.LAYOUT.accounts if a.default_library and a.kind == "zotero-web"), None)
+    """The online library "+ Add" goes to, when the default library is one (else None: the local plugin queue).
+    A default online library that is switched off is still returned, so the add says so instead of going elsewhere."""
+    import sources
+    return next((a for a in sources.accounts() if a.default_library and a.kind == "zotero-web"), None)
 
 
 def web_item(paper: dict, tag: str | None) -> dict:
@@ -176,6 +177,9 @@ def web_item(paper: dict, tag: str | None) -> dict:
 
 def _add_online(account, papers: list, tag: str | None) -> list[dict]:
     import zotero_web
+    if not account.enabled:
+        return [{"status": "failed", "message": f"the default library {account.name} is switched off; switch it on in "
+                 "Settings > Folders or pick another default library"} for _ in papers]
     key = zotero_web.get_key(account.user_id)
     if not key:
         return [{"status": "failed", "message": f"no Zotero API key for {account.name}; add it in Settings"} for _ in papers]

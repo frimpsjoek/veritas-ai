@@ -205,11 +205,16 @@ def add_account(kind: str, user_id: str, *, key: str | None = None, name: str | 
         raise SourceError("the Zotero user ID is the number shown at zotero.org/settings/keys")
     entries = load()
     entries = defaults() if entries is None else entries
+    if any(e.get("kind") == kind and str(e.get("user_id")) == str(user_id) for e in entries):
+        raise DuplicateSource(f"Zotero user {user_id} is already in the list")
     taken = {e["name"] for e in entries}
     name = unique_name("zotero-online", taken) if name is None else check_name(name, taken)
     if key:
         import zotero_web
-        zotero_web.store_key(str(user_id), key)
+        try:
+            zotero_web.store_key(str(user_id), key)
+        except zotero_web.ZoteroWebError as error:
+            raise SourceError(str(error)) from None
     entry = {"name": name, "kind": kind, "user_id": str(user_id), "enabled": True}
     entries.append(entry)
     save(entries)

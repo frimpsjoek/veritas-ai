@@ -50,8 +50,11 @@ def get_key(user_id: str) -> str | None:
 
 
 def store_key(user_id: str, key: str) -> None:
-    out = subprocess.run(["security", "add-generic-password", "-U", "-s", KEYCHAIN_SERVICE, "-a",
-                          keychain_account(user_id), "-w", key], capture_output=True, text=True, timeout=10)
+    """Into the Keychain through `security -i` (the command comes on stdin), so the key never shows in `ps`."""
+    if not re.fullmatch(r"[A-Za-z0-9]{8,64}", key):
+        raise ZoteroWebError("a Zotero API key is letters and digits only")
+    command = f'add-generic-password -U -s {KEYCHAIN_SERVICE} -a {keychain_account(user_id)} -w "{key}"\n'
+    out = subprocess.run(["security", "-i"], input=command, capture_output=True, text=True, timeout=10)
     if out.returncode != 0:
         raise ZoteroWebError(f"could not save the Zotero key in the Keychain: {out.stderr.strip()}")
 

@@ -214,3 +214,35 @@ def test_online_item_opens_from_the_index(account):
         assert body["attachments"] == [] and body["zotero_uri"].startswith("https://www.zotero.org/")
     finally:
         server.shutdown()
+
+
+def test_store_key_never_puts_the_key_on_the_command_line(monkeypatch):
+    seen = {}
+
+    def fake_run(args, input=None, **kw):
+        seen["args"], seen["input"] = args, input
+
+        class Done:
+            returncode, stderr = 0, ""
+        return Done()
+
+    monkeypatch.setattr(zotero_web.subprocess, "run", fake_run)
+    zotero_web.store_key("123", "abcDEF123456")
+    assert seen["args"] == ["security", "-i"] and "abcDEF123456" in seen["input"]
+    with pytest.raises(zotero_web.ZoteroWebError):
+        zotero_web.store_key("123", 'x" ; rm -rf ~ ; "')
+
+
+def test_add_account_refuses_a_listed_user_and_reports_keychain_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(sources, "FILE", tmp_path / "sources.json")
+    monkeypatch.setattr(zotero_web, "store_key", lambda user_id, key: None)
+    sources.add_account("zotero-web", "123")
+    with pytest.raises(sources.DuplicateSource):
+        sources.add_account("zotero-web", "123")
+
+    def broken(user_id, key):
+        raise zotero_web.ZoteroWebError("could not save the Zotero key in the Keychain")
+    monkeypatch.setattr(zotero_web, "store_key", broken)
+    with pytest.raises(sources.SourceError):
+        sources.add_account("zotero-web", "456", key="abcDEF123456")
+    assert [e.get("user_id") for e in sources.load() if "user_id" in e] == ["123"]  # nothing half-added
