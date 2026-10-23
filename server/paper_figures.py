@@ -4,10 +4,12 @@ Tried in order, each only when it applies:
 1. arXiv: the first figure of the paper's HTML page (arxiv.org/html/<id>).
 2. Springer, Nature and BMC: the first figure, whose address follows from the DOI
    (10.1038/s41524-026-02351-z -> .../41524_2026_2351_Fig1_HTML.png), checked to exist.
-3. The article page's own preview image (og:image / twitter:image), unless it is a logo or a journal cover.
+3. The paper's arXiv preprint, found through OpenAlex: its first figure (ACS, APS, RSC and Elsevier refuse requests
+   that do not come from a browser, so a preprint is the only way to a figure for most of their papers).
+4. The article page's own preview image (og:image / twitter:image), unless it is a logo or a journal cover.
 
-ACS, APS, RSC and Elsevier refuse these requests, so their papers have none. Answers (an image or none) are kept in
-data/web/paper-figures.json; a "none" is asked again after a week. The browser loads the image from the publisher.
+Answers are kept in data/web/paper-figures.json. A "none" every source answered is asked again after a week; a none
+caused by an error (a timeout, no network) after an hour. The browser loads the image from its source.
 """
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ import json
 import re
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -23,6 +26,7 @@ import kb
 
 CACHE = kb.HOME / "data" / "web" / "paper-figures.json"
 RETRY_NONE_S = 7 * 24 * 3600
+RETRY_ERROR_S = 3600  # a none that came from an error (timeout, network), not from every source saying no
 TIMEOUT_S = 8
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
 GENERIC = re.compile(r"logo|cover|default|placeholder|favicon|social|share|banner|sprite|icon", re.I)
@@ -84,33 +88,55 @@ def preview_image(html: str, page: str) -> str | None:
     return None
 
 
-def _find(doi: str, arxiv: str | None, url: str | None) -> str | None:
+def arxiv_figure(aid: str) -> str | None:
+    """The first figure of an arXiv paper's HTML page, or None when it has none (raises on a network error)."""
+    status, page, body = _get(f"https://arxiv.org/html/{aid}")
+    html = body.decode("utf8", "ignore")
+    m = re.search(r'<img[^>]+src="([^"]+)"[^>]*class="ltx_graphics', html) or re.search(r'class="ltx_graphics[^"]*"[^>]*src="([^"]+)"', html)
+    return urllib.parse.urljoin(page, m.group(1)) if status == 200 and m else None
+
+
+def preprint_of(doi: str) -> str | None:
+    """The arXiv id of a journal paper's preprint, from OpenAlex's locations; None when it has none."""
+    _, _, body = _get(f"https://api.openalex.org/works/doi:{urllib.parse.quote(doi.strip(), safe='/')}?select=locations,ids", limit=400_000)
+    m = re.search(r"arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5})", body.decode("utf8", "ignore"))
+    return m.group(1) if m else None
+
+
+def _find(doi: str, arxiv: str | None, url: str | None) -> tuple[str | None, bool]:
+    """(image, settled): settled is False when a source could not be asked (an error), so a none is retried soon."""
+    settled = True
+
+    def attempt(fn, *args):
+        nonlocal settled
+        try:
+            return fn(*args)
+        except urllib.error.HTTPError:  # the site answered (403 bot check, 404): a real no
+            return None
+        except Exception:  # noqa: BLE001 - a timeout or no network: skipped, and the none is retried soon
+            settled = False
+            return None
+
     aid = arxiv_id(arxiv, url)
     if aid:
-        try:
-            status, page, body = _get(f"https://arxiv.org/html/{aid}")
-            html = body.decode("utf8", "ignore")
-            m = re.search(r'<img[^>]+src="([^"]+)"[^>]*class="ltx_graphics', html) or re.search(r'class="ltx_graphics[^"]*"[^>]*src="([^"]+)"', html)
-            if status == 200 and m:
-                return urllib.parse.urljoin(page, m.group(1))
-        except Exception:
-            pass
+        found = attempt(arxiv_figure, aid)
+        if found:
+            return found, True
     if doi:
         guess = springer_figure(doi)
-        if guess:
-            try:
-                status, _, _ = _get(guess, limit=64)
-                if status == 200:
-                    return guess
-            except Exception:
-                pass
-        try:
-            status, page, body = _get(f"https://doi.org/{urllib.parse.quote(doi.strip(), safe='/')}")
-            if status == 200:
-                return preview_image(body.decode("utf8", "ignore"), page)
-        except Exception:
-            pass
-    return None
+        if guess and attempt(lambda: _get(guess, limit=64)[0] == 200):
+            return guess, True
+        if not aid:
+            preprint = attempt(preprint_of, doi)
+            found = attempt(arxiv_figure, preprint) if preprint else None
+            if found:
+                return found, True
+        page = attempt(lambda: _get(f"https://doi.org/{urllib.parse.quote(doi.strip(), safe='/')}"))
+        if page and page[0] == 200:
+            found = preview_image(page[2].decode("utf8", "ignore"), page[1])
+            if found:
+                return found, True
+    return None, settled
 
 
 def figure(doi: str = "", arxiv: str | None = None, url: str | None = None, now: float | None = None) -> str | None:
@@ -120,10 +146,11 @@ def figure(doi: str = "", arxiv: str | None = None, url: str | None = None, now:
     now = time.time() if now is None else now
     with _lock:
         hit = _load().get(key)
-    if hit and (hit.get("image") or now - hit.get("at", 0) < RETRY_NONE_S):
+    retry = RETRY_NONE_S if (hit or {}).get("settled", True) else RETRY_ERROR_S
+    if hit and (hit.get("image") or now - hit.get("at", 0) < retry):
         return hit.get("image")
-    image = _find(doi, arxiv, url)
+    image, settled = _find(doi, arxiv, url)
     with _lock:
-        _load()[key] = {"image": image, "at": now}
+        _load()[key] = {"image": image, "at": now, **({} if settled else {"settled": False})}
         _save()
     return image

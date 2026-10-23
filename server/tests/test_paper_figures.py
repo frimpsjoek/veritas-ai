@@ -25,9 +25,51 @@ def test_answers_are_cached_and_a_none_is_retried_after_a_week(tmp_path, monkeyp
     monkeypatch.setattr(pf, "CACHE", tmp_path / "figures.json")
     monkeypatch.setattr(pf, "_cache", None)
     calls = []
-    monkeypatch.setattr(pf, "_find", lambda doi, arxiv, url: calls.append(doi) or None)
+    monkeypatch.setattr(pf, "_find", lambda doi, arxiv, url: (calls.append(doi), (None, True))[1])
     assert pf.figure("10.1/x", now=0) is None
     assert pf.figure("10.1/x", now=3600) is None
     assert calls == ["10.1/x"]
     assert pf.figure("10.1/x", now=pf.RETRY_NONE_S + 1) is None
     assert calls == ["10.1/x", "10.1/x"]
+
+
+def test_a_none_from_an_error_is_retried_after_an_hour(tmp_path, monkeypatch):
+    monkeypatch.setattr(pf, "CACHE", tmp_path / "figures.json")
+    monkeypatch.setattr(pf, "_cache", None)
+    calls = []
+    monkeypatch.setattr(pf, "_find", lambda doi, arxiv, url: (calls.append(doi), (None, False))[1])
+    pf.figure("10.1/y", now=0)
+    pf.figure("10.1/y", now=600)
+    assert calls == ["10.1/y"]
+    pf.figure("10.1/y", now=pf.RETRY_ERROR_S + 1)
+    assert calls == ["10.1/y", "10.1/y"]
+
+
+def test_a_blocked_journal_paper_gets_its_preprint_figure(monkeypatch):
+    def get(url, limit=600_000):
+        if url.startswith("https://api.openalex.org/works/doi:10.1021/acsnano.6c11666"):
+            return 200, url, b'{"locations":[{"landing_page_url":"https://arxiv.org/abs/2301.06171"}]}'
+        if url == "https://arxiv.org/html/2301.06171":
+            return 200, "https://arxiv.org/html/2301.06171v2/", b'<img src="x1.png" class="ltx_graphics ltx_img_landscape">'
+        if "doi.org" in url:
+            return 403, url, b"challenge"
+        raise AssertionError(url)
+    monkeypatch.setattr(pf, "_get", get)
+    assert pf._find("10.1021/acsnano.6c11666", None, None) == ("https://arxiv.org/html/2301.06171v2/x1.png", True)
+
+
+def test_a_timeout_makes_the_none_unsettled(monkeypatch):
+    def get(url, limit=600_000):
+        raise TimeoutError("timed out")
+    monkeypatch.setattr(pf, "_get", get)
+    assert pf._find("10.1021/acs.jpcc.6c01336", None, None) == (None, False)
+
+
+def test_a_publisher_refusal_is_a_settled_none(monkeypatch):
+    import urllib.error
+    def get(url, limit=600_000):
+        if "openalex" in url:
+            return 200, url, b'{"locations":[]}'
+        raise urllib.error.HTTPError(url, 403, "Forbidden", {}, None)
+    monkeypatch.setattr(pf, "_get", get)
+    assert pf._find("10.1021/acs.jpcc.6c01336", None, None) == (None, True)
