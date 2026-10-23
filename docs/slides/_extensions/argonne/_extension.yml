@@ -1,0 +1,32 @@
+title: Argonne dark slides
+author: Joseph Frimpong
+version: 1.0.0
+quarto-required: ">=1.4.0"
+contributes:
+  formats:
+    revealjs:
+      theme: [default, argonne-dark.scss]
+      include-after-body: [footer.html, snap-grid.html]
+      format-resources:
+        - logos/argonne_logo_white.svg
+        - logos/miccom_logo.png
+      slide-number: c
+      progress: true
+      controls: true
+      controls-layout: bottom-right
+      controls-back-arrows: faded
+      controls-tutorial: false
+      menu:
+        side: left
+        width: normal
+        numbers: true
+      auto-stretch: false
+      incremental: false
+      transition: none
+      width: 1600
+      height: 900
+      margin: 0.06
+      center: false
+      html-math-method: katex
+      date-format: "M/D/YY"
+      default-image-extension: svg

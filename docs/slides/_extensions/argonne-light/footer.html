@@ -1,0 +1,110 @@
+<div class="deck-date"></div>
+<div class="deck-logos">
+
+  <img src="veritas_mark.png" alt="Veritas">
+</div>
+<script>
+  // Inside the Obsidian "Slides hub" preview (opened as ...?edit=1&obsidian=1): no file picker exists in
+  // Electron, so the editing toolbar's Save hands the new .qmd to the plugin, which writes the file.
+  // After Save the picked blocks are written as `::: {.absolute ...}` fences and leave the flow for good;
+  // keep a spacer of the original height in the .qmd so the rest of the slide stays where it was.
+  function keepFlow(text) {
+    document.querySelectorAll('.editable-container').forEach(function (c) {
+      var node = c.querySelector('[data-slides-edit-spaced]');
+      var sp = node && node._slidesEditSpacer;
+      if (!sp || !sp.isConnected) return;
+      var L = Math.round(parseFloat(c.style.left) || 0), T = Math.round(parseFloat(c.style.top) || 0);
+      var h = Math.round(parseFloat(sp.style.height) || 0);
+      if (!h) return;
+      var alt = function (n) { return '(?:' + (n - 1) + '|' + n + '|' + (n + 1) + ')'; };
+      var keepLine = '<div class="slides-edit-keep" style="height:' + h + 'px"></div>';
+      var fence = new RegExp('^::: \\{[^\\n]*\\.absolute left=' + alt(L) + 'px top=' + alt(T) + 'px[^\\n]*\\}$', 'm');
+      var m = fence.exec(text);
+      if (m) {
+        var close = text.indexOf('\n:::\n', m.index + m[0].length);
+        if (close < 0) return;
+        var at = close + 5;
+        if (text.substr(at, 30).indexOf('slides-edit-keep') >= 0) return;
+        text = text.slice(0, at) + keepLine + '\n' + text.slice(at);
+        return;
+      }
+      var img = new RegExp('^!\\[[^\\]]*\\]\\([^)]*\\)\\{[^\\n]*\\.absolute left=' + alt(L) + 'px top=' + alt(T) + 'px[^\\n]*\\}$', 'm');
+      m = img.exec(text);
+      if (m) {
+        var end = m.index + m[0].length;
+        if (text.substr(end, 40).indexOf('slides-edit-keep') >= 0) return;
+        text = text.slice(0, end) + '\n\n' + keepLine + text.slice(end);
+      }
+    });
+    return text;
+  }
+  if (/[?&]obsidian=1/.test(location.search) && window.parent !== window) {
+    window.showSaveFilePicker = async function () {
+      return { createWritable: async function () {
+        var parts = [];
+        return {
+          write: async function (c) { parts.push(typeof c === 'string' ? c : await new Response(c).text()); },
+          close: async function () {
+            window.parent.postMessage({ type: 'slides-hub-save', file: window._input_filename || '', content: keepFlow(parts.join('')) }, '*');
+          }
+        };
+      } };
+    };
+  }
+  // Editing toolbar (quarto-revealjs-editable) only when opened as /?edit=1 or #edit (see `slides edit`);
+  // hidden while presenting and in the decktape PDF.
+  if (/[?&]edit=1/.test(location.search) || location.hash === '#edit') {
+    document.body.classList.add('slides-edit');
+    // auto-modify: keep the editing toolbar in Modify so every editable element stays clickable.
+    // The extension leaves Modify after each pick; re-enter unless the user pressed Escape.
+    // keep the flow stable while editing: a picked block is moved into an absolutely positioned
+    // .editable-container, so the rest would slide up; leave a spacer of its height where it was (edit-time only)
+    new MutationObserver(function (muts) {
+      muts.forEach(function (m) {
+        if (m.type !== 'childList' || !m.removedNodes.length) return;
+        if (!m.target || m.target.closest('.editable-container') || m.target.classList.contains('slides-edit-spacer')) return;
+        m.removedNodes.forEach(function (node) {
+          if (node.nodeType !== 1 || node.classList.contains('slides-edit-spacer')) return;
+          setTimeout(function () {
+            if (!node.isConnected || !node.closest('.editable-container')) return;
+            if (node.dataset.slidesEditSpaced) return;
+            node.dataset.slidesEditSpaced = '1';
+            node._slidesEditSpacer = null;
+            var cs = getComputedStyle(node);
+            var h = node.offsetHeight + (parseFloat(cs.marginTop) || 0) + (parseFloat(cs.marginBottom) || 0);
+            if (!h) return;
+            var sp = document.createElement('div');
+            sp.className = 'slides-edit-spacer';
+            sp.style.height = h + 'px';
+            var ref = m.nextSibling;
+            while (ref && ref.nodeType !== 1 && ref.nextSibling) ref = ref.nextSibling;
+            if (ref && ref.parentNode === m.target) m.target.insertBefore(sp, ref); else m.target.appendChild(sp);
+            node._slidesEditSpacer = sp;
+          }, 30);
+        });
+      });
+    }).observe(document.body, { subtree: true, childList: true });
+    var escaped = false;
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { escaped = true; setTimeout(function () { escaped = false; }, 1500); } }, true);
+    var tries = 0, t = setInterval(function () {
+      var b = document.querySelector('#editable-toolbar .toolbar-modify');
+      if (!b) { if (++tries > 100) { clearInterval(t); } return; }
+      clearInterval(t);
+      b.click();
+      new MutationObserver(function () {
+        if (!b.classList.contains('active') && !escaped) { setTimeout(function () { if (!b.classList.contains('active') && !escaped) { b.click(); } }, 150); }
+      }).observe(b, { attributes: true, attributeFilter: ['class'] });
+    }, 100);
+  }
+  // Footer date = the document's `date:` (as shown on the title slide), so nothing is hard-coded.
+  (function () {
+    var d = document.querySelector('#title-slide .date');
+    var el = document.querySelector('.deck-date');
+    if (d && el) el.textContent = d.textContent.trim();
+  })();
+  // Tables inside a div with class "rows" reveal one row per click; everything else appears at once.
+  document.querySelectorAll('.reveal .slides section .rows table tbody tr').forEach(function (tr) {
+    tr.classList.add('fragment');
+  });
+  if (window.Reveal && Reveal.isReady && Reveal.isReady()) { Reveal.sync(); }
+</script>

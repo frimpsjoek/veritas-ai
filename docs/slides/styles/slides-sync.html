@@ -1,0 +1,206 @@
+<script src="styles/qrcode-2.0.4.js"></script>
+<script>
+/* Live presenting add-on (slides web): audience follow, ?remote presenter, follow-along QR.
+   - QR: `::: {.follow-qr}` blocks and key Q (full-screen) encode <meta name="slides-public-url"> (else this page's URL).
+   - Live: only when <meta name="slides-live" content="wss://…/room/<sha256(secret)>"> is present (web copies only).
+     Plain URL = follower (mirrors slide, build step, blackout; "Rejoin" after looking around).
+     ?remote=<secret> = presenter (drives followers; phone layout with Next/Prev, notes, next title, timer, viewers).
+   - Idle inside speaker-view iframes (?receiver, or framed) so they never broadcast. */
+(function () {
+  var meta = function (n) { var m = document.querySelector('meta[name="' + n + '"]'); return m ? m.content : ''; };
+  var params = new URLSearchParams(location.search);
+  var framed = window.top !== window || params.has('receiver');
+  // public address: web copy meta, else the url= written on a follow-qr block by `slides addons` (local HTML, PDF)
+  var blockUrl = function () { var b = document.querySelector('.follow-qr[data-url]'); return b ? b.dataset.url : ''; };
+  var publicUrl = meta('slides-public-url') || blockUrl() || (location.origin + location.pathname);
+
+  function qrSvg(text) {
+    var q = qrcode(0, 'M'); q.addData(text); q.make();
+    return q.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+  }
+
+  function initQr() {
+    document.querySelectorAll('.follow-qr').forEach(function (el) {
+      var url = meta('slides-public-url') || el.dataset.url || publicUrl;
+      el.innerHTML = '<div class="follow-qr-code">' + qrSvg(url) + '</div><div class="follow-qr-url">' +
+        url.replace(/^https?:\/\//, '') + '</div>';
+    });
+    var overlay = document.createElement('div');
+    overlay.className = 'qr-overlay';
+    overlay.innerHTML = '<div class="qr-overlay-box"><div class="qr-overlay-code">' + qrSvg(publicUrl) +
+      '</div><div class="qr-overlay-text">Scan to follow along</div><div class="follow-qr-url">' +
+      publicUrl.replace(/^https?:\/\//, '') + '</div></div>';
+    overlay.addEventListener('click', function () { overlay.classList.remove('open'); });
+    document.body.appendChild(overlay);
+    Reveal.addKeyBinding({ keyCode: 81, key: 'Q', description: 'Follow-along QR code' }, function () {
+      overlay.classList.toggle('open');
+    });
+  }
+
+  function initLive() {
+    var relay = meta('slides-live');
+    if (!relay || framed) return;
+    var secret = params.get('remote');
+    var presenter = !!secret;
+    // reveal turns narrow screens (< 435 px) into a scrolling page; live phones must show the slide itself
+    // 0, not null: reveal only re-checks (and deactivates) scroll view when the width is a number
+    Reveal.configure({ scrollActivationWidth: 0 });
+    Reveal.layout();
+    var ADOPT_MS = 15 * 60 * 1000, pendingState = null;
+    if (presenter) history.replaceState(null, '', location.pathname + location.hash); // keep the key out of the address bar
+
+    var pill = document.createElement('div');
+    pill.className = 'live-pill';
+    document.body.appendChild(pill);
+    // quiet badge: good states fade after a few seconds; only problems (offline, rejected key) stay visible
+    var pillTimer = null;
+    var setPill = function (cls, text) {
+      if (pill.textContent === text && pill.classList.contains(cls)) return; // same state: keep it hidden
+      pill.className = 'live-pill ' + cls; pill.textContent = text;
+      clearTimeout(pillTimer);
+      if (cls !== 'offline') pillTimer = setTimeout(function () { pill.classList.add('quiet'); }, cls === 'live' ? 3000 : 6000);
+    };
+
+    var ws = null, backoff = 1000, remote = null, following = true, viewers = 0, started = Date.now();
+
+    var same = function (s) {
+      var i = Reveal.getIndices();
+      return s && i.h === s.indexh && (i.v || 0) === (s.indexv || 0) &&
+        (s.indexf === undefined || (i.f === undefined ? -1 : i.f) === s.indexf);
+    };
+    var apply = function (s) {
+      if (!s || same(s) && Reveal.isPaused() === !!s.paused) return;
+      Reveal.setState({ indexh: s.indexh, indexv: s.indexv, indexf: s.indexf, paused: !!s.paused, overview: false });
+    };
+    var send = function () {
+      if (!presenter || !ws || ws.readyState !== 1) return;
+      ws.send(JSON.stringify({ type: 'state', state: Reveal.getState() }));
+    };
+
+    // follower UI: Rejoin button when the viewer looks around on their own
+    var rejoin = document.createElement('button');
+    rejoin.className = 'live-rejoin';
+    rejoin.textContent = 'Rejoin live';
+    rejoin.addEventListener('click', function () { following = true; rejoin.classList.remove('show'); apply(remote); });
+    if (!presenter) document.body.appendChild(rejoin);
+    var onLocalMove = function () {
+      if (presenter) { send(); updatePanel(); return; }
+      if (remote && !same(remote)) { following = false; rejoin.classList.add('show'); }
+    };
+    ['slidechanged', 'fragmentshown', 'fragmenthidden', 'paused', 'resumed'].forEach(function (ev) { Reveal.on(ev, onLocalMove); });
+
+    function connect() {
+      setPill('waiting', presenter ? 'Connecting…' : 'Waiting for presenter');
+      ws = new WebSocket(relay);
+      ws.onopen = function () {
+        backoff = 1000;
+        if (presenter) ws.send(JSON.stringify({ type: 'hello', secret: secret }));
+      };
+      ws.onmessage = function (e) {
+        var m; try { m = JSON.parse(e.data); } catch (err) { return; }
+        if (m.type === 'hello') {
+          // join a running talk (recent stored state) or start it from here
+          if (m.role === 'presenter') { setPill('live', '● Presenting'); if (pendingState) apply(pendingState); else send(); pendingState = null; }
+          else { presenter = false; setPill('offline', 'Remote key rejected'); }
+        } else if (m.type === 'state') {
+          if (presenter && pill.textContent !== '● Presenting') { if (m.age < ADOPT_MS) pendingState = m.state; return; }
+          remote = m.state;
+          if (presenter) { apply(remote); return; } // another presenter screen (phone ↔ laptop)
+          setPill('live', '● Live');
+          if (following) apply(remote); else rejoin.classList.add('show');
+        } else if (m.type === 'viewers') {
+          viewers = m.n; updatePanel();
+        }
+      };
+      ws.onclose = function () {
+        setPill('offline', 'Offline');
+        setTimeout(connect, backoff);
+        backoff = Math.min(backoff * 2, 30000);
+      };
+    }
+    setInterval(function () { if (ws && ws.readyState === 1) ws.send('ping'); }, 25000);
+    connect();
+
+    // presenter panel: phone = Next/Prev + notes + next title; laptop = small HUD
+    var panel = null;
+    function nextTitle() {
+      var slides = Reveal.getSlides(), cur = Reveal.getCurrentSlide(), k = slides.indexOf(cur);
+      var nxt = slides[k + 1];
+      if (!nxt) return 'End of deck';
+      var h = nxt.querySelector('h1, h2, h3');
+      return h ? h.textContent.trim() : 'Slide ' + (k + 2);
+    }
+    function clock() {
+      var s = Math.floor((Date.now() - started) / 1000);
+      return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+    }
+    function updatePanel() {
+      if (!panel) return;
+      panel.querySelector('.rp-viewers').textContent = viewers + (viewers === 1 ? ' viewer' : ' viewers');
+      panel.querySelector('.rp-clock').textContent = clock();
+      var next = panel.querySelector('.rp-next'), notes = panel.querySelector('.rp-notes');
+      if (next) next.textContent = 'Next: ' + nextTitle();
+      if (notes) notes.innerHTML = Reveal.getSlideNotes() || '<span class="rp-empty">No notes</span>';
+    }
+    if (presenter) {
+      var phone = window.matchMedia('(max-width: 820px), (pointer: coarse)').matches;
+      panel = document.createElement('div');
+      panel.className = phone ? 'remote-panel phone' : 'remote-panel hud';
+      panel.innerHTML = phone
+        ? '<div class="rp-row"><span class="rp-clock"></span><span class="rp-viewers"></span></div>' +
+          '<div class="rp-buttons"><button class="rp-prev">‹ Prev</button><button class="rp-nextbtn">Next ›</button></div>' +
+          '<div class="rp-next"></div><div class="rp-notes"></div>'
+        : '<span class="rp-viewers"></span> · <span class="rp-clock"></span>';
+      document.body.appendChild(panel);
+      if (phone) {
+        document.body.classList.add('remote-phone');
+        panel.querySelector('.rp-prev').addEventListener('click', function () { Reveal.prev(); });
+        panel.querySelector('.rp-nextbtn').addEventListener('click', function () { Reveal.next(); });
+        panel.querySelector('.rp-clock').addEventListener('click', function () { started = Date.now(); updatePanel(); });
+        Reveal.layout();
+        var lock = function () { if (navigator.wakeLock) navigator.wakeLock.request('screen').catch(function () {}); };
+        document.addEventListener('click', lock, { once: true });
+        document.addEventListener('visibilitychange', function () { if (!document.hidden) lock(); });
+      }
+      setInterval(updatePanel, 1000);
+      updatePanel();
+    }
+  }
+
+  function init() { initQr(); initLive(); }
+  if (window.Reveal && Reveal.isReady && Reveal.isReady()) init(); else if (window.Reveal) Reveal.on('ready', init); else window.addEventListener('load', init);
+})();
+</script>
+<style>
+.follow-qr { display: flex; flex-direction: column; align-items: center; gap: 0.2em; }
+.follow-qr-code svg { width: 7em; height: 7em; display: block; }
+.follow-qr-url { font-size: 0.45em; color: #555; }
+/* on a cover: small white card at the right, below the title band (covers keep their event/date corners) */
+.reveal .slides section .follow-qr.cover-qr { position: absolute; right: 3.5%; bottom: 17%; z-index: 5; background: #fff; padding: 0.25em 0.25em 0.15em; border-radius: 0.3em; box-shadow: 0 2px 10px rgba(0,0,0,0.25); }
+.reveal .slides section .follow-qr.cover-qr .follow-qr-code svg { width: 4.2em; height: 4.2em; }
+.reveal .slides section .follow-qr.cover-qr .follow-qr-url { font-size: 0.32em; color: #333; }
+.qr-overlay { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(255,255,255,0.97); z-index: 10000; cursor: pointer; }
+.qr-overlay.open { display: flex; }
+.qr-overlay-box { text-align: center; }
+.qr-overlay-code svg { width: min(70vh, 80vw); height: min(70vh, 80vw); display: block; margin: 0 auto; }
+.qr-overlay-text { font-size: 2.2rem; font-weight: 600; margin-top: 0.4rem; color: #1a1a1a; }
+.qr-overlay .follow-qr-url { font-size: 1.3rem; }
+.live-pill { position: fixed; top: 10px; right: 12px; z-index: 9000; font: 600 13px/1 system-ui, sans-serif; padding: 6px 10px; border-radius: 999px; background: #eef2f7; color: #1f3a5f; pointer-events: none; }
+.live-pill.live { background: #e6f4ee; color: #0b6b45; }
+.live-pill.offline { background: #f3f3f3; color: #777; }
+.live-pill { transition: opacity 0.6s; }
+.live-pill.quiet { opacity: 0; }
+.live-rejoin { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 9000; display: none; font: 600 16px system-ui, sans-serif; padding: 10px 18px; border: 0; border-radius: 999px; background: #0082ca; color: #fff; box-shadow: 0 4px 16px rgba(0,0,0,0.2); }
+.live-rejoin.show { display: block; }
+.remote-panel.hud { position: fixed; bottom: 10px; left: 12px; z-index: 9000; font: 600 13px system-ui, sans-serif; color: #555; background: rgba(255,255,255,0.85); padding: 5px 9px; border-radius: 6px; }
+body.remote-phone .reveal { height: 42vh !important; }
+.remote-panel.phone { position: fixed; left: 0; right: 0; bottom: 0; top: 42vh; z-index: 9000; background: #fff; border-top: 1px solid #ddd; display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; font: 16px system-ui, sans-serif; overflow-y: auto; }
+.remote-panel.phone .rp-row { display: flex; justify-content: space-between; font-weight: 600; color: #444; }
+.remote-panel.phone .rp-buttons { display: flex; gap: 12px; }
+.remote-panel.phone .rp-buttons button { flex: 1; font: 700 22px system-ui, sans-serif; padding: 18px 0; border: 0; border-radius: 12px; background: #0082ca; color: #fff; }
+.remote-panel.phone .rp-buttons .rp-prev { flex: 0.6; background: #e8eef4; color: #1f3a5f; }
+.remote-panel.phone .rp-next { font-weight: 600; color: #0082ca; }
+.remote-panel.phone .rp-notes { font-size: 17px; line-height: 1.4; color: #222; }
+.rp-empty { color: #999; }
+@media print { .live-pill, .live-rejoin, .remote-panel, .qr-overlay { display: none !important; } }
+</style>

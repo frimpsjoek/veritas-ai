@@ -1,0 +1,65 @@
+<script>
+/* click-to-zoom for slide images (samf.sh style): first click fills the viewport, second click restores */
+(function () {
+  function init() {
+    var deck = document.querySelector('.reveal'); if (!deck) return;
+    var overlay = document.createElement('div'); overlay.className = 'img-zoom-overlay';
+    var big = document.createElement('img'); overlay.appendChild(big); document.body.appendChild(overlay);
+    overlay.addEventListener('click', function () { overlay.classList.remove('open'); });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') overlay.classList.remove('open'); });
+    deck.querySelectorAll('.slides img').forEach(function (img) {
+      if (img.closest('.deck-logos, .footer, .reveal-footer')) return;
+      img.style.cursor = 'zoom-in';
+      img.addEventListener('click', function (e) { e.stopPropagation(); big.src = img.currentSrc || img.src; overlay.classList.add('open'); });
+    });
+  }
+  if (window.Reveal && Reveal.isReady && Reveal.isReady()) init(); else if (window.Reveal) Reveal.on('ready', init); else window.addEventListener('load', init);
+})();
+</script>
+<style>
+.img-zoom-overlay { position: fixed; inset: 0; background: rgba(255,255,255,0.96); display: none; align-items: center; justify-content: center; z-index: 9999; cursor: zoom-out; }
+.img-zoom-overlay.open { display: flex; }
+.img-zoom-overlay img { max-width: 94vw; max-height: 94vh; width: auto; height: auto; box-shadow: 0 8px 40px rgba(0,0,0,0.25); background: white; }
+/* inline code and names as tinted chips, like samf.sh */
+.reveal .slides code:not(pre code) { background: #eef2f7; color: #1f3a5f; padding: 0.05em 0.35em; border-radius: 0.25em; font-size: 0.9em; }
+.reveal .slides pre { font-size: 0.6em; }
+/* tables: zebra rows, scroll if tall, header pinned */
+.reveal .slides table { display: block; max-height: 60vh; overflow: auto; }
+.reveal .slides table thead th { position: sticky; top: 0; background: #fff; }
+.reveal .slides table tbody tr:nth-child(even) { background: #f6f8fa; }
+</style>
+
+<script>
+/* cover title fit: a long title shrinks (via --cover-fit on its slide, never written into the .qmd) until it ends
+   above the name/id block; short titles keep the family size. Same in edit mode, normal view and PDF. */
+(function () {
+  var GAP = 28, MIN = 0.55;
+  function fit(sec) {
+    if (!sec || !sec.classList.contains('cover')) return;
+    var title = sec.querySelector('.cover-title'), id = sec.querySelector('.cover-id, .cover-authors');
+    if (!title || !id) return;
+    if (!title.getBoundingClientRect().height) return; // not laid out yet (hidden tab/iframe): the resize hooks retry
+    sec.style.setProperty('--cover-fit', '1');
+    var s = (window.Reveal && Reveal.getScale && Reveal.getScale()) || 1;
+    var idTop = id.getBoundingClientRect().top, t = title.getBoundingClientRect();
+    if (idTop <= t.top) return; // id beside or above the title (e.g. cover E band): nothing to fit
+    var k = 1;
+    // bottom of the text, not of the box: a saved {.absolute height=…} box can be shorter than its text
+    var bottom = function () { var r = title.getBoundingClientRect(); return Math.max(r.bottom, r.top + title.scrollHeight * s); };
+    while (k > MIN && bottom() > idTop - GAP * s) {
+      k = Math.round((k - 0.03) * 100) / 100;
+      sec.style.setProperty('--cover-fit', String(k));
+    }
+  }
+  function run() { fit(Reveal.getCurrentSlide()); }
+  function init() {
+    run();
+    Reveal.on('slidechanged', run);
+    // a deck loaded in a hidden tab/iframe (Obsidian Slides hub) has no layout yet: fit again once it gets a size
+    Reveal.on('resize', run);
+    if (window.ResizeObserver) new ResizeObserver(function () { requestAnimationFrame(run); }).observe(document.documentElement);
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(run);
+  }
+  if (window.Reveal && Reveal.isReady && Reveal.isReady()) init(); else if (window.Reveal) Reveal.on('ready', init); else window.addEventListener('load', init);
+})();
+</script>

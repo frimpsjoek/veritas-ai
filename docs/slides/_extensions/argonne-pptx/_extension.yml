@@ -1,0 +1,13 @@
+title: Argonne PowerPoint export
+author: Joseph Frimpong
+version: 1.0.0
+quarto-required: ">=1.4.0"
+contributes:
+  formats:
+    pptx:
+      reference-doc: reference-light.pptx
+      filters:
+        - flatten-reveal.lua
+      slide-level: 2
+      default-image-extension: png
+      incremental: false

@@ -1,0 +1,3 @@
+/* classic fragment motion: fade up 0.4em, 250 ms. Pair with `transition: slide` in the deck YAML. */
+.reveal .slides section .fragment { opacity: 0; transform: translateY(0.4em); transition: opacity 250ms ease, transform 250ms ease; visibility: visible; }
+.reveal .slides section .fragment.visible { opacity: 1; transform: none; }

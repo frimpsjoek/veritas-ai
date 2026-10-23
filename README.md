@@ -12,6 +12,8 @@ Veritas AI: Joseph Frimpong, Oded Asiedu and Huihuo Zheng.
 
 **Demo video (2 min):** [docs/video/veritas-demo.mp4](https://github.com/frimpsjoek/veritas-ai/blob/main/docs/video/veritas-demo.mp4)
 
+**Documentation:** [docs/](docs/README.md) · **Slides:** [PDF](docs/slides/veritas-osi-slides.pdf)
+
 ## What it does
 
 - **Chat over your own library and notes**, with every answer cited to a paper or note you can open.
@@ -39,7 +41,7 @@ Valency connector, the research personas, and Veritas itself: one repository and
 | `web/` | Web app (browser and phone) |
 | `zotero/` | Zotero plugin |
 | `obsidian/` | Obsidian plugin |
-| `docs/` | Specs and the research personas |
+| `docs/` | [Documentation](docs/README.md), specs, slides and the research personas |
 
 Run `./check.sh` to build and test everything.
 

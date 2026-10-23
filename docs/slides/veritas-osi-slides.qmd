@@ -1,0 +1,236 @@
+---
+pagetitle: "Veritas AI"
+# No `title:` -> Quarto writes no automatic title slide; the first `## {.cover ...}` slide is the cover.
+# (Keep author/date for the HTML metadata.)
+author: "Joseph Frimpong"
+date: "2026-10-22"
+# website: `slides web` publishes only when public: true (unpublished work stays local); web: <slug> sets the URL
+public: false
+format:
+  argonne-light-revealjs:
+    # ---- animation knobs (pick one per line) ----
+    # fragments (bullets appearing one by one): true | false
+    incremental: false
+    # fragment motion: anim-samf.css = slide in 2ch from the right + fade (Sam's) | anim-classic.css = fade up
+    # font: font-plex.css (IBM Plex, Argonne default) | font-helvetica.css | font-futura.css | font-calibri.css | font-opensans.css | font-avenir.css
+    # covers.css last: the five cover families (.cover-a … .cover-e); swap the cover slide below with any block from cover-snippets.md
+    css: [styles/custom-voice.css, styles/anim-samf.css, styles/font-plex.css, styles/ggpi-extra.css, styles/covers.css, styles/veritas.css]
+    # slide change: fade (closest to Sam's) | slide (push) | convex | zoom | none
+    transition: fade
+    transition-speed: fast
+    margin: 0.02        # reveal's outer margin (default 0.04); smaller = title closer to the top edge
+    background-transition: fade
+    code-copy: true
+    highlight-style: github
+    # slides-sync.html: live follow (audience), ?remote presenter, follow-along QR (key Q, `::: {.follow-qr}`)
+    include-after-body: [styles/zoom-copy.html, styles/slides-sync.html]
+    revealjs-plugins:
+      - editable
+filters:
+  - editable
+---
+
+
+## {.cover .cover-d background-color="#1b2540"}
+
+::: {.cover-motif}
+![](figs/veritas-mark.png)
+:::
+
+::: {.cover-title}
+Veritas AI: an open-source research assistant you can check
+:::
+
+::: {.cover-id}
+[Joseph Frimpong · Oded Asiedu · Huihuo Zheng]{.cover-name}
+[Team Veritas AI]{.cover-aff}
+[OSI Hackathon 2026 — October 22, 2026]{.cover-event}
+:::
+
+::: {.notes}
+Veritas reads your own papers, notes and Zotero library, answers with citations you can open, and brings you a daily reading radar.
+:::
+
+## Team Veritas AI
+
+::: {.lead}
+We built Veritas at the **OSI Hackathon 2026**.
+:::
+
+::: {.team-row}
+::: {.person}
+![](figs/joseph.png){.headshot}
+
+[Joseph Frimpong]{.pname}
+
+[Argonne National Laboratory]{.paff}
+:::
+::: {.person}
+![](figs/oded.png){.headshot}
+
+[Oded Asiedu]{.pname}
+:::
+::: {.person}
+![](figs/huihuo.png){.headshot}
+
+[Huihuo Zheng]{.pname}
+
+[Argonne National Laboratory]{.paff}
+:::
+:::
+
+::: {.notes}
+We built Veritas at the OSI Hackathon 2026.
+:::
+
+## Three places, no link
+
+::: {.lead}
+A scientist's knowledge sits in **three places that do not talk to each other**:
+:::
+
+::: {.places}
+::: {.place}
+![](figs/logos/zotero.svg){.biglogo}
+
+**Reference manager**
+:::
+::: {.place}
+![](figs/logos/obsidian.svg){.biglogo}
+
+**Notes**
+:::
+::: {.place}
+![](figs/logos/arxiv.svg){.biglogo}
+
+**New preprints**
+:::
+:::
+
+::: {.iconlist}
+- ![](figs/icons/chat.svg){.ic} Chat assistants answer from none of them, and cite papers you cannot open
+- ![](figs/icons/check.svg){.ic} Veritas joins the three on **your own device** and links every answer to a paper or note you can check
+:::
+
+::: {.notes}
+The problem in one sentence; then what Veritas does about it.
+:::
+
+## Reading radar
+
+:::: {.columns}
+::: {.column width="62%"}
+![](figs/radar.png)
+:::
+::: {.column width="38%"}
+::: {.iconlist}
+- ![](figs/icons/paper.svg){.ic} Starts from **the papers you wrote** and your interests
+- ![](figs/icons/settingsRadar.svg){.ic} Watches arXiv, journals, **RSS feeds** and Valency Bond
+- ![](figs/icons/filter.svg){.ic} Keeps only new papers close to your work, and says which of your papers each one matches
+- ![](figs/icons/thumbsUp.svg){.ic} Like or dislike a paper: it **learns your taste**
+:::
+
+::: {.logorow}
+![](figs/logos/arxiv.svg){.ic .logo} ![](figs/logos/openalex.png){.ic .logo} ![](figs/logos/chemrxiv.png){.ic .logo} ![](figs/logos/pubmed.svg){.ic .logo} ![](figs/logos/crossref.png){.ic .logo} ![](figs/logos/rss.svg){.ic .logo} ![](figs/logos/valency.svg){.ic .logo}
+:::
+:::
+::::
+
+::: {.notes}
+On Oct 22 the radar kept 15 new papers from 18 sources.
+:::
+
+## Chat with citations
+
+:::: {.columns}
+::: {.column width="62%"}
+![](figs/chat.png)
+:::
+::: {.column width="38%"}
+::: {.iconlist}
+- ![](figs/icons/chat.svg){.ic} Ask about your library, your notes or **today's digest**
+- ![](figs/icons/quote.svg){.ic} Every claim cites a paper or note
+- ![](figs/icons/settingsSources.svg){.ic} Sources on or off per question: Papers, Notes, Scholarly, Web, **Valency**
+:::
+:::
+::::
+
+::: {.notes}
+"What was my reading digest today about?" is answered from the digest itself, with citations to it.
+:::
+
+## Links that open
+
+:::: {.columns}
+::: {.column width="62%"}
+![](figs/reader.png)
+:::
+::: {.column width="38%"}
+::: {.iconlist}
+- ![](figs/icons/book.svg){.ic} A DOI opens **the PDF in your library**
+- ![](figs/icons/open.svg){.ic} Else a **legal open-access copy** (OpenAlex), else the abstract
+- ![](figs/icons/web.svg){.ic} Publishers that block bots and frames no longer break the link
+:::
+:::
+::::
+
+::: {.notes}
+A paywalled ACS DOI opened its open-access arXiv preprint inside Veritas.
+:::
+
+## Connects to
+
+:::: {.columns .plain3}
+::: {.column width="32%"}
+**Your sources**
+
+::: {.iconlist}
+- ![](figs/logos/zotero.svg){.ic .logo} Zotero library
+- ![](figs/logos/obsidian.svg){.ic .logo} Obsidian notes
+- ![](figs/icons/folder.svg){.ic} Any folder of notes and PDFs
+:::
+:::
+::: {.column width="32%"}
+**The literature**
+
+::: {.iconlist}
+- ![](figs/logos/arxiv.svg){.ic .logo} arXiv
+- ![](figs/logos/openalex.png){.ic .logo} OpenAlex and journals
+- ![](figs/logos/rss.svg){.ic .logo} RSS feeds you follow
+- ![](figs/logos/valency.svg){.ic .logo} Valency Bond: 500M+ papers, ChemRxiv included
+:::
+:::
+::: {.column width="32%"}
+**Your AI**
+
+::: {.iconlist}
+- ![](figs/icons/settingsMac.svg){.ic} Runs on your own device
+- ![](figs/logos/mcp.png){.ic .logo} Through MCP, your library plugs into any AI chat that supports it
+- ![](figs/logos/claude.png){.ic .logo} Claude
+- ![](figs/logos/chatgpt.png){.ic .logo} ChatGPT and others
+:::
+:::
+::::
+
+::: {.notes}
+Sources, literature, and how it reaches your AI.
+:::
+
+## Veritas AI {.textslide}
+
+::: {.lead}
+Before the event we had built the Zotero and Obsidian tools. **During the hackathon** we built:
+:::
+
+::: {.iconlist}
+- ![](figs/icons/settingsRadar.svg){.ic} the reading radar and daily digest, with tools the assistant uses to read it
+- ![](figs/icons/open.svg){.ic} links that open papers directly, and the Valency Bond connector
+- ![](figs/icons/book.svg){.ic} a knowledge base of 31 research personas, and Veritas itself as one open-source project
+- ![](figs/icons/sparkle.svg){.ic} **Next:** persona agents: pick fields such as HPC and computational chemistry, and Veritas answers from each angle
+:::
+
+![](figs/icons/check.svg){.ic} **Open source (MIT):** [github.com/frimpsjoek/veritas-ai](https://github.com/frimpsjoek/veritas-ai)
+
+::: {.notes}
+Close with the repository link.
+:::

@@ -1,0 +1,198 @@
+/*-- scss:defaults --*/
+// Light variant: white slides, Argonne-blue titles, near-black text, thin dark progress line.
+// the Argonne and MICCoM logos and the slide number underneath (from the group-meeting deck style).
+// Fonts from joseph's website (frimpsjoek.github.io): IBM Plex Sans body; headings = IBM Plex Sans SemiBold (600);
+// IBM Plex Mono for code (same superfamily).
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Serif:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+$body-bg: #ffffff;
+$body-color: #1a1a1a;
+$link-color: #0082ca;
+$presentation-heading-color: #0082ca;
+$presentation-heading-font: "IBM Plex Sans", -apple-system, "Segoe UI", sans-serif;
+$font-family-sans-serif: "IBM Plex Sans", -apple-system, "Segoe UI", sans-serif;
+$font-family-monospace: "IBM Plex Mono", Menlo, Monaco, Consolas, monospace;
+$presentation-font-size-root: 33px;
+$presentation-heading-font-weight: 600;
+$presentation-h2-font-size: 1.75em;
+$code-color: #0b5f8a;
+$code-block-bg: #f0f0f0;
+$table-border-color: #bbbbbb;
+
+/*-- scss:rules --*/
+.reveal .slides section h2 {
+  margin-bottom: 0.35em;
+  letter-spacing: 0.01em;
+}
+
+// subtitle line under the title, like "Understanding entangled state dynamics is ..."
+.reveal .lead {
+  font-size: 1.05em;
+  margin: 0 0 0.6em 0;
+  color: #1a1a1a;
+}
+
+.reveal .muted { color: #666666; }
+.reveal .peach { color: #0082ca; }
+.reveal .good  { color: #1b7f4b; }
+.reveal .bad   { color: #c0392b; }
+.reveal .small { font-size: 0.7em; }
+
+.reveal table { font-size: 0.62em; }
+.reveal table th { color: #0082ca; border-bottom: 1px solid #555; }
+.reveal table td { border-bottom: 1px solid #ddd; }
+
+.reveal .question {
+  position: absolute;
+  bottom: 1.6em;
+  left: 0;
+  font-size: 1em;
+}
+
+// ---- bottom bar: white line + end tick, date left, affiliation centre, slide number right ----
+.reveal .progress {
+  height: 3px;
+  bottom: 68px;
+  left: 70px;
+  right: 220px;
+  width: auto;
+  background: #1a1a1a;
+  color: #0082ca;          // filled part = progress through the deck
+}
+.reveal .progress::after {  // vertical tick at the right end, as in the template
+  content: "";
+  position: absolute;
+  right: -2px;
+  bottom: -22px;
+  width: 4px;
+  height: 48px;
+  background: #1a1a1a;
+}
+.reveal .footer {
+  bottom: 20px !important;
+  font-size: 22px !important;
+  font-weight: 700;
+  color: #0082ca !important;
+}
+.reveal .slide-number {
+  background: transparent !important;
+  color: #1a1a1a !important;
+  font-size: 40px !important;
+  right: 150px !important;        // left of the navigation arrows
+  bottom: 38px !important;
+}
+.reveal .controls { color: #0082ca; bottom: 22px; right: 22px; }
+.deck-date {
+  position: fixed;
+  left: 80px;
+  bottom: 22px;
+  color: #1a1a1a;
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: 22px;
+  z-index: 30;
+}
+.reveal .slides img { max-height: 60vh; width: auto; height: auto; object-fit: contain; }
+.reveal .slides .column img { max-height: 58vh; max-width: 100%; }
+
+.deck-logos {
+  position: fixed;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 34px;
+  z-index: 30;
+}
+.deck-logos img { height: 40px; width: auto; margin: 0; }
+.deck-logos img[alt="MICCoM"] { height: 34px; }
+
+.reveal .small pre code { font-size: 1.35em; line-height: 1.35; }
+
+.reveal .bigtable table { font-size: 0.8em; }
+
+// ---- callout cards (goal / idea / result / caution), in the spirit of samforeman.me talks ----
+.reveal div.callout {
+  background: #f3f5f7;
+  border: none;
+  border-left: 5px solid #0082ca;
+  border-radius: 8px;
+  margin: 0.4em 0 0.6em 0;
+  font-size: 0.82em;
+}
+.reveal div.callout .callout-header { background: transparent !important; border: none; }
+.reveal div.callout .callout-title-container { color: #0082ca; font-weight: 700; }
+.reveal div.callout .callout-body-container, .reveal div.callout .callout-body { color: #1a1a1a; }
+.reveal div.callout-note    { border-left-color: #0072B2; }
+.reveal div.callout-tip     { border-left-color: #1b7f4b; }
+.reveal div.callout-warning { border-left-color: #c77c00; }
+.reveal div.callout-important { border-left-color: #c0392b; }
+.reveal div.callout .callout-icon-container { display: none; }
+
+.reveal .blue   { color: #0072B2; }
+.reveal .green  { color: #1b7f4b; }
+.reveal .orange { color: #c77c00; }
+.reveal .red    { color: #c0392b; }
+.reveal .katex  { font-size: 1.05em; }
+.reveal .flow { font-size: 0.85em; }
+
+// ---- pipeline boxes (instead of a diagram library) ----
+.reveal .flow { display: flex; align-items: center; justify-content: center; gap: 0.5em; margin: 0.6em 0 0.8em 0; }
+.reveal .flow .box {
+  border: 2px solid #999; border-radius: 12px; background: #f3f5f7;
+  padding: 0.5em 0.9em; text-align: center; font-size: 0.8em; line-height: 1.35; min-width: 9.5em;
+}
+.reveal .flow .box.hot { border-color: #0082ca; box-shadow: 0 0 18px rgba(0, 130, 202, 0.25); }
+.reveal .flow .arrow { font-size: 1.8em; color: #0082ca; }
+.reveal div.callout { font-size: 0.78em; }
+
+// slide menu button (bottom-left) in the deck colours
+.reveal .slide-menu-button { left: 22px !important; bottom: 20px !important; }
+.reveal .slide-menu-button .fas, .reveal .slide-menu-button a { color: #0082ca !important; }
+
+// headings a touch lighter/tighter in Plex Serif
+.reveal .slides section h1, .reveal .slides section h2 { font-weight: 600; letter-spacing: -0.01em; }
+.reveal code { font-family: "IBM Plex Mono", Menlo, monospace; }
+
+// figures fill their column/slide width, never distort (SVGs carry a small natural size)
+.reveal .slides .column img,
+.reveal .slides .fragment img,
+.reveal .slides p > img { width: 100%; height: auto; max-height: 60vh; object-fit: contain; }
+.reveal .slides .column img { max-height: 58vh; }
+
+// quarto-revealjs-editable toolbar: shown only in `slides edit` mode (body.slides-edit), never in talks or PDFs
+body:not(.slides-edit) #editable-toolbar { display: none !important; }
+
+// ---- editing toolbar (quarto-revealjs-editable): one slim row in the deck's colours; only in body.slides-edit ----
+body.slides-edit { --editable-toolbar-height: 36px; --editable-toolbar-gap: 6px; --editable-toolbar-button-padding: 3px 10px; }
+body.slides-edit #editable-toolbar {
+  font-family: "IBM Plex Sans", sans-serif; font-size: 13px; background: rgba(250, 250, 250, 0.97); border-bottom: 1px solid #ccc;
+  box-shadow: none; padding: 0 10px; gap: 6px; height: 36px; min-height: 36px; flex-wrap: nowrap; align-items: center;
+}
+body.slides-edit .editable-toolbar-button-stack { flex-direction: row; gap: 6px; }
+body.slides-edit .editable-toolbar-left, body.slides-edit .editable-toolbar-right { height: 36px; align-items: center; }
+body.slides-edit .editable-toolbar-button, body.slides-edit .editable-toolbar-button-stack .toolbar-button {
+  font-family: inherit; font-size: 13px; line-height: 1; height: 26px; padding: 0 10px; border-radius: 6px; gap: 4px;
+  border: 1px solid #bbb; background: #f2f2f2; color: #1a1a1a; box-shadow: none; min-height: 0;
+}
+body.slides-edit .editable-toolbar-button .toolbar-icon { display: none; }
+body.slides-edit .editable-toolbar-button:hover { border-color: #0082ca; color: #0082ca; filter: none; }
+body.slides-edit .editable-toolbar-button.toolbar-modify { border-color: #0082ca; color: #0082ca; font-weight: 600; }
+body.slides-edit .editable-toolbar-button.toolbar-modify.active { outline: none; opacity: 1; background: #0082ca; color: #fff; }
+body.slides-edit .editable-toolbar-button.toolbar-save { background: #0082ca; color: #fff; border-color: #0082ca; font-weight: 600; }
+body.slides-edit .editable-toolbar-left > * { display: flex !important; }
+body.slides-edit .editable-toolbar-button-stack > * { display: flex !important; }
+body.slides-edit .editable-toolbar-left { gap: 6px; }
+body.slides-edit .editable-toolbar-button.toolbar-modify.active .toolbar-label, body.slides-edit .editable-toolbar-button.toolbar-modify.active { color: #fff !important; }
+body.slides-edit .editable-toolbar-button.toolbar-save .toolbar-label { color: #fff !important; }
+body.slides-edit .slides-edit-spacer { visibility: hidden; pointer-events: none; }
+body.slides-edit [data-editable-modified-fence] ol, body.slides-edit [data-editable-modified-fence] ul,
+body.slides-edit ol[data-editable-modified-fence], body.slides-edit ul[data-editable-modified-fence] { list-style-position: inside; }
+
+// quiet navigation controls (2026-10-08): thin grey arrows and menu icon, blue on hover
+.reveal .controls { color: #94a3b8 !important; }
+.reveal .controls button { transform: scale(0.72); transform-origin: bottom right; opacity: .75; }
+.reveal .controls button:hover { color: #0082ca; opacity: 1; }
+.reveal .slide-menu-button { opacity: .55; transform: scale(.8); transform-origin: bottom left; }
+.reveal .slide-menu-button:hover { opacity: 1; }
+.reveal .slide-menu-button .fas, .reveal .slide-menu-button a { color: #64748b !important; }

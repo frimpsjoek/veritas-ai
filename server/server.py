@@ -21,8 +21,8 @@ from mcp.server.mcpserver import MCPServer
 HOME = Path(__file__).resolve().parent
 BASE = f"http://127.0.0.1:{os.environ.get('KB_PORT', '27182')}"
 
-mcp = MCPServer("obsidian-kb", instructions=(
-    "Search the user's Obsidian vault (Second-Brain, ~8,600 notes) and Zotero library (~3,500 papers with abstracts, "
+mcp = MCPServer("veritas", instructions=(
+    "Search the user's notes (Obsidian vault and other folders) and Zotero library (papers with abstracts, "
     "the user's highlights and notes, and full text). Start with search_notes; it returns short snippets with paths. "
     "Call read_note only for results that look relevant, and pass `heading` to read one section of a long note. "
     "Sources: 'personal' (the user's own notes, trust most), 'zotero' (papers; path zotero/KEY, cite as [@citekey]), "

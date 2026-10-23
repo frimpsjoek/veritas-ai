@@ -1,0 +1,64 @@
+/* Extras for seeding-defects decks (GGPI presentation logic) */
+
+/* returning anchor map: current section dark, others grey */
+.reveal .slides section .anchor { display: inline-block; font-size: 0.6em; color: #b4b4b4; margin: -0.3em 0 0.1em 0; letter-spacing: 0.01em; }
+.reveal .slides section p:has(> .anchor) { margin: 0 0 0.25em 0; }
+.reveal .anchor .on { color: #1a1a1a; font-weight: 600; }
+
+/* boxed equation, one per derivation-ladder slide */
+.reveal .eqbox { border: 2px solid #0082ca; border-radius: 10px; padding: 0.7em 0.6em; text-align: center; background: #f7fbfe; font-size: 0.9em; }
+.reveal .eqbox p { margin: 0.2em 0; }
+
+/* citation line on result slides (Galli's small green line) */
+.reveal .slides section .cite { position: absolute; left: 0; bottom: 80px; font-size: 0.6em; color: #2e7d32; font-style: italic; margin: 0; }
+
+/* text-only slides: larger type so the slide is not half empty */
+.reveal .slides section.textslide > ul, .reveal .slides section.textslide > ol { font-size: 1.08em; }
+.reveal .slides section.textslide > ul li, .reveal .slides section.textslide > ol li { margin-bottom: 0.45em; }
+
+/* open questions slide: yellow highlights */
+.reveal .ggpi-oq .column ul { font-size: 0.8em !important; }
+.reveal .ggpi-oq li { margin-bottom: 0.45em; }
+.reveal .hl { background: #fff59d; padding: 0 0.15em; }
+.reveal .ggpi-oq h3 { font-size: 0.9em; color: #0082ca; margin: 0 0 0.3em 0; }
+
+/* compact tables in backups */
+.reveal .compact table { font-size: 0.56em; }
+.reveal .compact table td, .reveal .compact table th { padding: 0.18em 0.4em; }
+
+/* one type size: lists inside callouts are not shrunk a second time */
+.reveal .slides div.callout ul, .reveal .slides div.callout ol, .reveal .slides .column div.callout ul { font-size: 1em !important; }
+/* callout-only slides: callouts at bullet size and a bit larger */
+.reveal .slides section.cards div.callout { font-size: 0.98em !important; }
+.reveal .slides section.cards div.callout li { margin-bottom: 0.35em; }
+/* slides with an equation or a flow: larger body type */
+.reveal .slides section.big .column ul, .reveal .slides section.big > ul { font-size: 1.0em; }
+.reveal .slides section.big .eqbox { font-size: 1.15em; padding: 1.1em 0.6em; }
+.reveal .slides section.big .flow .box { font-size: 0.95em; }
+/* tables: no vertical auto-margin inside the flex column (it pushed tables to mid-slide) */
+.reveal .slides section table { margin: 0.2em 0 0.5em 0 !important; width: 100%; }
+.reveal .slides section.compact table { font-size: 0.66em; }
+.reveal .slides section.glossary table { font-size: 0.6em; }
+.reveal .slides section.glossary table td:first-child, .reveal .slides section.glossary table th:first-child { width: 30%; }
+.reveal .slides section .column img { max-height: 44vh; }
+
+/* ---- figures over text (2026-10-07 second pass) ---- */
+.reveal .slides section .figfull { width: 100%; text-align: center; margin: 0.1em 0 0 0; }
+.reveal .slides section .figfull img { display: block; margin: 0 auto; width: 94% !important; height: auto; max-width: 94%; max-height: 54vh !important; object-fit: contain; }
+.reveal .slides section .figfull.short img, .reveal .slides section .figfull img.short { max-height: 44vh !important; }
+.reveal .slides section.witheq .figfull img { max-height: 38vh !important; }
+.reveal .slides section.witheq .figfull.short img, .reveal .slides section.witheq .figfull img.short { max-height: 34vh !important; }
+.reveal .slides section .figfull .figcap { font-size: 0.6em !important; margin: 0.2em auto 0 auto; max-width: 92%; }
+.reveal .slides section .r-stack.figfull { display: grid; }
+.reveal .slides section .r-stack.figfull > div { width: 100%; }
+.reveal .slides section .caveat { display: block; font-size: 0.62em; margin: 0.35em auto 0 auto; max-width: 92%; padding: 0.2em 0.6em; border-left: 4px solid #c77c00; background: #fff8ec; text-align: left; }
+.reveal .slides section .eqbox { border: 1.5px solid #555; border-radius: 6px; background: #fff; padding: 0.05em 0.6em; margin: 0 auto 0.1em auto; width: fit-content; max-width: 94%; font-size: 0.8em; }
+.reveal .slides section .eqdef { display: block; font-size: 0.56em; color: #444; text-align: center; margin: 0 auto 0.25em auto; max-width: 90%; }
+.reveal .slides section.witheq > .lead { margin-bottom: 0.25em; }
+/* panel builds: anim-samf.css forces .fragment.visible to opacity 1; a fade-out fragment must disappear */
+.reveal .slides section .fragment.fade-out.visible { opacity: 0 !important; visibility: hidden !important; }
+/* later panel covers the earlier one (works in the PDF export, where all fragments are shown) */
+.reveal .slides section .r-stack.figfull > div { background: #fff; }
+
+/* citation line inside the side margins (2026-10-07) */
+.reveal .slides section .cite { left: 6% !important; right: auto !important; }

@@ -1,0 +1,72 @@
+.reveal .columns.equal { display: flex; flex-direction: row; align-items: stretch; gap: 0.6em; }
+.reveal .columns.equal > .column { display: flex; flex-direction: column; flex: 1 1 0; }
+.reveal .columns.equal > .column > div { flex: 1 1 auto; display: flex; flex-direction: column; }
+.reveal .columns.equal > .column > div > div.callout { flex: 1 1 auto; margin: 0; box-sizing: border-box; }
+.reveal .flow { align-items: stretch; }
+.reveal .flow .box { flex: 1 1 0; display: flex; flex-direction: column; justify-content: center; }
+.reveal .flow .arrow { align-self: center; }
+
+/* ---- layout rules for the voice deck (symmetry and alignment) ---- */
+.reveal .columns { display: flex; flex-wrap: nowrap; align-items: center; gap: 0.8em; }
+.reveal .columns > .column { min-width: 0; }
+.reveal .columns.equal { align-items: stretch; }
+.reveal .columns.equal > .column { flex: 1 1 0; }
+.reveal .fig-center { text-align: center; }
+.reveal .fig-center p > img { display: inline-block; }
+
+/* --- samf.sh recipe (Joseph, 2026-10-07): safe-centred fill, one type size --- */
+/* content slides: top-anchored, title at the same height on every slide (Joseph, 2026-10-07) */
+.reveal .slides section.present, .reveal .slides section.past, .reveal .slides section.future { display: flex !important; flex-direction: column; justify-content: flex-start; height: 100%; box-sizing: border-box; padding: 0 6% 64px 6%; margin-top: 0; }
+.reveal .slides section > h2 { flex: 0 0 auto; margin: 0 0 0.35em 0; padding-top: 0; line-height: 1.1; }
+/* title sits near the top edge, like Joseph's PowerPoint decks */
+/* content slides are top-anchored (same title height on every slide); only the title slide is centred */
+.reveal .slides section#title-slide, .reveal .slides section.title-slide { justify-content: center; }
+.reveal .slides section > .lead { font-size: 0.92em; margin: 0 0 0.5em 0; color: #333; }
+.reveal .slides section > .lead strong { color: #111; }
+.reveal .slides section > .columns { flex: 0 0 auto; display: flex; flex-wrap: nowrap; align-items: flex-start; gap: 1em; }
+.reveal .slides section > .columns.equal { align-items: stretch; }
+.reveal .slides section > .fig-center { flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; }
+.reveal .slides section > .fig-center > p, .reveal .slides .column.fig-center > p { width: 100%; text-align: center; margin: 0; }
+.reveal .slides section > .fig-center > p > img, .reveal .slides .column.fig-center > p > img { display: inline-block; width: auto; }
+/* one type size everywhere */
+.reveal .slides section > ul, .reveal .slides section > ol, .reveal .slides .column ul, .reveal .slides .column ol { font-size: 0.88em; }
+.reveal .small, .reveal .columns .small, .reveal .columns .column.small, .reveal div.callout, .reveal div.callout .callout-body { font-size: 0.88em !important; }
+.reveal .slides section > .columns + ul, .reveal .slides section > .fig-center + ul { margin-top: 0.5em; }
+.reveal table { font-size: 0.78em; }
+.reveal .slides section ul li { margin-bottom: 0.2em; }
+/* figures: full column width but capped so lead + figure + caption always fit above the footer */
+.reveal .slides .column img, .reveal .slides .fig-center img, .reveal .slides p > img { width: 100%; max-height: 48vh; object-fit: contain; margin: 0; display: block; }
+.reveal .slides section > .fig-center img { max-height: 42vh; }
+.reveal .slides .column p { margin-top: 0; }
+.reveal .slides .column.fig-center > p > img { height: 30vh; width: auto; max-width: 100%; }
+.reveal .slides .figcap, .reveal .slides .column.fig-center > p + p { font-size: 0.74em; font-style: italic; color: #555; text-align: center; margin-top: 0.25em; line-height: 1.3; }
+.reveal .slides .figcap strong, .reveal .slides .column.fig-center > p + p strong { font-style: normal; color: #111; }
+
+/* side margins (Joseph, 2026-10-07): keep content off the left/right edges in full screen */
+.reveal .slides section.present, .reveal .slides section.past, .reveal .slides section.future { padding-left: 6% !important; padding-right: 6% !important; }
+.reveal .slides section .r-stack.figfull img, .reveal .slides section > .fig-center img { max-width: 100%; }
+
+/* editable plugin pushes .reveal down 100 px even when its toolbar is hidden; undo outside edit mode (2026-10-07) */
+html.has-editable-toolbar body:not(.slides-edit) .reveal { top: 0 !important; height: 100vh !important; }
+
+/* light theme: MICCoM logo with dark letters (stock logo has white letters) */
+.deck-logos img[alt="MICCoM"], .reveal .footer img[alt="MICCoM"] { content: url("miccom_logo_dark.png"); }
+
+/* ---- one-to-one with the editor (2026-10-08): a block the editor has positioned is saved as
+   `::: {.absolute ...}` around it; give it the same look it had as a direct child of the slide ---- */
+.reveal .slides section > h2 + div.absolute > p:first-child { font-size: 0.92em; margin: 0 0 0.5em 0; color: #333; text-align: left; }
+.reveal .slides section > h2 + div.absolute > p:first-child strong { color: #111; }
+.reveal .slides section > div.absolute > ul, .reveal .slides section > div.absolute > ol { font-size: 0.88em; text-align: left; margin-top: 0; }
+.reveal .slides section > div.absolute > ul li, .reveal .slides section > div.absolute > ol li { margin-bottom: 0.2em; }
+.reveal .slides section.textonly > div.absolute > ul, .reveal .slides section.textonly > div.absolute > ol { font-size: 1.05em; }
+.reveal .slides section.textonly > div.absolute > ul li, .reveal .slides section.textonly > div.absolute > ol li { margin-bottom: 0.5em; }
+.reveal .slides section > div.absolute > table { font-size: 0.9em; margin: 0; }
+.reveal .slides section > div.absolute > p { margin-top: 0; }
+/* zero outer margin for positioned blocks: the editor saves the box of the block itself */
+.reveal .slides section > div.absolute > p, .reveal .slides section > div.absolute > ul, .reveal .slides section > div.absolute > ol,
+.reveal .slides section > div.absolute > table, .reveal .slides section > div.absolute > blockquote { margin: 0 !important; }
+.reveal .slides img.absolute { margin: 0 !important; }
+/* first bullet of a positioned list: no top margin (same as in the editor frame) */
+.reveal .slides section > div.absolute > ul > li:first-child, .reveal .slides section > div.absolute > ol > li:first-child { margin-top: 0 !important; }
+/* positioned lists are block-level (reveal makes lists inline-block, which adds a line gap above them) */
+.reveal .slides section > div.absolute > ul, .reveal .slides section > div.absolute > ol { display: block !important; }

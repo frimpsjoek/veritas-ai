@@ -1,0 +1,25 @@
+/* Veritas deck: bigger team cards, figures fill their column */
+.reveal .team .callout { min-height: 6.5em; }
+.reveal .team .callout .callout-title-container { font-size: 1.35em; }
+.reveal .team .callout-body-container { font-size: 1.1em; }
+.reveal .slides section .columns .column img { width: 100%; height: auto; max-height: 72vh; object-fit: contain; border: 1px solid #e3e6ec; border-radius: 6px; }
+.reveal .team-row { display: flex; justify-content: space-around; align-items: flex-start; margin-top: 1.2em; }
+.reveal .team-row .person { flex: 1 1 0; text-align: center; }
+.reveal .team-row img.headshot { width: 230px; height: 230px; border: 0; border-radius: 50%; margin: 0 auto 0.4em auto; display: block; }
+.reveal .team-row .pname { display: block; font-size: 1.05em; font-weight: 600; color: #1b2540; }
+.reveal .team-row .paff { display: block; font-size: 0.75em; color: #606880; }
+.reveal .plain3 { margin-top: 1em; gap: 2%; }
+.reveal .plain3 > .column > p:first-child { font-size: 1.05em; color: #1b2540; margin-bottom: 0.3em; }
+.reveal .iconlist ul { list-style: none; padding-left: 0; margin-left: 0; }
+.reveal .iconlist li { position: relative; padding-left: 1.75em; margin-bottom: 0.45em; }
+.reveal .iconlist li > img.ic { position: absolute; left: 0; top: 0.12em; }
+.reveal .slides section img.ic, .reveal .slides section .columns .column img.ic {
+  width: 1.15em !important; height: 1.15em !important; max-height: none !important; border: 0 !important;
+  border-radius: 0 !important; margin: 0 0.35em 0 0 !important; display: inline-block; vertical-align: -0.22em; }
+.reveal .slides section img.ic.logo { border-radius: 4px !important; }
+.reveal .logorow { margin-top: 0.8em; display: flex; gap: 0.55em; align-items: center; flex-wrap: wrap; }
+.reveal .logorow img.ic.logo { width: 1.5em !important; height: 1.5em !important; margin: 0 !important; }
+.reveal .places { display: flex; justify-content: space-around; margin: 0.6em 0 0.9em 0; }
+.reveal .places .place { text-align: center; flex: 1 1 0; }
+.reveal .places img.biglogo { width: 110px; height: 110px; border: 0 !important; margin: 0 auto 0.25em auto; display: block; }
+.reveal .places p { margin: 0; font-size: 0.85em; color: #1b2540; }

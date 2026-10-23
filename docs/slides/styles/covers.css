@@ -1,0 +1,188 @@
+/* ==========================================================================
+   covers.css — five cover-slide families for Joseph's Quarto revealjs decks
+   (argonne-light-revealjs / argonne-revealjs, 1600x900, 16:9).
+   Load LAST in the css list:  css: [custom-voice.css, ..., font-plex.css, covers.css]
+   A slide becomes a cover with  ## {.cover .cover-a}  (or -b … -e); see cover-snippets.md.
+   Geometry is in slide pixels (1600 x 900); type is in em of the deck root (33 px),
+   so the font knob (font-*.css) carries over. Side margins = 6 % = 96 px.
+   Full screen: every cover sets its background on the SLIDE (reveal's slide-level background:
+   background-color / background-image), which paints the whole browser viewport edge to edge.
+   Bands that must reach the edges (footer bands, title band) are extended 300 slide-px past the
+   slide box (negative offsets), so they also cross reveal's outer margin and any letterbox.
+   Text stays inside the 6 % side margins.
+   Study + rules: ~/.claude/skills/joseph-voice/references/cover-slides.md
+   ========================================================================== */
+
+/* ---------- shared ---------- */
+/* The editable plugin pushes .reveal down 100 px for its toolbar even when the theme hides the toolbar
+   (argonne-light hides it unless body.slides-edit). Covers need the full frame: undo the push outside edit mode.
+   Side effect: content slides also lose the 100 px gap (they were drawn 100 px low before). */
+html.has-editable-toolbar body:not(.slides-edit) .reveal { top: 0 !important; height: 100vh !important; }
+
+.reveal .slides section.cover {
+  --cover-side: 96px;                 /* 6 % of 1600 */
+  --cover-blue: #0082ca;              /* Argonne blue */
+  --cover-navy: #04193b;              /* deep navy */
+  --cover-color: var(--cover-blue);   /* family A block colour: one line to change */
+  isolation: isolate;
+}
+.reveal .slides section.cover.present,
+.reveal .slides section.cover.past,
+.reveal .slides section.cover.future {
+  display: block !important;
+  padding: 0 !important;
+  width: 1600px; height: 900px; top: 0 !important;
+}
+.reveal .slides section.cover > h2 { display: none; }
+.reveal .slides section.cover p { margin: 0; }
+.reveal .slides section.cover > div { position: absolute; margin: 0; }
+.reveal .slides section.cover span { display: block; }
+.reveal .slides section.cover img {
+  max-height: none; max-width: none; margin: 0; box-shadow: none; border: 0; background: none;
+}
+.reveal .slides section.cover .cover-logo { height: 48px; width: auto; display: inline-block; vertical-align: middle; }
+.reveal .slides section.cover span.cover-logo-west:empty { display: none; }   /* empty slot when no WEST logo is wanted */
+/* the deck chrome (footer logos, date, progress line, slide number, arrows) is hidden on a cover */
+body:has(.reveal .slides > section.cover.present) .deck-logos,
+body:has(.reveal .slides > section.cover.present) .deck-date,
+body:has(.reveal .slides > section.cover.present) .reveal .progress,
+body:has(.reveal .slides > section.cover.present) .reveal .slide-number,
+body:has(.reveal .slides > section.cover.present) .reveal .controls,
+body:has(.reveal .slides > section.cover.present) .reveal .footer,
+body:has(.reveal .slides > section.cover.present) .reveal .slide-menu-button { display: none !important; }
+.reveal .slides section.cover .cover-title { text-wrap: balance; }
+
+/* ---------- A. institutional colour block ---------- */
+/* slide attributes: background-color="#ffffff" */
+.reveal .slides section.cover-a .cover-block {
+  left: var(--cover-side); right: var(--cover-side); top: 40px; height: 495px;   /* 55 % */
+  background: var(--cover-color); color: #fff; text-align: center;
+  display: flex; flex-direction: column; align-items: center; padding: 34px 60px 0; box-sizing: border-box;
+}
+.reveal .slides section.cover-a .cover-block .cover-logo { height: 50px; }
+.reveal .slides section.cover-a .cover-block .cover-aff { font-size: 0.62em; margin-top: 12px; opacity: 0.95; }
+.reveal .slides section.cover-a .cover-block p:has(.cover-title) { flex: 1; display: flex; align-items: center; justify-content: center; padding-bottom: 24px; }
+.reveal .slides section.cover-a .cover-title {
+  font-size: calc(2.05em * var(--cover-fit, 1)); font-weight: 700; line-height: 1.12; max-width: 1150px;
+}
+.reveal .slides section.cover-a .cover-img-left,
+.reveal .slides section.cover-a .cover-img-right { top: 560px; width: 330px; height: 300px; display: flex; align-items: center; justify-content: center; }
+.reveal .slides section.cover-a .cover-img-left  { left: calc(var(--cover-side) + 40px); }
+.reveal .slides section.cover-a .cover-img-right { right: calc(var(--cover-side) + 40px); }
+.reveal .slides section.cover-a .cover-img-left p,
+.reveal .slides section.cover-a .cover-img-right p { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+.reveal .slides section.cover-a .cover-img-left img,
+.reveal .slides section.cover-a .cover-img-right img { width: 100%; height: 100%; object-fit: contain; }
+.reveal .slides section.cover-a .cover-id { left: 0; right: 0; top: 590px; text-align: center; color: #111; }
+.reveal .slides section.cover-a .cover-name { font-size: 1.3em; font-weight: 700; }
+.reveal .slides section.cover-a .cover-type { font-size: 0.66em; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; margin-top: 18px; }
+.reveal .slides section.cover-a .cover-event { font-size: 0.66em; margin-top: 14px; color: #333; }
+.reveal .slides section.cover-a .cover-footer {
+  left: -300px; right: -300px; bottom: -300px; height: 324px; background: var(--cover-color);
+}
+
+/* ---------- B. full-bleed dark science render ---------- */
+/* slide attributes: background-color="#06080c" background-image="figs-cover/cover_b_bg.png" background-size="cover" */
+.reveal .slides section.cover-b { color: #fff; }
+.reveal .slides section.cover-b .cover-logos { top: 44px; right: var(--cover-side); }
+.reveal .slides section.cover-b .cover-logos .cover-logo { height: 56px; }
+.reveal .slides section.cover-b .cover-title {
+  left: 620px; right: var(--cover-side); top: 150px; text-align: center;
+  font-size: calc(2.7em * var(--cover-fit, 1)); font-weight: 700; line-height: 1.06; letter-spacing: -0.005em;
+}
+.reveal .slides section.cover-b .cover-id { left: 620px; right: var(--cover-side); top: 520px; text-align: center; }
+.reveal .slides section.cover-b .cover-name {
+  font-size: 1.2em; font-weight: 600; display: inline-block !important;
+  padding: 0 40px 10px; border-bottom: 3px solid var(--cover-blue); margin-bottom: 14px;
+}
+.reveal .slides section.cover-b .cover-aff { font-size: 0.72em; line-height: 1.3; color: #e8edf2; }
+.reveal .slides section.cover-b .cover-event { font-size: 0.68em; margin-top: 26px; color: #e8edf2; }
+.reveal .slides section.cover-b .cover-footer {
+  left: -300px; right: -300px; bottom: -300px; height: 360px; padding: 0 0 300px 0; box-sizing: border-box;
+  background: #062a4f; display: flex; align-items: center;
+  padding-left: calc(300px + var(--cover-side)); gap: 26px; font-size: 0.56em; color: #fff;
+}
+.reveal .slides section.cover-b .cover-footer p { display: flex; align-items: center; gap: 26px; }
+.reveal .slides section.cover-b .cover-footer .cover-logo { height: 34px; }
+.reveal .slides section.cover-b .cover-footer span { display: inline; }
+.reveal .slides section.cover-b .cover-footer .cover-foot-name { font-weight: 700; }
+
+/* ---------- C. hexagon tile collage + left title ---------- */
+/* slide attributes: background-color="#e1e4e6"; tiles = renders only (never plots) */
+.reveal .slides section.cover-c .cover-tiles {
+  inset: 0; overflow: visible;
+  /* white gutters: outline the clipped hexagons from outside */
+  filter: drop-shadow(7px 0 0 #fff) drop-shadow(-7px 0 0 #fff) drop-shadow(0 7px 0 #fff) drop-shadow(0 -7px 0 #fff);
+}
+.reveal .slides section.cover-c .cover-tiles img {
+  position: absolute; width: 300px; height: 260px; object-fit: cover;
+  clip-path: polygon(25% 0, 75% 0, 100% 50%, 75% 100%, 25% 100%, 0 50%);
+}
+/* honeycomb: dx = 237, dy = 274, alternate columns offset by 137 */
+.reveal .slides section.cover-c .cover-tiles img:nth-of-type(1) { left: -110px; top: -150px; }
+.reveal .slides section.cover-c .cover-tiles img:nth-of-type(2) { left: 127px;  top: -13px; }
+.reveal .slides section.cover-c .cover-tiles img:nth-of-type(3) { left: 364px;  top: -150px; }
+.reveal .slides section.cover-c .cover-tiles img:nth-of-type(4) { left: 1213px; top: -60px; }
+.reveal .slides section.cover-c .cover-tiles img:nth-of-type(5) { left: 1450px; top: 77px; }
+.reveal .slides section.cover-c .cover-tiles img:nth-of-type(6) { left: 1213px; top: 214px; }
+.reveal .slides section.cover-c .cover-tiles img:nth-of-type(7) { left: 1450px; top: 351px; }
+.reveal .slides section.cover-c .cover-tiles img:nth-of-type(8) { left: 1213px; top: 488px; }
+.reveal .slides section.cover-c .cover-title {
+  left: var(--cover-side); top: 300px; width: 1060px;
+  font-size: calc(2.15em * var(--cover-fit, 1)); font-weight: 400; line-height: 1.12; color: #111;
+}
+.reveal .slides section.cover-c .cover-authors {
+  left: var(--cover-side); top: 585px; width: 980px;
+  font-size: 0.86em; font-weight: 700; line-height: 1.3; color: #111;
+}
+.reveal .slides section.cover-c .cover-event { left: var(--cover-side); top: 690px; font-size: 0.62em; color: #333; }
+.reveal .slides section.cover-c .cover-footer {
+  left: -300px; right: -300px; bottom: -300px; height: 410px; background: #fff;
+  padding: 0 calc(300px + var(--cover-side)) 300px; box-sizing: border-box;
+  display: flex; align-items: center; justify-content: flex-end;
+}
+.reveal .slides section.cover-c .cover-footer .cover-logo { height: 58px; }
+
+/* ---------- D. solid navy + one motif ---------- */
+/* slide attributes: background-color="#04193b"; motif = a transparent render (e.g. figs-cover/silane_pdep.png)
+   or figs-cover/motif_pdep.svg. Never an image with its own black/white box. */
+.reveal .slides section.cover-d { color: #fff; }
+.reveal .slides section.cover-d .cover-logos { left: var(--cover-side); top: 56px; }
+.reveal .slides section.cover-d .cover-logos .cover-logo { height: 52px; }
+.reveal .slides section.cover-d .cover-motif { left: 880px; top: 120px; width: 660px; height: 660px; z-index: -1; }
+.reveal .slides section.cover-d .cover-motif p { width: 100%; height: 100%; }
+.reveal .slides section.cover-d .cover-motif img { width: 100%; height: 100%; object-fit: contain; }
+.reveal .slides section.cover-d .cover-title {
+  left: var(--cover-side); top: 205px; width: 820px;
+  font-size: calc(2.45em * var(--cover-fit, 1)); font-weight: 400; line-height: 1.1;
+}
+.reveal .slides section.cover-d .cover-id { left: var(--cover-side); top: 580px; width: 760px; }
+.reveal .slides section.cover-d .cover-name { font-size: 1.12em; font-weight: 500; margin-bottom: 14px; }
+.reveal .slides section.cover-d .cover-aff { font-size: 0.7em; line-height: 1.35; color: #dfe6ef; }
+.reveal .slides section.cover-d .cover-event { font-size: 0.66em; margin-top: 24px; color: #dfe6ef; }
+
+/* ---------- E. abstract blue rings + translucent title band ---------- */
+/* slide attributes: background-image="figs-cover/aps_blue_rings_bg.jpg" background-size="cover" background-color="#0b4f9c"
+   (the blue-ring background from the APS 2026 short-course deck) */
+.reveal .slides section.cover-e { color: #fff; }
+.reveal .slides section.cover-e .cover-event { left: 40px; top: 30px; font-size: 0.62em; white-space: nowrap; }
+.reveal .slides section.cover-e .cover-date { right: 40px; top: 30px; font-size: 0.62em; white-space: nowrap; }
+.reveal .slides section.cover-e .cover-series { left: var(--cover-side); right: var(--cover-side); top: 110px; text-align: center; font-size: 0.95em; }
+.reveal .slides section.cover-e .cover-title {
+  left: -300px; right: -300px; top: 215px; height: 250px; box-sizing: border-box;
+  background: rgba(78, 92, 112, 0.62);
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  padding: 0 calc(300px + var(--cover-side));
+  font-size: calc(2.0em * var(--cover-fit, 1)); font-weight: 700; line-height: 1.15;
+}
+.reveal .slides section.cover-e .cover-id { left: 0; right: 0; top: 520px; text-align: center; }
+.reveal .slides section.cover-e .cover-name { font-size: 1.2em; font-weight: 700; margin-bottom: 26px; }
+.reveal .slides section.cover-e .cover-aff { font-size: 0.86em; line-height: 1.3; }
+.reveal .slides section.cover-e .cover-footer {
+  left: -300px; right: -300px; bottom: -300px; height: 410px; background: #fff;
+  padding: 0 calc(300px + 40px) 300px; box-sizing: border-box;
+}
+.reveal .slides section.cover-e .cover-footer p { height: 110px; display: flex; align-items: center; gap: 44px; }
+.reveal .slides section.cover-e .cover-footer .cover-logo { height: 52px; }
+.reveal .slides section.cover-e .cover-footer .cover-logo.end { margin-left: auto; height: 60px; }
+.reveal .slides section.cover-e .cover-footer .cover-logo-west { height: 64px; }
