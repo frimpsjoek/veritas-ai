@@ -36,8 +36,10 @@ export function confirmSignIn(into, o) {
       : `This link gives this browser a new access code for ${host}.`;
     const yes = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sb-button is-primary', o.isNew ? `Connect to ${host}` : 'Use the new code'));
     const no = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sb-button', 'Not now'));
-    yes.addEventListener('click', () => resolve(true), { once: true });
-    no.addEventListener('click', () => resolve(false), { once: true });
+    // the answer clears the question, so the app (or the setup screen) paints into an empty page
+    const answer = (/** @type {boolean} */ ok) => { page.remove(); resolve(ok); };
+    yes.addEventListener('click', () => answer(true), { once: true });
+    no.addEventListener('click', () => answer(false), { once: true });
     const row = h(doc, 'div', 'sbw-setup-actions');
     row.append(yes, no);
     page.append(h(doc, 'h1', 'sbw-h1', 'Veritas'), h(doc, 'p', 'sbw-lead', lead), h(doc, 'p', 'sbw-row-detail', o.target), row);
