@@ -86,3 +86,31 @@ test('switching server clears cached views', () => {
   switchServer(storage, 'https://c.example');
   assert.equal(currentServer(storage, hosted)?.url, 'https://b.example');
 });
+
+test('server addresses are http or https only', async () => {
+  const { normaliseServerUrl } = await import('../src/connection.js');
+  assert.equal(normaliseServerUrl('mac.example.ts.net:8443'), 'http://mac.example.ts.net:8443');
+  assert.equal(normaliseServerUrl('https://mac.example.ts.net/'), 'https://mac.example.ts.net');
+  for (const bad of ['javascript://x', 'file:///etc', 'data://x', 'ftp://host']) assert.equal(normaliseServerUrl(bad), '', bad);
+});
+
+test('a sign-in link asks before connecting to a new server or changing a code', async () => {
+  const { signInPlan } = await import('../src/connection.js');
+  const saved = [{ url: 'https://mac.example.ts.net', token: 'old', name: 'Mac' }];
+  assert.deepEqual(signInPlan({ server: 'https://evil.example', token: 'x' }, saved, null),
+    { ask: true, target: 'https://evil.example', token: 'x', isNew: true });
+  assert.deepEqual(signInPlan({ token: 'junk' }, saved, 'https://mac.example.ts.net'),
+    { ask: true, target: 'https://mac.example.ts.net', token: 'junk', isNew: false });
+  assert.deepEqual(signInPlan({ server: 'https://mac.example.ts.net', token: 'old' }, saved, null),
+    { ask: false, target: 'https://mac.example.ts.net', token: 'old', isNew: false });
+  assert.equal(signInPlan({ server: 'javascript://x', token: 'x' }, saved, null), null);
+  assert.equal(signInPlan({ token: 'x' }, [], null), null); // a bare code with no server to give it to
+});
+
+test('an unreachable server gets both likely causes, with the command to allow this page', async () => {
+  const { unreachableMessage } = await import('../src/connection.js');
+  const text = unreachableMessage('https://app.example/veritas/', 'https://mac.example.ts.net');
+  assert.match(text, /Couldn't reach https:\/\/mac\.example\.ts\.net/);
+  assert.match(text, /kb\.py web-origins add https:\/\/app\.example/);
+  assert.match(unreachableMessage('https://app.example/', 'http://192.168.1.5:27182'), /plain http address/);
+});

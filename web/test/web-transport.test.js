@@ -29,3 +29,14 @@ test('builtScript reads the bundle a page names', async () => {
   assert.equal(builtScript('<link rel="stylesheet" href="app-1.css">\n<script type="module" src="app-4dbd7a1b.js"></script>'), 'app-4dbd7a1b.js');
   assert.equal(builtScript('<html></html>'), null);
 });
+
+test('any 401 after start tells the host (the saved code stopped working)', async () => {
+  const { createFetchApi } = await import('../src/transport.js');
+  let told = 0;
+  const api = createFetchApi('https://mac.example.ts.net', {
+    fetch: async () => new Response(JSON.stringify({ error: 'a valid token is required' }), { status: 401 }),
+    onUnauthorized: () => { told += 1; },
+  });
+  await assert.rejects(api.call('/search?q=x'));
+  assert.equal(told, 1);
+});

@@ -49,7 +49,7 @@ function citationLabel(item) {
 }
 
 /**
- * @param {{ base?: string, token?: string | null, doc?: Document, win?: Window, fetch?: typeof fetch, onOpenRef?: (ref: import("../../agent/src/domain").CitationRef) => boolean | void, onSignedOut?: (() => void) | null }} [options]
+ * @param {{ base?: string, token?: string | null, doc?: Document, win?: Window, fetch?: typeof fetch, onOpenRef?: (ref: import("../../agent/src/domain").CitationRef) => boolean | void, onSignedOut?: (() => void) | null, onUnreachable?: () => void }} [options]
  *   `onOpenRef` lets the shell show a paper or note itself; returning true means it did. The default is a deep link
  *   into Zotero or Obsidian. `base` + `token`: a server on another origin (connection.js), reached with
  *   `Authorization: Bearer`; without them the page talks to the server it came from, with its cookie.
@@ -76,7 +76,13 @@ export function createWebHost(options = {}) {
       pingTimer = setInterval(() => { void api.call('/ping').catch(() => {}); }, 10000);
     } else if (up && pingTimer) { clearInterval(pingTimer); pingTimer = null; }
   };
-  const api = createFetchApi(base, { fetch: options.fetch, token, onReachable: setReachable });
+  // Any 401, at start or later: the saved code stopped working. On the server's own origin, its sign-in page
+  // (login.html next to index.html) takes it from here; elsewhere the caller shows the server choice again.
+  const signedOut = () => {
+    if (options.onSignedOut === null) return;
+    (options.onSignedOut ?? (() => win.location.replace(new URL('login', win.location.href).href)))();
+  };
+  const api = createFetchApi(base, { fetch: options.fetch, token, onReachable: setReachable, onUnauthorized: () => signedOut() });
   const assets = createAssets({ base, token, fetch: options.fetch, URL: win.URL });
   // Journal and site icons in the shared UI load from the server too, with the token when the page is elsewhere.
   setSiteIconResolver(assets.sameOrigin ? null : (path) => assets.url(path));
@@ -107,8 +113,8 @@ export function createWebHost(options = {}) {
     const sources = /** @type {any} */ (await api.call('/sources').catch(() => null));
     if (sources && 'zotero' in sources) host.can.addToLibrary = Boolean(sources.zotero);
   }).catch((/** @type {any} */ error) => {
-    // A phone that has not signed in yet gets 401: the sign-in page (login.html next to index.html) takes it from here.
-    if (error?.status === 401 && options.onSignedOut !== null) (options.onSignedOut ?? (() => win.location.replace(new URL('login', win.location.href).href)))();
+    // 401 is handled by the transport's onUnauthorized (signedOut); no status at all: the server could not be reached.
+    if (!error?.status) options.onUnreachable?.();
   });
 
   const transport = createWebTransport(api);
@@ -148,7 +154,8 @@ export function createWebHost(options = {}) {
       if (assets.sameOrigin) { openTab(`${base}${route}?${new URLSearchParams(query)}`); return; }
       const tab = openTab('', true);
       assets.frame(route, query).then((url) => {
-        if (tab) { tab.opener = null; tab.location.href = url; } else win.location.assign(url);
+        // A blocked tab: say so, never move the app itself to the file (that left the ticket in the address bar).
+        if (tab) { tab.opener = null; tab.location.href = url; } else host.notice('The browser blocked the new tab. Allow pop-ups for this page, then open the file again.');
       }, (error) => {
         tab?.close();
         host.notice(`Couldn't open the file (${error instanceof Error ? error.message : error}).`);

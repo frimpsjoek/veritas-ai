@@ -21,7 +21,41 @@ export function normaliseServerUrl(text) {
   let url = String(text ?? '').trim();
   if (!url) return '';
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) url = `http://${url}`;
+  if (!/^https?:\/\//i.test(url)) return ''; // a Veritas server is reached over http(s) only
   return url.replace(/\/+$/, '');
+}
+
+/** Why a page on https cannot reach a plain-http server on another computer. */
+export const HTTPS_WARNING = 'This page is on https, so the browser will not let it reach a plain http address on another computer. '
+  + "Use the server's https address (the one in the phone link), or localhost on the same computer.";
+
+/**
+ * What to say when a server cannot be reached. A server that refuses this page's address (not in its web-origins
+ * list) looks the same to the page as one that is off, so both causes are named, with the command for the first.
+ * @param {string} pageUrl @param {string} serverUrl
+ */
+export function unreachableMessage(pageUrl, serverUrl) {
+  if (needsHttpsWarning(pageUrl, serverUrl)) return `Couldn't reach ${serverUrl}. ${HTTPS_WARNING}`;
+  let origin = pageUrl;
+  try { origin = new URL(pageUrl).origin; } catch { /* shown as it is */ }
+  return `Couldn't reach ${serverUrl}. Check that the computer is awake and the address is right. If it is, the server may `
+    + `not accept this page yet: on the server, run kb.py web-origins add ${origin}`;
+}
+
+/**
+ * What a sign-in link should do. Anyone can send a link, so it never switches server or replaces a code silently:
+ * `ask` is true when the server is not saved yet or the code differs from the saved one. null: nothing to do (no
+ * usable server, or a bare code with no server to give it to).
+ * @param {{ server?: string, token?: string }} link @param {Server[]} saved @param {string | null} current the current server's URL
+ * @returns {{ ask: boolean, target: string, token: string, isNew: boolean } | null}
+ */
+export function signInPlan(link, saved, current) {
+  if (!link.token) return null;
+  const target = link.server !== undefined ? normaliseServerUrl(link.server) : (current ?? '');
+  if (!target) return null;
+  const known = saved.find((s) => s.url === target);
+  if (!link.server && !known) return null;
+  return { ask: !known || known.token !== link.token, target, token: link.token, isNew: !known };
 }
 
 /** @param {StorageLike} storage @returns {Server[]} */

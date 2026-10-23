@@ -19,7 +19,7 @@ async function failure(response) {
 
 /** `token`: a server on another origin (the app hosted elsewhere) gets `Authorization: Bearer`; the server's own /app/
  *  passes none and signs in with its cookie.
- *  @param {string} base @param {{ fetch?: typeof fetch, token?: string | null, sleep?: (ms: number, signal?: AbortSignal) => Promise<void>, onReachable?: (up: boolean) => void }} [env] */
+ *  @param {string} base @param {{ fetch?: typeof fetch, token?: string | null, sleep?: (ms: number, signal?: AbortSignal) => Promise<void>, onReachable?: (up: boolean) => void, onUnauthorized?: () => void }} [env] */
 export function createFetchApi(base, env = {}) {
   const doFetch = env.fetch ?? ((input, init) => globalThis.fetch(input, init));
   /** @type {Record<string, string>} */
@@ -38,6 +38,7 @@ export function createFetchApi(base, env = {}) {
       throw error;
     }
     env.onReachable?.(true);
+    if (response.status === 401) env.onUnauthorized?.();
     if (!response.ok) throw await failure(response);
     const text = await response.text();
     return /** @type {T} */ (text ? JSON.parse(text) : null);

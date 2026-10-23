@@ -292,7 +292,7 @@ const URL_ATTRS = new Set(['href', 'src', 'xlink:href', 'formaction', 'action', 
  * Whether an attribute's address may stay in shown HTML: relative, or http(s), mailto, zotero, obsidian (and
  * data:image for images). Browsers drop tabs, newlines and control characters inside a scheme ("java\tscript:"), so
  * those are removed before the scheme is read. `srcset` is a list: every candidate must pass.
- * @param {string} value @param {string} attr lower-case attribute name
+ * @param {string} value @param {string} attr lower-case attribute name @returns {boolean}
  */
 export function safeUrl(value, attr) {
   if (attr === 'srcset') return value.split(',').every((part) => safeUrl(part.trim().split(/\s+/)[0] ?? '', 'src'));

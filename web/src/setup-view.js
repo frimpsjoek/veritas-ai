@@ -5,10 +5,8 @@
 // then saves the server, makes it current and reloads, so nothing of the previous server stays on screen.
 import { h } from '../../ui/src/dom.js';
 import { createFetchApi } from './transport.js';
-import { CURRENT_KEY, loadServers, needsHttpsWarning, normaliseServerUrl, removeServer, saveServer, switchServer } from './connection.js';
+import { CURRENT_KEY, HTTPS_WARNING, loadServers, needsHttpsWarning, normaliseServerUrl, removeServer, saveServer, switchServer, unreachableMessage } from './connection.js';
 
-const HTTPS_WARNING = 'This page is on https, so the browser will not let it reach a plain http address on another computer. '
-  + "Use the server's https address (the one in the phone link), or localhost on the same computer.";
 
 /** Reloads onto Home, which empties every in-memory cache of the previous server. @param {Window} win */
 export function reloadHome(win) {
@@ -22,6 +20,31 @@ export function reloadHome(win) {
  *   `problem`: why setup is showing (a refused code), `server` the address to fill in; `inSettings`: drawn as a
  *   Settings row, without the page title.
  */
+/**
+ * Asks before a sign-in link connects this browser to a server or changes its access code (anyone can send a link).
+ * Resolves true for Connect, false for Not now. Text only, no HTML from the link.
+ * @param {HTMLElement} into @param {{ doc: Document, target: string, isNew: boolean }} o @returns {Promise<boolean>}
+ */
+export function confirmSignIn(into, o) {
+  const { doc } = o;
+  return new Promise((resolve) => {
+    const page = h(doc, 'main', 'sbw-login sbw-setup');
+    let host = o.target;
+    try { host = new URL(o.target).host; } catch { /* shown as it is */ }
+    const lead = o.isNew
+      ? `This link connects this browser to the Veritas server at ${host}. Connect only if it came from your own computer.`
+      : `This link gives this browser a new access code for ${host}.`;
+    const yes = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sb-button is-primary', o.isNew ? `Connect to ${host}` : 'Use the new code'));
+    const no = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sb-button', 'Not now'));
+    yes.addEventListener('click', () => resolve(true), { once: true });
+    no.addEventListener('click', () => resolve(false), { once: true });
+    const row = h(doc, 'div', 'sbw-setup-actions');
+    row.append(yes, no);
+    page.append(h(doc, 'h1', 'sbw-h1', 'Veritas'), h(doc, 'p', 'sbw-lead', lead), h(doc, 'p', 'sbw-row-detail', o.target), row);
+    into.replaceChildren(page);
+  });
+}
+
 export function paintSetup(into, o) {
   const { doc, win, storage } = o;
   const onConnected = o.onConnected ?? (() => reloadHome(win));
@@ -112,7 +135,7 @@ export function paintSetup(into, o) {
         if (status === 401) say("That access code didn't work. It may be out of date: check the server's Settings for the current one.");
         else if (status === 403) say(`The server does not accept this page yet. On the server, run: kb.py web-origins add ${win.location.origin}`);
         else if (status) say(`The server said ${status}. Try again in a moment.`);
-        else say(needsHttpsWarning(win.location.href, url) ? `Couldn't reach ${url}. ${HTTPS_WARNING}` : `Couldn't reach ${url}. Check that the computer is awake and the address is right.`);
+        else say(unreachableMessage(win.location.href, url));
       }
       submit.disabled = false;
     })();

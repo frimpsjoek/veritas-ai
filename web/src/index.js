@@ -5,8 +5,8 @@
 import { createWebHost } from './host.js';
 import { createShell } from './shell.js';
 import { applyTheme } from './pages.js';
-import { currentServer, isServedByServer, loadServers, parseSignInHash, saveServer, switchServer } from './connection.js';
-import { paintSetup } from './setup-view.js';
+import { currentServer, isServedByServer, loadServers, parseSignInHash, saveServer, signInPlan, switchServer, unreachableMessage } from './connection.js';
+import { confirmSignIn, paintSetup } from './setup-view.js';
 
 export { createWebHost, createShell };
 
@@ -26,24 +26,26 @@ function storageOf(win) {
 }
 
 /**
- * A sign-in link (`#server=<url>&t=<token>`) saves that server and makes it current; the fragment then leaves the
- * address bar. An old `#t=<token>` link on the server's own /app/ goes to its cookie sign-in page; elsewhere it
- * renews the current server's code. @param {Window} win @param {Storage} storage @returns {boolean} false when the page is leaving
+ * A sign-in link (`#server=<url>&t=<token>`): the fragment leaves the address bar at once, then the app asks before
+ * it connects to a server it does not know or changes a saved code (signInPlan; anyone can send a link). An old
+ * `#t=<token>` link on the server's own /app/ goes to its cookie sign-in page.
+ * @param {Window} win @param {Storage} storage @returns {Promise<boolean>} false when the page is leaving
  */
-function takeSignInLink(win, storage) {
+async function takeSignInLink(win, storage) {
   const link = parseSignInHash(win.location.hash);
   if (!link) return true;
   if (!link.server && link.token && isServedByServer(win.location)) {
     win.location.replace(new URL(`login${win.location.hash}`, win.location.href).href);
     return false;
   }
-  const target = link.server ?? /** @type {any} */ (currentServer(storage, win.location))?.url;
-  const known = loadServers(storage).find((s) => s.url === target);
-  if (target && link.token && (link.server || known)) {
-    saveServer(storage, { url: target, token: link.token, name: known?.name ?? '' });
-    switchServer(storage, target);
-  }
   win.history.replaceState(null, '', `${win.location.pathname}${win.location.search}#/home`);
+  const current = /** @type {any} */ (currentServer(storage, win.location));
+  const plan = signInPlan(link, loadServers(storage), current && !current.sameOrigin ? current.url : null);
+  if (!plan) return true;
+  if (plan.ask && !(await confirmSignIn(document.body, { doc: document, target: plan.target, isNew: plan.isNew }))) return true;
+  const known = loadServers(storage).find((s) => s.url === plan.target);
+  saveServer(storage, { url: plan.target, token: plan.token, name: known?.name ?? '' });
+  switchServer(storage, plan.target);
   return true;
 }
 
@@ -53,26 +55,36 @@ export async function startApp(options = {}) {
   const win = window;
   try { applyTheme(document, localStorage.getItem('sbw-theme') ?? 'system'); } catch { /* storage blocked: the system theme applies */ }
   const storage = storageOf(win);
-  if (!options.base && !takeSignInLink(win, storage)) return { host: null, shell: null };
+  if (!options.base && !(await takeSignInLink(win, storage))) return { host: null, shell: null };
   /** @type {{ url: string, token: string | null, sameOrigin?: boolean } | null} */
   const server = options.base ? { url: options.base, token: null, sameOrigin: true } : currentServer(storage, win.location);
   const setup = (/** @type {string} */ problem = '') => { paintSetup(document.body, { doc: document, win, storage, problem: problem || undefined, server: problem ? server?.url : undefined }); };
   if (!server) { setup(); return { host: null, shell: null }; }
   let refused = false;
+  let unreachable = false;
+  let started = false;
+  const notAccepted = `${server.url} did not accept the saved access code. Enter the current one, or pick another server.`;
   const host = createWebHost({
     base: server.sameOrigin ? options.base : server.url,
     token: server.token,
-    // On its own origin a 401 goes to the server's sign-in page (the host's default); a server elsewhere asks again here.
-    onSignedOut: server.sameOrigin ? undefined : () => { refused = true; },
+    // On its own origin a 401 goes to the server's sign-in page (the host's default); a server elsewhere asks again
+    // here, at start or at any later moment its code stops working.
+    onSignedOut: server.sameOrigin ? undefined : () => { if (started) setup(notAccepted); else refused = true; },
+    onUnreachable: () => { unreachable = true; },
   });
   await host.ready;
   if (refused) {
-    setup(`${server.url} did not accept the saved access code. Enter the current one, or pick another server.`);
+    setup(notAccepted);
+    return { host: null, shell: null };
+  }
+  if (unreachable && !server.sameOrigin) {
+    setup(unreachableMessage(win.location.href, server.url));
     return { host: null, shell: null };
   }
   applyTheme(document, host.prefs.get('webTheme') ?? 'system');
   const shell = createShell({ host });
   await shell.start();
+  started = true;
   watchForUpdates(document);
   return { host, shell };
 }
