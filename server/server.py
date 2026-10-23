@@ -11,6 +11,7 @@ import os
 import subprocess
 import sys
 import time
+import paths
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -53,7 +54,7 @@ def _start_server() -> None:
     """Starts kb.py serve in its own session (it outlives this agent) and waits for it."""
     subprocess.Popen([sys.executable, str(HOME / "kb.py"), "serve"], cwd=HOME, start_new_session=True,
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                     stderr=open(HOME / "data" / "serve.log", "a"))
+                     stderr=open(paths.data_dir() / "serve.log", "a"))
     for _ in range(90):
         try:
             urllib.request.urlopen(f"{BASE}/ping", timeout=2)

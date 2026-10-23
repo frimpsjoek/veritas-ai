@@ -11,7 +11,7 @@
 set -e
 cd "$(dirname "$0")"
 KB="${KB:-$(cd ../server && pwd)}"
-dest="$KB/data/web"
+dest="${VERITAS_DATA:-$KB/data}/web"  # VERITAS_DATA: the data folder outside the code (server/paths.py)
 npm run --silent build
 src="dist-web"
 [ -f "$src/index.html" ] || { echo "install-web: $src/index.html missing after the build" >&2; exit 1; }

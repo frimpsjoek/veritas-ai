@@ -269,7 +269,7 @@ def fulltext(searcher, body: dict, lock, hidden: set[str] = frozenset(), cache_p
         raise ValueError(f"at most {FULLTEXT_MAX} papers per call")
     seeds = seed_matrix(searcher, body.get("seeds") or {}, lock, hidden)
     base = _baseline(body, seeds[1], "full")
-    cache_path = cache_path or kb.HOME / "data" / "radar-fulltext.sqlite"
+    cache_path = cache_path or kb.data_dir() / "radar-fulltext.sqlite"
     scores = {}
     for item in batch:
         key = str(item.get("id"))
@@ -342,7 +342,7 @@ def calibrate(searcher, body: dict, lock, hidden: set[str] = frozenset(), cache_
     matrix, labels = seed_matrix(searcher, seeds_body, lock, hidden)
     if len(labels) < 3:
         raise ValueError("calibration needs at least 3 seed papers")
-    cache_path = cache_path or kb.HOME / "data" / "radar-fulltext.sqlite"
+    cache_path = cache_path or kb.data_dir() / "radar-fulltext.sqlite"
     field, unrelated = body.get("field") or [], body.get("unrelated") or []
     full_n = int(body.get("full_papers", 8))
     zero = np.zeros(len(labels), dtype=np.float32)

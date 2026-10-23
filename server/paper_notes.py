@@ -30,6 +30,7 @@ import time
 from pathlib import Path
 
 import zotero
+import paths
 
 FOLDER = "Papers"
 ATTACHMENTS = "Papers/attachments"  # pasted images and image highlights
@@ -42,8 +43,8 @@ ZOTERO_END = "%% zotero:end %%"
 NOTE_MARK = re.compile(r"^%% zotero-note ([A-Z0-9]{8}) %%$", re.M)
 HIGHLIGHT_LINK = re.compile(r"\?annotation=([A-Z0-9]{8})\)\)\s*$")
 COMMENT_LINE = re.compile(r"^\s+- \*\*Comment:\*\*\s?(.*)$")
-EDITS = Path(__file__).parent / "data" / "zotero-edits.json"  # waiting for the Zotero plugin
-BASELINES = Path(__file__).parent / "data" / "paper-blocks.json"  # what each note's block said when written
+EDITS = paths.data_dir() / "zotero-edits.json"  # waiting for the Zotero plugin
+BASELINES = paths.data_dir() / "paper-blocks.json"  # what each note's block said when written
 # Everything from the "My notes" heading to the Zotero block is the user's, subheadings included.
 CITATION = re.compile(r"\[([^\[\]]*@[^\[\]]+)\]")
 CITEKEY = re.compile(r"@([\w:.#$%&+?<>~/-]+)")

@@ -19,10 +19,11 @@ import time
 from pathlib import Path
 
 import zotero
+import paths
 
 ROOT = Path(__file__).parent
-PLAN = ROOT / "data" / "attachment-plan.json"
-FILE_LIST = ROOT / "data" / "pdf-files.txt"
+PLAN = paths.data_dir() / "attachment-plan.json"
+FILE_LIST = paths.data_dir() / "pdf-files.txt"
 HOME = Path.home()
 PREFS = next((HOME / "Library/Application Support/Zotero/Profiles").glob("*/prefs.js"), None)
 # The linked-files folder as it is on this Mac now; the pref still names the old ~/MEGA/Zotero.

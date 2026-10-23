@@ -24,7 +24,7 @@ from pathlib import Path
 
 import kb
 
-CACHE = kb.HOME / "data" / "web" / "paper-figures.json"
+CACHE = kb.data_dir() / "web" / "paper-figures.json"
 RETRY_NONE_S = 7 * 24 * 3600
 RETRY_ERROR_S = 3600  # a none that came from an error (timeout, network), not from every source saying no
 TIMEOUT_S = 8

@@ -63,7 +63,7 @@ class Response:
 
 
 def folder(name: str = "") -> Path:
-    path = kb.HOME / "data" / FOLDER / name
+    path = kb.data_dir() / FOLDER / name
     path.mkdir(parents=True, exist_ok=True)
     return path
 

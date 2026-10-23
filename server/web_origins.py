@@ -11,10 +11,11 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import paths
 from pathlib import Path
 from urllib.parse import urlsplit
 
-FILE = Path(__file__).resolve().parent / "data" / "web-origins.json"
+FILE = paths.data_dir() / "web-origins.json"
 
 
 def normalise(origin: str) -> str:

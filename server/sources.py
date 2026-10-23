@@ -26,9 +26,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import connectors
+import paths
 
 ROOT = Path(__file__).resolve().parent
-FILE = Path(os.environ.get("KB_SOURCES", ROOT / "data" / "sources.json"))
+FILE = Path(os.environ.get("KB_SOURCES", paths.data_dir() / "sources.json"))
 OUTPUT_DEFAULT = Path.home() / "Documents" / "Veritas"  # where notes go unless a listed vault is chosen
 ZOTERO_PROFILES = Path.home() / "Library" / "Application Support" / "Zotero" / "Profiles"
 

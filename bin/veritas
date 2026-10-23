@@ -1,0 +1,56 @@
+#!/bin/sh
+# veritas: start, open and check the Veritas server.
+#   veritas serve [--port N]   start the server (downloads the search model the first time)
+#   veritas open               open the web app in the browser
+#   veritas status             is it running, and what is indexed
+#   veritas model              download the search model now
+# VERITAS_DATA moves the data and the model out of the code folder (server/paths.py); VERITAS_PYTHON picks the Python.
+set -e
+here=$(cd "$(dirname "$0")" && pwd -P)
+root=${VERITAS_ROOT:-$(dirname "$here")}
+server="$root/server"
+python=${VERITAS_PYTHON:-"$server/.venv/bin/python"}
+port=${VERITAS_PORT:-27182}
+models=${VERITAS_DATA:+$VERITAS_DATA/models}
+models=${models:-"$server/models"}
+model="$models/snowflake-arctic-embed-s"
+url="http://localhost:$port/app/"
+
+get_model() {
+  [ -f "$model/onnx/model.onnx" ] && [ -f "$model/tokenizer.json" ] && return 0
+  echo "Veritas: downloading the search model (133 MB, once)..."
+  mkdir -p "$model/onnx"
+  for f in onnx/model.onnx tokenizer.json config.json; do
+    curl -fL --progress-bar -o "$model/$f.part" "https://huggingface.co/Snowflake/snowflake-arctic-embed-s/resolve/main/$f"
+    mv "$model/$f.part" "$model/$f"
+  done
+}
+
+case "${1:-}" in
+  serve)
+    shift
+    [ "${1:-}" = "--port" ] && port=$2
+    get_model
+    [ -n "$VERITAS_DATA" ] && mkdir -p "$VERITAS_DATA"
+    cd "$server"
+    KB_BACKEND=${KB_BACKEND:-onnx} exec "$python" kb.py serve --port "$port"
+    ;;
+  open)
+    case "$(uname -s)" in
+      Darwin) open "$url" ;;
+      Linux) xdg-open "$url" >/dev/null 2>&1 & ;;
+      *) echo "$url" ;;
+    esac
+    ;;
+  status)
+    if curl -fs -m 2 "http://localhost:$port/ping" >/dev/null; then
+      echo "Veritas is running at $url"
+      curl -fs -m 5 "http://localhost:$port/status" | "$python" -c 'import json,sys; d=json.load(sys.stdin); print(f"{d.get(\"notes\", 0)} notes and papers indexed")' 2>/dev/null || true
+    else
+      echo "Veritas is not running. Start it with: veritas serve (or: brew services start veritas)"
+      exit 1
+    fi
+    ;;
+  model) get_model; echo "Search model ready in $model" ;;
+  *) sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

@@ -21,9 +21,9 @@ from urllib.parse import unquote, urlencode
 
 import kb
 
-WEB_DIR = kb.HOME / "data" / "web"
+WEB_DIR = kb.data_dir() / "web"
 STATE_NAME = "state.json"
-APP_URL_FILE = kb.HOME / "data" / "web-app-url"
+APP_URL_FILE = kb.data_dir() / "web-app-url"
 # Kept in WEB_DIR by the server (state, sign-in sessions, queued adds); a request for them is a 404, not a download.
 PRIVATE = {STATE_NAME, "sessions.json", "pending-adds.json"}
 MAX_FILE_BYTES = 256 * 1024

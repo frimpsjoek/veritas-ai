@@ -37,7 +37,7 @@ class Refused(ValueError):
 
 
 def folder() -> Path:
-    path = kb.HOME / "data" / FOLDER
+    path = kb.data_dir() / FOLDER
     path.mkdir(parents=True, exist_ok=True)
     return path
 

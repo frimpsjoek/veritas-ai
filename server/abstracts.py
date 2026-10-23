@@ -27,7 +27,7 @@ _cache: dict | None = None
 
 
 def _path():
-    return kb.HOME / "data" / FILE
+    return kb.data_dir() / FILE
 
 
 def _load() -> dict:

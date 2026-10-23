@@ -52,6 +52,19 @@ done, or with **Hide this card**. The same screens are under **More > Settings**
 4. **Sources and tools:** connect literature tools such as Valency Bond (see [Connectors and MCP](connectors.md)).
 5. **Server and phone:** a QR code that opens Veritas on your phone, signed in, over your Tailscale network.
 
+## The `veritas` command
+
+`bin/veritas` starts and checks the server; add the `bin/` folder to your PATH, or call it with its path.
+
+```sh
+veritas serve          # start (downloads the search model the first time)
+veritas open           # open the web app
+veritas status         # running? how much is indexed
+```
+
+`VERITAS_DATA=/some/folder` keeps the index, settings and search model in that folder instead of `server/data` and
+`server/models`, so replacing the code (an upgrade) never touches them. Set it for `web/install.sh` too.
+
 ## Keep it running
 
 `kb.py serve` stops when you close the terminal. To start Veritas at login and restart it if it stops, run it as a

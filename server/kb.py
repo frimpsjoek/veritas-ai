@@ -40,12 +40,13 @@ import media
 import sources
 import abstracts
 import zotero
+import paths
 
 # The folders to read (spec 018). VAULT is the main (output) folder: the listed folder chosen for notes, else
 # ~/Documents/Veritas; it keeps bare paths and is where notes are written. Without data/sources.json this is today's KB_VAULT / KB_ZOTERO setup.
 # No Zotero in the list (none found, or switched off): a folder that never exists, so the Zotero stage finds nothing
 # and the Zotero-only routes say so, instead of falling back to ~/Zotero.
-NO_ZOTERO = Path(__file__).resolve().parent / "data" / "no-zotero-library"
+NO_ZOTERO = paths.data_dir() / "no-zotero-library"
 
 
 def reload_layout() -> None:
@@ -58,8 +59,15 @@ def reload_layout() -> None:
 
 reload_layout()
 HOME = Path(__file__).resolve().parent
-DB_PATH = Path(os.environ.get("KB_DB", HOME / "data" / "kb.sqlite"))
-MODEL_DIR = HOME / "models" / "snowflake-arctic-embed-s"
+
+
+def data_dir() -> Path:
+    """The data folder (paths.py), following HOME so tests that point HOME at a scratch folder keep working."""
+    return paths.data_dir(HOME)
+
+
+DB_PATH = Path(os.environ.get("KB_DB", paths.data_dir(HOME) / "kb.sqlite"))
+MODEL_DIR = paths.models_dir(HOME) / "snowflake-arctic-embed-s"
 QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 DIM = 384
 # "mlx" runs the model on the GPU (mlx_embed.py), "onnx" on the CPU. Both give the same vectors.
@@ -439,8 +447,8 @@ def code_is_current() -> bool:
     return all(path.stat().st_mtime == mtime for path, mtime in _CODE.items())
 
 
-PROGRESS_FILE = HOME / "data" / "index-progress.json"
-LOCK_FILE = HOME / "data" / "index.lock"
+PROGRESS_FILE = paths.data_dir(HOME) / "index-progress.json"
+LOCK_FILE = paths.data_dir(HOME) / "index.lock"
 STOP = threading.Event()  # set by "Stop" in the plugin (or SIGTERM): indexing ends after its current batch
 
 
@@ -1014,7 +1022,7 @@ class Searcher:
         from keyword_index import KeywordIndex
 
         self.db = connect(keep=True)
-        self.keywords = KeywordIndex(HOME / "data" / "tantivy", writer)
+        self.keywords = KeywordIndex(data_dir() / "tantivy", writer)
         self.embed: Embedder | None = None
         self._query_vectors: dict[str, np.ndarray] = {}
         self.loaded_at = None
@@ -1706,7 +1714,7 @@ def audit_report(days: float) -> None:
     """What AI agents received from the index recently (data/agent-access.log, written by http_api.audit)."""
     from collections import Counter
 
-    log = HOME / "data" / "agent-access.log"
+    log = data_dir() / "agent-access.log"
     since = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - days * 86400))
     entries = [e for e in (json.loads(l) for l in log.read_text().splitlines() if l.strip()) if e["at"] >= since] \
         if log.exists() else []

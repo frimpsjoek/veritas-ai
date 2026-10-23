@@ -122,7 +122,7 @@ ZOTERO_ONLY = {"/zotero", "/zotero/pdf", "/zotero/files", "/paper-note", "/paper
                "/zotero/add", "/zotero/tag", "/zotero/annotate"}
 AGENT_ROUTES = {"/ping", "/status", "/search", "/related", "/links", "/recent", "/note", "/zotero", "/similar", "/zotero/items", "/radar/score", "/radar/profile", "/radar/fulltext", "/radar/calibrate", "/digests"}  # one SQLite connection and one model, shared by all request threads
 SEARCHER: kb.Searcher | None = None
-TOKEN_FILE = kb.HOME / "data" / "api-token"
+TOKEN_FILE = kb.data_dir() / "api-token"
 LOCAL_HOSTS = ("127.0.0.1", "localhost")
 CONFLICT = re.compile(r"\.conflict-macos-(\d{8}T\d{6}Z)\.md$")
 AGENT_SIDECAR: agent_api.Sidecar | None = None  # set by serve(); None means /agent/* answers 503
@@ -137,7 +137,7 @@ def token() -> str:
 
 RequestClass = Literal["foreign", "proxied", "local", "app"]
 PROXY_HEADERS = ("x-forwarded-", "tailscale-", "forwarded")
-SESSIONS_FILE = kb.HOME / "data" / "web" / "sessions.json"
+SESSIONS_FILE = kb.data_dir() / "web" / "sessions.json"
 SESSION_SECONDS = 365 * 24 * 3600
 SESSION_COOKIE = "sb_session"
 _sessions_lock = threading.Lock()
@@ -337,7 +337,7 @@ def start_indexing(reread: str | None) -> None:
         args.append("--reread-zotero")
     elif reread == "media":
         args.append("--reread-media")
-    log = open(kb.HOME / "data" / "index.log", "a")
+    log = open(kb.data_dir() / "index.log", "a")
     import subprocess
 
     subprocess.Popen(args, cwd=kb.HOME, start_new_session=True, stdin=subprocess.DEVNULL, stdout=log, stderr=log)
@@ -384,7 +384,7 @@ def _without(related: dict, hidden: set[str]) -> dict:
 ZOTERO_DIST = kb.HOME.parent / "zotero" / "dist"
 OBSIDIAN_DIST = kb.HOME.parent / "obsidian" / "dist-versions"
 
-AUDIT_FILE = kb.HOME / "data" / "agent-access.log"
+AUDIT_FILE = kb.data_dir() / "agent-access.log"
 
 
 def audit(route: str, params: dict, result: object) -> None:
@@ -984,7 +984,7 @@ def serve(port: int) -> None:
     try:
         # The sidecar reaches the library through this server, on the port it actually runs on (it used to be told
         # 27182 whatever the port, so a server on another port gave an AI that could not see the library).
-        AGENT_SIDECAR = agent_api.supervise(kb.HOME / "data" / "agent", sidecar_kb_url(port))
+        AGENT_SIDECAR = agent_api.supervise(kb.data_dir() / "agent", sidecar_kb_url(port))
     except Exception as error:  # the agent sidecar is optional; search must come up either way
         print(f"agent sidecar disabled: {error}", file=sys.stderr)
         AGENT_SIDECAR = None
