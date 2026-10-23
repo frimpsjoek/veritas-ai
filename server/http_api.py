@@ -50,6 +50,7 @@ POST /radar/fulltext {"seeds","items":[{id,arxiv}]}  new arXiv papers read whole
 POST /radar/calibrate {"seeds","unrelated"}    thresholds for abstracts and whole papers from seed-seed and seed-unrelated similarity
 PUT  /digests/<file> {"text"}                   save Second Brain/Digests/<file>.md (atomic; 413 over 512 KB)
 POST /index                                    re-index changed notes now
+GET  /setup/suggest                            what a new user could add: Zotero, Obsidian vaults, PDF folders (spec 023)
 GET  /sources                                  the folders the index reads, each with kind, role and count (spec 018)
 POST /sources {"path","name"?}                 add a folder (400 unreadable/too broad, 409 already listed); starts indexing
 POST /sources {"kind":"zotero-web","user_id","key"?,"name"?}  add an online Zotero library (key goes to the Keychain)
@@ -104,6 +105,7 @@ import plugin_updates
 import radar_api
 import site_icons
 import skills
+import setup_suggest
 import sources
 import paper_figures
 import pdf_route
@@ -554,6 +556,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, web_app.phone_link(token(), self.server.server_address[1]))
             if route == "/status":
                 result = index_status()
+            elif route == "/setup/suggest":
+                result = setup_suggest.suggest()
             elif route == "/sources":
                 result = kb.sources_report()
             elif route == "/search":

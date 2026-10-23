@@ -148,3 +148,11 @@ def test_the_link_panel_routes_need_the_token_and_refuse_agents_and_private_link
     status, _, body = call(port, "GET", "/web/page?url=http%3A%2F%2F127.0.0.1%3A1%2Fstatus")
     assert status == 200 and json.loads(body)["mode"] == "blocked"
     assert call(port, "GET", "/web/pdf?url=http%3A%2F%2Flocalhost%2Fx.pdf")[0] == 400
+
+
+def test_setup_suggest_needs_the_token_and_refuses_agents(server):
+    """Spec 023: it lists folders on this computer, so it is a data route like any other."""
+    port, _ = server
+    assert call(port, "GET", "/setup/suggest", phone())[0] == 401
+    assert call(port, "GET", "/setup/suggest", {"X-KB-Client": "agent"})[0] == 403
+    assert call(port, "GET", "/setup/suggest")[0] == 200
