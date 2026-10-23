@@ -73,6 +73,7 @@ const SITE_DOMAINS = /** @type {Record<string, string>} */ ({
   openalex: 'openalex.org', crossref: 'crossref.org', chemrxiv: 'chemrxiv.org', biorxiv: 'biorxiv.org', 'biorxiv and medrxiv': 'biorxiv.org',
   medrxiv: 'medrxiv.org', europepmc: 'europepmc.org', 'europe pmc': 'europepmc.org', clinicaltrials: 'clinicaltrials.gov', 'clinicaltrials.gov': 'clinicaltrials.gov',
   pubchem: 'pubchem.ncbi.nlm.nih.gov', unpaywall: 'unpaywall.org', exa: 'exa.ai', tavily: 'tavily.com', consensus: 'consensus.app',
+  valency: 'valency.io', 'valency bond': 'valency.io',
   'nasa ads': 'ui.adsabs.harvard.edu', 'nasa-ads': 'ui.adsabs.harvard.edu', inspirehep: 'inspirehep.net', 'inspire-hep': 'inspirehep.net',
 });
 

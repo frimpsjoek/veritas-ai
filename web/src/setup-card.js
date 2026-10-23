@@ -5,10 +5,11 @@
 import { h } from '../../ui/src/dom.js';
 import { icon } from '../../ui/src/icons.js';
 import { formatRoute } from '../../ui/src/sources/route.js';
+import { iconFor } from '../../ui/src/logos.js';
 
 /**
  * @typedef {{ sources?: any, providers?: any[], routines?: any[], mcp?: any[] }} SetupFacts
- * @typedef {{ id: string, title: string, done: boolean, detail: string, route: import('../../ui/src/sources/route.js').WebRoute, optional?: boolean }} SetupStep
+ * @typedef {{ id: string, title: string, done: boolean, detail: string, route: import('../../ui/src/sources/route.js').WebRoute, optional?: boolean, brand?: string, glyph?: string }} SetupStep
  */
 
 const count = (/** @type {number} */ n) => n.toLocaleString('en-US');
@@ -22,19 +23,21 @@ export function setupSteps(f) {
     && (x.role !== 'main' || f.sources?.main_is_vault));
   const ready = (f.providers ?? []).filter((p) => p?.state === 'ready').map((p) => PROVIDERS[/** @type {keyof PROVIDERS} */ (p.provider)] ?? p.provider);
   const radar = (f.routines ?? []).find((r) => r?.kind === 'radar' && r.status !== 'archived' && (r.radar?.seeds?.mine?.length ?? 0) > 0);
-  const connected = (f.mcp ?? []).filter((r) => r?.state === 'connected').map((r) => r.config?.name);
+  const valency = (f.mcp ?? []).find((r) => r?.config?.name === 'valency' && r.state === 'connected');
   const settings = (/** @type {string} */ section) => /** @type {import('../../ui/src/sources/route.js').WebRoute} */ ({ view: 'settings', section });
   return [
-    { id: 'library', title: 'Your library', done: Boolean(zotero),
+    { id: 'library', title: 'Your library', brand: 'Zotero', done: Boolean(zotero),
       detail: zotero ? `Zotero: ${count(zotero.documents)} items` : 'Add your Zotero folder', route: settings('folders') },
-    { id: 'notes', title: 'Your notes', done: notes.length > 0,
+    { id: 'notes', title: 'Your notes', brand: 'Obsidian', done: notes.length > 0,
       detail: notes.length ? `${notes.map((x) => x.name).join(', ')}: ${count(notes.reduce((n, x) => n + x.documents, 0))} notes` : 'Add your Obsidian vault or a folder of notes and PDFs', route: settings('folders') },
-    { id: 'ai', title: 'Your AI', done: ready.length > 0,
+    { id: 'ai', title: 'Your AI', glyph: 'sparkle', done: ready.length > 0,
       detail: ready.length ? `${ready.join(' and ')} ready` : 'Sign in to Claude or Codex, or choose a local model', route: settings('models') },
-    { id: 'papers', title: 'Your papers', done: Boolean(radar),
+    { id: 'papers', title: 'Your papers', glyph: 'paper', done: Boolean(radar),
       detail: radar ? `Reading radar from ${radar.radar.seeds.mine.length} of your papers` : 'Find the papers you wrote (name or ORCID) to start the reading radar', route: settings('radar') },
-    { id: 'connectors', title: 'Connectors', done: connected.length > 0, optional: true,
-      detail: connected.length ? `${connected.join(', ')} connected` : 'Valency Bond and other literature tools (optional)', route: settings('sources') },
+    { id: 'valency', title: 'Valency Bond', brand: 'Valency Bond', done: Boolean(valency), optional: true,
+      detail: valency ? `Connected: ${valency.tools?.length ?? 0} tools over 500M+ papers and preprints`
+        : '500M+ papers and preprints, ChemRxiv included. Add it in Sources and tools with a free token from app.valency.io',
+      route: settings('sources') },
   ];
 }
 
@@ -69,7 +72,9 @@ export async function setupCard(doc, host) {
     if (step.done) mark.append(icon(doc, 'check', 'sb-p-icon'));
     const text = h(doc, 'span', 'sbw-setup-text');
     text.append(h(doc, 'span', 'sbw-setup-name', step.title), h(doc, 'span', 'sbw-setup-detail', step.detail));
-    row.append(mark, text);
+    const logo = step.brand ? iconFor(doc, { label: step.brand }, { size: 22, web: true, cls: 'sbw-setup-logo' })
+      : icon(doc, step.glyph ?? 'check', 'sb-p-icon sbw-setup-logo');
+    row.append(mark, logo, text);
     if (!step.done) row.append(icon(doc, 'chevron', 'sb-p-icon sbw-setup-go'));
     const li = h(doc, 'li');
     li.append(row);

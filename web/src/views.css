@@ -269,3 +269,4 @@ p.sbw-prose { margin: 0 0 var(--sbw-s3); max-width: var(--measure); }
 .sbw-setup-go { color: var(--sb-ui-muted); }
 .sbw-setup-hide { margin-top: var(--sbw-s2); }
 .sbw-setup-go { transform: rotate(-90deg); }
+.sbw-setup-logo { flex: none; width: 22px; height: 22px; border-radius: 4px; color: var(--sb-ui-accent); }

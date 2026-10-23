@@ -41,7 +41,7 @@ On its first start Veritas:
 ## Settings to fill in
 
 Home shows a **Welcome to Veritas** card with five steps (your library, your notes, your AI, your papers,
-connectors). Each step opens the screen that does it and ticks itself once done; the card goes away when all are
+Valency Bond). Each step opens the screen that does it and ticks itself once done; the card goes away when all are
 done, or with **Hide this card**. The same screens are under **More > Settings**:
 
 1. **Folders:** add your Obsidian vault and any folder of notes and PDFs. Each folder can be switched off or
