@@ -284,6 +284,26 @@ export function linkWikiTargets(markdown, known, notePath = '') {
   });
 }
 
+const SAFE_SCHEMES = new Set(['http', 'https', 'mailto', 'zotero', 'obsidian']);
+/** Attributes that carry an address a click or a load would follow. */
+const URL_ATTRS = new Set(['href', 'src', 'xlink:href', 'formaction', 'action', 'poster', 'background', 'srcset', 'ping', 'cite', 'data']);
+
+/**
+ * Whether an attribute's address may stay in shown HTML: relative, or http(s), mailto, zotero, obsidian (and
+ * data:image for images). Browsers drop tabs, newlines and control characters inside a scheme ("java\tscript:"), so
+ * those are removed before the scheme is read. `srcset` is a list: every candidate must pass.
+ * @param {string} value @param {string} attr lower-case attribute name
+ */
+export function safeUrl(value, attr) {
+  if (attr === 'srcset') return value.split(',').every((part) => safeUrl(part.trim().split(/\s+/)[0] ?? '', 'src'));
+  // eslint-disable-next-line no-control-regex
+  const bare = value.replace(/[\u0000-\u0020\u007f]/g, '').toLowerCase();
+  const scheme = /^([a-z][a-z0-9+.-]*):/.exec(bare)?.[1];
+  if (!scheme) return true; // relative: #route, /path, file name, ?query
+  if (scheme === 'data') return (attr === 'src' || attr === 'poster') && bare.startsWith('data:image/');
+  return SAFE_SCHEMES.has(scheme);
+}
+
 /**
  * Makes rendered note HTML safe to show and routes its links in-app: scripts and handlers are removed, `.cite` spans
  * become links to the paper, external links get rel=noopener (the caller routes their clicks with interceptLinks), `.wikilink` spans with no note stay as quiet text.
@@ -297,11 +317,12 @@ export function noteFragment(doc, html, host) {
   const template = doc.createElement('template');
   template.innerHTML = html;
   const root = template.content;
-  for (const bad of Array.from(root.querySelectorAll('script, style, iframe, object, embed, link, meta, form'))) bad.remove();
+  // base (would re-point every relative link) and SVG animation (can set an href after this check) go too.
+  for (const bad of Array.from(root.querySelectorAll('script, style, iframe, object, embed, link, meta, form, base, animate, set, animateMotion, animateTransform'))) bad.remove();
   for (const node of Array.from(root.querySelectorAll('*'))) {
     for (const attr of Array.from(node.attributes)) {
       const name = attr.name.toLowerCase();
-      if (name.startsWith('on') || (['href', 'src'].includes(name) && /^\s*(javascript|data):/i.test(attr.value) && !(name === 'src' && /^\s*data:image\//i.test(attr.value)))) node.removeAttribute(attr.name);
+      if (name.startsWith('on') || (URL_ATTRS.has(name) && !safeUrl(attr.value, name))) node.removeAttribute(attr.name);
     }
   }
   for (const cite of Array.from(root.querySelectorAll('span.cite[data-key]'))) {
