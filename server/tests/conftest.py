@@ -14,6 +14,7 @@ os.environ["KB_SOURCES"] = str(_scratch / "sources.json")  # never created: the 
 os.environ["KB_ZOTERO"] = str(_scratch / "Zotero")
 os.environ["KB_DB"] = str(_scratch / "kb.sqlite")  # never the server's own index (data/kb.sqlite)
 os.environ.pop("KB_VAULT", None)
+os.environ["KB_ABSTRACTS"] = "0"  # no OpenAlex lookups while indexing test libraries
 os.environ.pop("VERITAS_ZOTERO_KEY", None)
 
 import sources  # noqa: E402  (after the environment above, before any test imports kb)

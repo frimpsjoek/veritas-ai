@@ -38,6 +38,7 @@ import numpy as np
 
 import media
 import sources
+import abstracts
 import zotero
 
 # The folders to read (spec 018). VAULT is the main (output) folder: the listed folder chosen for notes, else
@@ -780,7 +781,8 @@ def _index_library(db: sqlite3.Connection, verbose: bool, progress: Progress, pr
         return 0
     mine = "path LIKE ? || '%'" if prefix else "path NOT LIKE '%:/%'"
     args = (prefix,) if prefix else ()
-    fingerprint = json.dumps(zotero.fingerprint())
+    # abstracts found in OpenAlex (abstracts.py) change the documents too, so their file is part of the check
+    fingerprint = json.dumps([zotero.fingerprint(), abstracts.stamp()])
     row = db.execute("SELECT value FROM meta WHERE key=?", (fingerprint_key,)).fetchone()
     missing_keys = {r[0] for r in db.execute(
         f"SELECT path FROM notes WHERE source='zotero' AND {mine} AND (meta IS NULL OR json_extract(meta, '$.collection_keys') IS NULL)",

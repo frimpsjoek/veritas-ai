@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+import abstracts
+
 ZOTERO = Path(os.environ.get("KB_ZOTERO", Path.home() / "Zotero"))  # the default library
 # The library the functions below read, when it is not the default one (several libraries, phase 2 task 3). A context
 # variable, so one request or index stage switching library never changes what another thread reads.
@@ -183,6 +185,10 @@ def documents() -> list[ZoteroDoc]:
         if item_id not in deleted and (text or comment):
             annotations.setdefault(parent, []).append((sort, page, text, comment, item_id))
 
+    # abstracts the library lacks, from OpenAlex (abstracts.py); Zotero itself is never changed
+    if os.environ.get("KB_ABSTRACTS", "1") != "0":
+        abstracts.fill([fields.get(i, {}).get("DOI", "") for i, _, t, _ in items
+                        if t not in SKIP_TYPES and i not in deleted and not fields.get(i, {}).get("abstractNote")])
     docs = []
     for item_id, key, type_name, _ in items:
         if type_name in SKIP_TYPES or item_id in deleted:
@@ -194,9 +200,12 @@ def documents() -> list[ZoteroDoc]:
         venue = f.get("publicationTitle") or f.get("proceedingsTitle") or f.get("bookTitle") or f.get("websiteTitle") or ""
         byline = ", ".join(authors[:6]) + (" et al." if len(authors) > 6 else "")
         parts = [f"# {title}", " · ".join(p for p in (byline, year, venue, f.get("DOI", "")) if p)]
+        signature = modified.get(item_id, 0.0)
         if f.get("abstractNote"):
             parts += ["## Abstract", f["abstractNote"]]
-        signature = modified.get(item_id, 0.0)
+        elif f.get("DOI") and (filled := abstracts.cached(f["DOI"])):
+            parts += ["## Abstract", filled[0]]
+            signature = max(signature, filled[2])  # re-index the item once its abstract arrives
         child_notes = notes.get(item_id, [])
         if child_notes:
             parts.append("## My notes")
@@ -257,6 +266,14 @@ def _position(raw: str | None) -> dict | None:
     return position if isinstance(position, dict) else None
 
 
+def _abstract(fields: dict) -> dict:
+    """The item's abstract, or one found in OpenAlex when Zotero has none (with where it came from)."""
+    if fields.get("abstractNote") or not fields.get("DOI"):
+        return {"abstract": fields.get("abstractNote", "")}
+    filled = abstracts.cached(fields["DOI"])
+    return {"abstract": filled[0], "abstract_source": filled[1]} if filled else {"abstract": ""}
+
+
 def item_detail(key: str, full_text: bool = False) -> dict | None:
     """One item, structured for reading: metadata, abstract, notes, highlights (with colour and page), PDFs,
     and optionally the full text. Reads a copy of the database at most a minute old."""
@@ -315,7 +332,7 @@ def item_detail(key: str, full_text: bool = False) -> dict | None:
                      or fields.get("websiteTitle") or "",
             "volume": fields.get("volume", ""), "issue": fields.get("issue", ""), "pages": fields.get("pages", ""),
             "doi": fields.get("DOI", ""), "url": fields.get("url", ""), "citekey": fields.get("citationKey", ""),
-            "abstract": fields.get("abstractNote", ""), "tags": tags, "collections": collections, "notes": notes, "note_keys": note_keys,
+            **_abstract(fields), "tags": tags, "collections": collections, "notes": notes, "note_keys": note_keys,
             "attachments": attachments, "zotero_uri": f"zotero://select/library/items/{key}",
         }
     finally:

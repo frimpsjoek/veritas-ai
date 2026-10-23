@@ -175,6 +175,8 @@ export async function paintPaper(into, ctx, route) {
 
   const abstract = addSection('abstract', 'Abstract', null);
   if (item.abstract) abstract.append(h(doc, 'p', 'sbw-prose sbw-abstract', String(item.abstract)));
+  // Zotero had none: Veritas found it in OpenAlex (server abstracts.py); Zotero itself is unchanged
+  if (item.abstract && item.abstract_source === 'openalex') abstract.append(h(doc, 'p', 'sbw-hint', 'From OpenAlex; not in your Zotero library.'));
   else abstract.append(h(doc, 'p', 'sbw-hint', 'This paper has no abstract in Zotero.'));
 
   const pdfSection = addSection('pdf', 'PDF', null);
