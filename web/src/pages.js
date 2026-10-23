@@ -2,6 +2,7 @@
 // ui-src/src/web/pages.js. The shell's own pages: Home (painted by home/home.js, shared with the plugins), Projects
 // and Settings. They are small, read what the engine and server already expose, and open the shared chat for
 // everything interactive.
+import { setupCard } from './setup-card.js';
 import { h } from '../../ui/src/dom.js';
 import { icon } from '../../ui/src/icons.js';
 import { formatRoute } from '../../ui/src/sources/route.js';
@@ -48,8 +49,12 @@ function showWaiting(doc, n) {
 
 /** Home under the router: every link is a hash route, and the waiting count shows on the rail's Home item.
  *  @param {HTMLElement} into @param {PageContext} ctx */
-export function paintWebHome(into, { host, doc, links }, route) {
-  return paintHome(into, { host, doc, links, issue: route?.issue, onWaiting: (n) => showWaiting(doc, n) });
+export async function paintWebHome(into, { host, doc, links }, route) {
+  await paintHome(into, { host, doc, links, issue: route?.issue, onWaiting: (n) => showWaiting(doc, n) });
+  // a new user's "Get set up" card goes under the greeting; it paints nothing once every step is done or it is hidden
+  const card = await setupCard(doc, host).catch((error) => { host.logError?.(error); return null; });
+  const top = into.querySelector('.sbw-home-top');
+  if (card && top?.isConnected) top.after(card);
 }
 
 /** Projects as cards with how many chats each holds; a card opens the chat filtered to it.
