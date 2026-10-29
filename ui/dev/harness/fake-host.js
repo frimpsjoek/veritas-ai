@@ -174,6 +174,13 @@ function scriptedAgentService(calls, reply, store, providers) {
         return id;
       },
       rename: async (id, title) => { const c = store?.conversations?.find((x) => x.id === id); if (c) c.title = title; },
+      // as the engine does, simplified: each row opened is one paper less of news (the UI tells each row once)
+      markViewed: async (id, rows) => {
+        const c = store?.conversations?.find((x) => x.id === id);
+        if (!c?.news) return;
+        c.news = { ...c.news, papers: c.news.papers - rows.length };
+        if (c.news.papers <= 0) delete c.news;
+      },
       remove: async (id) => { if (store?.conversations) store.conversations = store.conversations.filter((c) => c.id !== id); },
       adopt: async () => [],
       send(id, input) {

@@ -99,13 +99,14 @@ export const artifactsWord = (n) => `${n} ${n === 1 ? 'artifact' : 'artifacts'}`
 /**
  * What the history lists, once each. A saved Find search whose JSON carries a `session` that exists is replaced by that
  * session (a Find or an imported search); the session row opens the search (`search` is set on it). Everything else
- * stays as it was.
- * @param {{ id: string, mode: string, title: string, updated: string, artifacts?: number, kind?: string }[]} conversations
+ * stays as it was. A reading radar's run is an issue, not a chat: Home's today block and Earlier issues reach it, so the
+ * history leaves it out.
+ * @param {{ id: string, mode: string, title: string, updated: string, artifacts?: number, kind?: string, cover?: { kind?: string } }[]} conversations
  * @param {{ id: string, query: string, at: string, count: number, session?: string | null }[]} searches
  * @returns {{ sessions: { conversation: any, search: any | null }[], searches: any[] }}
  */
 export function historyEntries(conversations, searches) {
-  const chats = conversations.filter((c) => c.mode === 'chat');
+  const chats = conversations.filter((c) => c.mode === 'chat' && c.cover?.kind !== 'radar');
   const bySession = new Map(searches.filter((s) => s.session).map((s) => [s.session, s]));
   const ids = new Set(chats.map((c) => c.id));
   return {

@@ -574,6 +574,7 @@ export class ArtifactPanel {
     if (!found) return undefined;
     if (!this.digest || this.digest.routine !== found.routine) { this.digest?.hideToast(); this.digest = new RadarDigest(this.host, this.doc, this.root, found); }
     this.digest.summary = found.summary;
+    this.digest.session = this.state?.sessionId ?? null;
     return this.digest;
   }
 

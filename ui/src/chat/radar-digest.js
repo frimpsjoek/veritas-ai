@@ -22,6 +22,32 @@ const markSvg = (doc, mark) => ('logo' in mark ? logoSvg(doc, LOGOS[mark.logo], 
 export const TOAST_MS = 5000;
 const SETTLED = '.sb-art-row, .sb-art-rowcard, .sbw-paper';  // table row, card, or a paper on Home
 
+/** Papers already reported as viewed while this page is open, as "session\nrow": each is told once. */
+const VIEWED = new Set();
+
+/**
+ * The person opened a paper of a routine's issue without opening its chat: one paper less of news on that session
+ * (conversations.markViewed, which ignores rows that were never news). Resolves true once the engine was told; an older
+ * server has no markViewed, and the count then drops only when the chat is opened.
+ * @param {UiHost} host @param {string | null | undefined} session @param {string | null | undefined} rowId @returns {Promise<boolean>}
+ */
+export async function markViewed(host, session, rowId) {
+  const key = `${session}\n${rowId}`;
+  if (!session || !rowId || VIEWED.has(key)) return false;
+  VIEWED.add(key);
+  try {
+    const ai = await host.ai();
+    const told = ai.conversations.markViewed?.(/** @type {any} */ (session), [/** @type {any} */ (rowId)]);
+    if (!told) return false; // an older server
+    await told;
+    return true;
+  } catch (error) {
+    VIEWED.delete(key); // told nobody: the next open tries again
+    host.logError(error);
+    return false;
+  }
+}
+
 export class RadarDigest {
   /** @param {UiHost} host @param {Document} doc @param {HTMLElement} mount the panel, which holds the toast @param {{ routine: string, summary: string }} digest */
   constructor(host, doc, mount, digest) {
@@ -39,7 +65,14 @@ export class RadarDigest {
     /** @type {HTMLElement | null} */ this.toast = null;
     /** @type {ReturnType<typeof setTimeout> | null} */ this.timer = null;
     this.canAdd = !!host.can.addToLibrary && !!host.addToLibrary;
+    /** @type {string | null} the session whose results are drawn, for `viewed`; the panel sets it */
+    this.session = null;
     void this.load();
+  }
+
+  /** A paper was opened from the digest table: it is no longer news (markViewed). @param {PaperRow} row */
+  viewed(row) {
+    void markViewed(this.host, this.session, row.id);
   }
 
   /** Earlier clicks, so a reopened digest still shows them. */

@@ -149,6 +149,7 @@ export function renderCell(ctx, cell, rowId, columnId) {
 function openPaper(ctx, row) {
   const p = row.paper;
   if (!p) return;
+  ctx.radar?.viewed(p); // a radar paper opened is one less paper of news
   if (p.ref.kind === 'paper') openCitation(ctx, p.ref);
   else if (p.doi) ctx.host.openLink(`https://doi.org/${p.doi}`);
   else if (p.url) ctx.host.openLink(p.url);
@@ -181,7 +182,7 @@ function paperCell(ctx, row) {
     const doi = h(ctx.doc, 'a', 'sb-art-doi', 'DOI');
     doi.setAttribute('role', 'link');
     doi.title = `https://doi.org/${p.doi}`;
-    doi.addEventListener('click', () => ctx.host.openLink(`https://doi.org/${p.doi}`));
+    doi.addEventListener('click', () => { ctx.radar?.viewed(p); ctx.host.openLink(`https://doi.org/${p.doi}`); });
     tags.append(doi);
     const out = outsideButton(ctx.doc, ctx.host, `https://doi.org/${p.doi}`);
     if (out) tags.append(out);
