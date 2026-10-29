@@ -293,17 +293,17 @@ def test_an_article_keeps_every_paragraph():
 
 def test_a_page_without_an_article_keeps_its_paragraphs_and_drops_link_lists():
     page = ("<div class=menu><a href=/a>Alpha</a> | <a href=/b>Beta</a> | <a href=/c>Gamma</a></div>"
-            "<div class=post><h2>Winter counts</h2>"
+            "<div class=post><h2>Winter counts</h2><div>Read Later</div>"
             "<div>Field voles dig shallow runways under the grass, and in a wet spring those runways flood.</div>"
             "<p>See <a href='/maps'>the maps</a> for where we counted, and the table for how many we found.</p>"
             "<p>Toggle the layers on the map to compare the two winters; the river shows it most clearly.</p>"
-            "<p>" + "We counted every burrow along the transects twice, once in each winter. " * 3 + "</p></div>"
+            "<p>" + "We counted every burrow along the transects twice, once in each winter. " * 3 + "</p><div>Read Later</div></div>"
             "<div><ul><li><a href=/x>Privacy</a></li><li><a href=/y>Terms</a></li><li><a href=/z>Contact</a></li></ul></div>")
     read = web_page.reader("https://blog.example/c", f"<html><body>{page}</body></html>".encode())
     body = read["html"]
     for kept in ["Winter counts", "Field voles dig", "the maps", "Toggle the layers", "We counted every burrow"]:
         assert kept in body, kept
-    for gone in ["Alpha", "Privacy", "Terms"]:
+    for gone in ["Alpha", "Privacy", "Terms", "Read Later"]:  # a short line repeated is a button's label
         assert gone not in body, gone
     assert "<p>Field voles dig" in body, "loose text in a div becomes its own paragraph"
 

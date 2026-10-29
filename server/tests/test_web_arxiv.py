@@ -21,6 +21,7 @@ LATEXML = """<html><head><title>First-Principles Wannier Representation of Proxi
 <h1 class="ltx_title ltx_title_document">First-Principles Wannier Representation of Proximity Effects</h1>
 <div class="ltx_authors"><span class="ltx_creator ltx_role_author"><span class="ltx_personname">Yaroslav Zhumagulov
 <br class="ltx_break"/>University of Somewhere</span></span></div>
+<div class="ltx_dates">(October 25, 2026)</div>
 <div class="ltx_abstract"><h6 class="ltx_title ltx_title_abstract">Abstract</h6>
 <p class="ltx_p">Proximity effects in layered heterostructures are commonly represented by static parameters fitted to
 first-principles band structures, which discards the energy dependence of interlayer hybridization.</p></div>
@@ -154,6 +155,7 @@ def test_the_html_full_text_is_read_with_the_paper_around_it(web):
     assert "$\\Delta(\\omega)=V^{\\dagger}G(\\omega)V$" in body
     assert body.count("\\Delta(\\omega)") == 1  # the annotation is not repeated after the formula
     assert "First-Principles Wannier" not in body  # the header shows the title
+    assert "October 25, 2026" not in body, "the header has the dates"
     assert "University of Somewhere" not in body and "LaTeXML" not in body and "Contents" not in body
     assert [link["label"] for link in answer["links"]] == ["PDF", "Abstract"]
 

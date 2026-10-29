@@ -24,6 +24,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -267,8 +268,8 @@ BOUNDARY = {"div", "section", "article", "main", "figure", "center", "address", 
             "fieldset", "body"}
 SKIP = {"script", "style", "noscript", "svg", "nav", "header", "footer", "aside", "form", "button", "iframe", "template",
         "select", "textarea", "head", "object", "canvas", "dialog", "menu"}
-# Text only screen readers get, and LaTeXML's author block and footer (the header shows the authors).
-SKIP_CLASSES = {"sr-only", "visually-hidden", "screen-reader-text", "ltx_authors", "ltx_page_footer"}
+# Text only screen readers get, and LaTeXML's author block, dates and footer (the header shows authors and dates).
+SKIP_CLASSES = {"sr-only", "visually-hidden", "screen-reader-text", "ltx_authors", "ltx_dates", "ltx_page_footer"}
 VOID = {"br", "img", "hr", "meta", "link", "input", "source", "wbr", "area", "base", "col", "embed", "param", "track"}
 HEADING = re.compile(r"h[1-6]")
 LABEL = re.compile(r"^\s*(Title|Authors?|Abstract)\s*:\s*")
@@ -279,6 +280,7 @@ CHROME = re.compile(r"(?:^|\s)toggle$|\(What (?:is|are) [^)]*\?\)|^Loading(?:\.\
                     r"|^References (?:&|and) Citations|BibTeX|^Which authors of this paper|^Share (?:this|on)\b"
                     r"|^Skip to|\b(?:accept|allow|use|manage)\b.{0,40}\bcookies\b|^Cookie (?:settings|policy)", re.I)
 CHROME_MAX = 120
+REPEATED_MAX = 40  # a line this short printed twice or more is a button's label ("Read Later", "Share")
 LINKY_MAX = 200
 LINKY = 0.6
 PANEL_TEXT = 200  # a section mostly of furniture goes only when this little text would go with it
@@ -491,10 +493,11 @@ def _same(a: str, b: str) -> bool:
     return bool(norm(a)) and norm(a) == norm(b)
 
 
-def _is_chrome(node: _Node) -> bool:
-    """A leaf block that is site furniture: empty, mostly links, or a known short phrase."""
+def _is_chrome(node: _Node, repeated: frozenset = frozenset()) -> bool:
+    """A leaf block that is site furniture: empty, mostly links, a short line the page repeats, or a known short
+    phrase."""
     text = _words(node.text())
-    if not text:
+    if not text or text in repeated:
         return True
     if len(text) <= LINKY_MAX and len(_words(node.link_text())) >= LINKY * len(text):
         return True
@@ -504,7 +507,7 @@ def _is_chrome(node: _Node) -> bool:
 CONTAINERS = {"ul", "ol", "dl", "table", "thead", "tbody", "blockquote"}
 
 
-def _prune_items(node: _Node) -> tuple[int, int]:
+def _prune_items(node: _Node, repeated: frozenset) -> tuple[int, int]:
     """Drops chrome items inside a list or table; (items seen, items dropped). A table row with an empty first cell
     goes with the row before it (the rest of a dropped "Cite as" row)."""
     seen = dropped = 0
@@ -514,7 +517,7 @@ def _prune_items(node: _Node) -> tuple[int, int]:
             kept.append(kid)
             continue
         if kid.tag in CONTAINERS:
-            s, d = _prune_items(kid)
+            s, d = _prune_items(kid, repeated)
             seen, dropped = seen + s, dropped + d
             if _words(kid.text()):
                 kept.append(kid)
@@ -522,7 +525,7 @@ def _prune_items(node: _Node) -> tuple[int, int]:
         seen += 1
         first = next((k for k in kid.kids if isinstance(k, _Node)), None)
         continuation = kid.tag == "tr" and first is not None and not _words(first.text())
-        if _is_chrome(kid) or (continuation and last_dropped):
+        if _is_chrome(kid, repeated) or (continuation and last_dropped):
             dropped += 1
             last_dropped = True
             continue
@@ -532,19 +535,31 @@ def _prune_items(node: _Node) -> tuple[int, int]:
     return seen, dropped
 
 
+def _leaves(node: _Node):
+    """The blocks the pruning weighs: paragraphs and list items or table rows, not headings."""
+    for kid in node.kids:
+        if isinstance(kid, _Node):
+            if kid.tag in CONTAINERS or kid.tag == "#root":
+                yield from _leaves(kid)
+            elif not HEADING.fullmatch(kid.tag):
+                yield kid
+
+
 def _prune_chrome(root: _Node) -> None:
     """Drops the furniture of a page that had no <article>/<main>. Structure first (empty and link-heavy blocks,
     breadcrumbs, sections that are mostly furniture), a short list of phrases second; a section under a furniture
     heading ("Submission history") goes with it, and a heading left with nothing under it goes too."""
     blocks = [k for k in root.kids if isinstance(k, _Node)]
+    lines = Counter(_words(b.text()) for b in _leaves(root))
+    repeated = frozenset(t for t, n in lines.items() if n > 1 and len(t) <= REPEATED_MAX)
     seen: dict[int, tuple[int, int]] = {}
     for b in blocks:
         if b.tag in CONTAINERS:
-            seen[id(b)] = _prune_items(b)
+            seen[id(b)] = _prune_items(b, repeated)
         elif HEADING.fullmatch(b.tag):
             seen[id(b)] = (0, 0)
         else:
-            seen[id(b)] = (1, int(_is_chrome(b)))
+            seen[id(b)] = (1, int(_is_chrome(b, repeated)))
     gone: set[int] = {id(b) for b in blocks if b.tag not in CONTAINERS and not HEADING.fullmatch(b.tag) and seen[id(b)][1]}
     gone |= {id(b) for b in blocks if b.tag in CONTAINERS and not _words(b.text())}
 
