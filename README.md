@@ -51,6 +51,8 @@ Run `./check.sh` to build and test everything.
 
 ## Install
 
+**Desktop app (macOS, Windows, Linux):** download it from the [latest release](https://github.com/frimpsjoek/veritas-ai/releases/latest) and see [Install the desktop app](docs/guide/install-desktop.md).
+
 **Homebrew (macOS and Linux):**
 
 ```sh

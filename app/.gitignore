@@ -1,0 +1,6 @@
+# build output and the sidecars copied in by packaging/ (never committed)
+src-tauri/target/
+src-tauri/binaries/
+src-tauri/gen/
+# the updater signing key: the private half must never reach git
+.keys/

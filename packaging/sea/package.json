@@ -1,0 +1,13 @@
+{
+  "name": "veritas-agentd-sea",
+  "private": true,
+  "type": "module",
+  "description": "Builds the agent sidecar (agentd) as a Node single executable for the desktop app (spec 024 G3)",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25",
+    "postject": "^1.0.0-alpha.6"
+  }
+}

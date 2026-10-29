@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The start page (bundled, local) may listen to start-up progress. The web app the window then loads from the local server gets no access to the app.",
+  "windows": ["main"],
+  "permissions": ["core:event:default"]
+}

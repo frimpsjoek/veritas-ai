@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Veritas</title>
+<style>
+  :root { --bg: #fbfaf8; --fg: #1d2233; --muted: #6b7083; --track: #e6e3dd; --bar: #34409a; --error: #b3261e; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #16181f; --fg: #eceaf2; --muted: #9a9db0; --track: #2b2e3a; --bar: #8f9cf0; --error: #f2b8b5; }
+  }
+  html, body { height: 100%; margin: 0; }
+  body { display: grid; place-items: center; background: var(--bg); color: var(--fg);
+         font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  main { width: min(520px, 100% - 32px); text-align: center; }
+  img { width: 96px; height: 96px; border-radius: 22px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 16px 0 4px; }
+  p { margin: 0; color: var(--muted); }
+  .track { height: 6px; background: var(--track); border-radius: 3px; overflow: hidden; margin: 20px 0 8px; }
+  .bar { height: 100%; width: 0; background: var(--bar); transition: width 0.2s; }
+  .error { color: var(--error); white-space: pre-wrap; text-align: left; font-size: 13px; margin-top: 16px;
+           max-height: 40vh; overflow: auto; }
+  #offer { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  #offer[hidden] { display: none; }
+  #use { background: var(--bar); color: var(--bg); border-color: var(--bar); }
+  button { margin-top: 16px; font: inherit; padding: 6px 18px; border-radius: 6px; border: 1px solid var(--muted);
+           background: transparent; color: var(--fg); cursor: pointer; }
+  [hidden] { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <img src="icon.png" alt="">
+  <h1>Veritas</h1>
+  <p id="status">Starting…</p>
+  <div class="track" id="track" hidden><div class="bar" id="bar"></div></div>
+  <p id="detail"></p>
+  <div class="error" id="error" hidden></div>
+  <div id="offer" hidden>
+    <button id="use">Use it</button>
+    <button id="fresh">Start fresh</button>
+    <button id="pick">Choose a folder…</button>
+  </div>
+  <button id="retry" hidden>Try again</button>
+</main>
+<script>
+  const { invoke } = window.__TAURI__.core;
+  const { listen } = window.__TAURI__.event;
+  const $ = (id) => document.getElementById(id);
+  const mb = (bytes) => (bytes / 1e6).toFixed(0);
+
+  listen('model-progress', ({ payload }) => {
+    $('status').textContent = 'Downloading the search model (once)';
+    $('track').hidden = false;
+    $('bar').style.width = `${Math.min(100, (100 * payload.done) / payload.total)}%`;
+    $('detail').textContent = `${mb(payload.done)} of ${mb(payload.total)} MB`;
+  });
+
+  const num = (n) => n.toLocaleString('en-US');
+  let lastReuse;
+
+  function offer(found) {
+    const first = found[0];
+    $('status').textContent = `Found an existing Veritas index (${num(first.passages)} passages from ${num(first.notes)} notes). Use it?`;
+    $('detail').textContent = `${first.path}. It is copied, not changed; only notes that changed since are read again.`;
+    $('offer').hidden = false;
+    $('use').onclick = () => boot(first.path);
+    // the other indexes found, each as its own choice
+    document.querySelectorAll('.other').forEach((b) => b.remove());
+    for (const other of found.slice(1)) {
+      const button = document.createElement('button');
+      button.className = 'other';
+      button.textContent = `Use ${other.path} (${num(other.passages)} passages)`;
+      button.onclick = () => boot(other.path);
+      $('offer').insertBefore(button, $('fresh'));
+    }
+  }
+
+  async function boot(reuse) {
+    lastReuse = reuse;
+    $('error').hidden = $('retry').hidden = $('offer').hidden = true;
+    $('detail').textContent = '';
+    $('status').textContent = reuse && reuse !== 'fresh' ? 'Copying your index…' : 'Starting…';
+    // the server is started after the download; show that step once the bar is full
+    const started = setInterval(() => {
+      if ($('bar').style.width === '100%') { $('status').textContent = 'Starting the server…'; $('track').hidden = true; $('detail').textContent = ''; }
+    }, 300);
+    try {
+      const answer = await invoke('boot', { reuse }); // once started, the window has moved to the web app
+      if (answer.offer) offer(answer.offer);
+    } catch (error) {
+      $('status').textContent = 'Veritas could not start';
+      $('error').textContent = String(error);
+      $('error').hidden = $('retry').hidden = false;
+    } finally {
+      clearInterval(started);
+    }
+  }
+  $('retry').addEventListener('click', () => boot(lastReuse));
+  $('fresh').addEventListener('click', () => boot('fresh'));
+  $('pick').addEventListener('click', async () => { const folder = await invoke('pick_folder'); if (folder) boot(folder); });
+  boot();
+</script>
+</body>
+</html>
