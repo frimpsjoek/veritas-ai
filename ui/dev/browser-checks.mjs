@@ -142,7 +142,7 @@ export async function runBrowserChecks(browser, port, outDir) {
     await page.click('.sbw-browser-tool[aria-label="Close"]');
     await page.click(noteLink, { button: 'right' });
     const menu = await page.evaluate(() => [...document.querySelectorAll('.sb-link-menu .sb-art-item-label')].map((n) => n.textContent));
-    check(`${tag} right-click on a link offers both places`, JSON.stringify(menu) === '["Open in Second Brain","Open in your browser"]', menu);
+    check(`${tag} right-click on a link offers both places`, JSON.stringify(menu) === '["Open in Veritas","Open in your browser"]', menu);
     await page.evaluate(() => { window.__opened = []; });
     await page.click('.sb-link-menu .sb-art-item:last-child');
     check(`${tag} "Open in your browser" goes outside and the menu closes`, (await page.evaluate(() => window.__opened))[0]?.url === 'https://example.org/voles' && (await page.locator('.sb-link-menu').count()) === 0 && (await panel()).open === false);

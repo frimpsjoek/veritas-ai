@@ -372,6 +372,10 @@ export function createFakeHost(opts = {}) {
     setOpenRef() {},
     logError() {},
     mount(root) { document.body.appendChild(root); },
+    // the web host's server and its same-origin assets (src/web/assets.js): the harness serves everything itself
+    server: { url: globalThis.location?.origin ?? '', sameOrigin: true },
+    assets: { sameOrigin: true, async url(path) { return path; }, async bytes(path) { return (await fetch(path)).arrayBuffer(); },
+      async frame(route, query) { return `${route}?${new URLSearchParams(query)}`; }, revokeAll() {} },
 
     // ---------- unit C1 additions (host.d.ts)
     async confirm() { return true; },
