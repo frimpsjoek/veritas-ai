@@ -41,8 +41,8 @@ run(process.execPath, ['--experimental-sea-config', 'sea-config.json']);
 copyFileSync(process.execPath, exe);
 chmodSync(exe, 0o755);
 if (mac) run('codesign', ['--remove-signature', exe]); // postject cannot write into a signed binary
-const postject = join(here, 'node_modules', '.bin', windows ? 'postject.cmd' : 'postject');
-run(postject, [exe, 'NODE_SEA_BLOB', join('build', 'sea-prep.blob'),
+// its CLI script, run by node: Windows refuses to spawn the .cmd wrapper without a shell
+run(process.execPath, [join(here, 'node_modules', 'postject', 'dist', 'cli.js'), exe, 'NODE_SEA_BLOB', join('build', 'sea-prep.blob'),
   '--sentinel-fuse', 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2', ...(mac ? ['--macho-segment-name', 'NODE_SEA'] : [])]);
 if (mac) run('codesign', ['--sign', '-', exe]); // Apple silicon runs nothing unsigned; ad hoc is enough
 

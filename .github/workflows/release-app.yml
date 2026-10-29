@@ -1,0 +1,93 @@
+# Desktop app installers for each release tag (spec 024 G3): .dmg (Apple silicon and Intel), -setup.exe (NSIS),
+# .AppImage and .deb, unsigned (decision D3), attached to the GitHub Release with latest.json for the in-app updater.
+# Needs the secret TAURI_SIGNING_PRIVATE_KEY (the updater's minisign key; app/.keys/ on the machine that made it)
+# and, if that key has a password, TAURI_SIGNING_PRIVATE_KEY_PASSWORD.
+name: release-app
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write  # create the release and upload the installers
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: ubuntu-22.04  # the oldest supported glibc, so the AppImage and .deb run on older systems too
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    env:
+      TARGET_TRIPLE: ${{ matrix.target }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag matches the app version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          app=$(node -p 'require("./app/src-tauri/tauri.conf.json").version')
+          [ "v$app" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME but app/src-tauri/tauri.conf.json says $app" >&2; exit 1; }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+
+      - name: Linux libraries for the web view and tray
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - name: Web app (bundled into the app)
+        run: |
+          (cd agent && npm ci)
+          (cd ui && npm ci)
+          (cd web && npm ci && npm run build)
+
+      - name: Server sidecar (PyInstaller)
+        run: |
+          uv pip install --system -r server/requirements.txt pyinstaller
+          PYTHON=python packaging/pyinstaller/build.sh
+
+      - name: Agent sidecar (Node single executable)
+        run: (cd packaging/sea && npm ci && node build.mjs)
+
+      - name: Build and upload the installers
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          CI: true  # the .dmg without Finder styling: there is no Finder session to script on a runner
+        with:
+          projectPath: app
+          tauriScript: npx --yes @tauri-apps/cli@2
+          args: --target ${{ matrix.target }}
+          tagName: ${{ github.ref_name }}
+          releaseName: Veritas ${{ github.ref_name }}
+          releaseBody: "Desktop installers are below; how to open an unsigned app: docs/guide/install-desktop.md."
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true
