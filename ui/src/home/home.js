@@ -4,7 +4,7 @@
 // router (web/pages.js); Zotero and Obsidian mount HomeView in a tab and a view. Links go through HomeLinks
 // (links.js), so the same page works with hash routes and with a plugin's own way of opening things.
 import { h } from '../dom.js';
-import { nextRunText } from '../chat/routines-data.js';
+import { nextRunText, runNowLine } from '../chat/routines-data.js';
 import { apiOf } from '../sources/view-kit.js';
 import { mountSources } from '../sources/sources-view.js';
 import { linkTo } from './links.js';
@@ -167,12 +167,59 @@ function paperEntry(doc, row, links, api, digest, show = 'summary') {
   return entry;
 }
 
+/** How often Home looks at a running radar, and how long before it stops looking and offers Run now again. */
+const RUN_POLL_MS = 5000;
+const RUN_POLL_TIMES = 120;
+const REFUSAL_MS = 4000;
+
+/**
+ * "Run now" in the today bar: starts the radar through the routines service, reads "Running…" while it runs (also when
+ * it was already running as Home painted, as on a radar's first run), shows a refusal in its own place for a moment,
+ * and calls `onRan` once the run is recorded. Home is painted once, so it asks the routines list every few seconds.
+ * @param {Document} doc @param {any} ai @param {any} routine @param {HTMLElement} block @param {() => void} onRan
+ */
+function runNowLink(doc, ai, routine, block, onRan) {
+  const run = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sbw-quiet sbw-today-run'));
+  run.type = 'button';
+  const idle = () => { run.textContent = 'Run now'; run.disabled = false; run.removeAttribute('title'); };
+  /** @param {string | null} lastAt the lastRun.at before this run */
+  const wait = (lastAt, left = RUN_POLL_TIMES) => {
+    run.textContent = 'Running…';
+    run.disabled = true;
+    setTimeout(async () => {
+      if (!block.isConnected) return; // Home was left or repainted
+      const now = await ai.routines.list().then((/** @type {any[]} */ all) => all.find((r) => r.id === routine.id), () => undefined);
+      if (now && !now.running && (now.lastRun?.at ?? null) !== lastAt) onRan();
+      else if (left > 1) wait(lastAt, left - 1);
+      else idle();
+    }, RUN_POLL_MS);
+  };
+  const refused = (/** @type {string} */ text) => {
+    run.textContent = text;
+    run.setAttribute('title', text);
+    setTimeout(idle, REFUSAL_MS);
+  };
+  run.addEventListener('click', async () => {
+    const lastAt = routine.lastRun?.at ?? null;
+    run.disabled = true;
+    try {
+      const out = await ai.routines.runNow(routine.id);
+      if (out.started) wait(lastAt);
+      else refused(runNowLine(out));
+    } catch (error) { refused(String(/** @type {any} */ (error)?.message ?? error)); }
+  });
+  if (routine.running) wait(routine.lastRun?.at ?? null);
+  else idle();
+  return run;
+}
+
 /** Today: a radar issue across the full width, a photo banner over its papers in abstract form, with ‹ › to step
  *  back through earlier days. Today with nothing new yet says so; no radar at all offers to set one up.
  *  @param {Document} doc @param {any} ai @param {any} host @param {HomeLinks} links
- *  @param {{ issues: any[], routine: any | null, pick?: string, unknown?: boolean }} radar issues newest first; `pick` opens on that issue;
- *  `unknown`: the routines could not be read, so whether a radar exists is not known */
-async function todayBlock(doc, ai, host, links, { issues, routine, pick, unknown }) {
+ *  @param {{ issues: any[], routine: any | null, pick?: string, unknown?: boolean, onRan?: (block: HTMLElement) => void }} radar issues newest first; `pick` opens on that issue;
+ *  `unknown`: the routines could not be read, so whether a radar exists is not known; `onRan(block)`: a run started or
+ *  watched here was recorded */
+async function todayBlock(doc, ai, host, links, { issues, routine, pick, unknown, onRan }) {
   const block = h(doc, 'section', 'sbw-today');
   const api = apiOf(host);
   if (!routine && !issues.length && unknown) {
@@ -226,7 +273,10 @@ async function todayBlock(doc, ai, host, links, { issues, routine, pick, unknown
   const sources = linkTo(h(doc, 'a', 'sbw-quiet sbw-today-sources', 'Sources'), { to: 'sources' }, links);
   // The issue reads here as a list; its chat is one step away for questions about it.
   const chat = h(doc, 'a', 'sbw-quiet sbw-today-chat', 'Chat about this issue');
-  bar.append(nav, chat, sources, shows);
+  bar.append(nav, chat, sources);
+  // Hosts whose server predates runNow get no link rather than one that fails.
+  if (routine && onRan && typeof ai.routines?.runNow === 'function') bar.append(runNowLink(doc, ai, routine, block, () => onRan(block)));
+  bar.append(shows);
   nav.append(older, newer);
   block.append(stage, bar, list);
 
@@ -317,6 +367,16 @@ function shelfSection(doc, title, items, links) {
   return box;
 }
 
+/** The active radars and the radar issues among the conversations, newest first. @param {any[]} conversations @param {any[]} routines */
+function issuesOf(conversations, routines) {
+  const radarRoutines = routines.filter((/** @type {any} */ r) => !r.broken && (r.kind === 'radar' || r.radar) && r.status === 'active');
+  const radars = new Set(radarRoutines.map((/** @type {any} */ r) => r.id));
+  const shown = conversations.filter((/** @type {any} */ c) => c.cover || !PLACEHOLDER_TITLES.has(c.title));
+  const kindOf = (/** @type {any} */ c) => shelved(c, radars).card.kind;
+  const issues = [...shown.filter((/** @type {any} */ c) => kindOf(c) === 'radar')].sort((a, b) => (a.updated < b.updated ? 1 : -1));
+  return { radarRoutines, radars, shown, kindOf, issues };
+}
+
 /** A greeting with the count of what is waiting; today's radar issue across the full width; then research reports,
  *  chats and earlier issues, each its own shelf, newest first, 8 a page.
  *  @param {HTMLElement} into @param {HomeContext} ctx */
@@ -347,12 +407,17 @@ export async function paintHome(into, ctx) {
   const waiting = conversations.reduce((/** @type {number} */ sum, /** @type {any} */ c) => sum + (Number(c.news?.papers) || 0), 0);
   if (waiting) count.textContent = `${waiting} new ${waiting === 1 ? 'paper' : 'papers'}`;
   ctx.onWaiting?.(waiting);
-  const radarRoutines = routines.filter((/** @type {any} */ r) => !r.broken && (r.kind === 'radar' || r.radar) && r.status === 'active');
-  const radars = new Set(radarRoutines.map((/** @type {any} */ r) => r.id));
+  const { radarRoutines, radars, shown, kindOf, issues } = issuesOf(conversations, routines);
   const newest = (/** @type {Shelved[]} */ list) => list.sort((a, b) => (a.at < b.at ? 1 : -1));
-  const shown = conversations.filter((/** @type {any} */ c) => c.cover || !PLACEHOLDER_TITLES.has(c.title));
-  const kindOf = (/** @type {any} */ c) => shelved(c, radars).card.kind;
-  const issues = [...shown.filter((/** @type {any} */ c) => kindOf(c) === 'radar')].sort((a, b) => (a.updated < b.updated ? 1 : -1));
+  // A run started (or watched) from Home ends with a new issue: read again and swap only the today block, so the
+  // shelves and anything a host put on the page stay as they are.
+  const refreshToday = async (/** @type {HTMLElement} */ old) => {
+    try {
+      const [c, r] = await Promise.all([ai.conversations.list(), ai.routines.list()]);
+      const fresh = issuesOf(c, r);
+      old.replaceWith(await todayBlock(doc, ai, host, links, { issues: fresh.issues, routine: fresh.radarRoutines[0] ?? null, onRan: refreshToday }));
+    } catch (error) { host.logError(error); }
+  };
   const today = issues[0] && sameDay(issues[0].updated, new Date().toISOString()) ? issues[0] : null;
 
   // Until a radar exists (or the person puts it off), Home opens on who and what to follow instead of an empty Today.
@@ -362,7 +427,7 @@ export async function paintHome(into, ctx) {
     const slot = h(doc, 'section', 'sbw-today');
     sections.push(slot);
     void mountSources(slot, { host, doc, links }, { mode: 'intro', routines, onDone: () => { void paintHome(into, ctx); } });
-  } else sections.push(await todayBlock(doc, ai, host, links, { issues, routine: radarRoutines[0] ?? null, pick: ctx.issue, unknown: routinesFailed }));
+  } else sections.push(await todayBlock(doc, ai, host, links, { issues, routine: radarRoutines[0] ?? null, pick: ctx.issue, unknown: routinesFailed, onRan: refreshToday }));
   const reports = newest(shown.filter((/** @type {any} */ c) => kindOf(c) === 'report').map((/** @type {any} */ c) => shelved(c, radars)));
   const chats = newest(shown.filter((/** @type {any} */ c) => ['chat', 'find'].includes(kindOf(c))).map((/** @type {any} */ c) => shelved(c, radars)));
   const earlier = newest(issues.filter((/** @type {any} */ c) => c !== today).map((/** @type {any} */ c) => shelved(c, radars)));
