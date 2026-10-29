@@ -8,7 +8,7 @@ import { interceptLinks, isPdfUrl } from '../../ui/src/links.js';
 import { noteFragment } from '../../ui/src/sources/view-kit.js';
 import { PdfViewer } from './pdf-viewer.js';
 import { mathNode } from '../../ui/src/chat/markdown.js';
-import { addressOf, blockedReason, createHistory, fileNameOf, firstPrefer, mathParts, pageQuery, readerPlan, sourceOf } from './browser-state.js';
+import { addressOf, blockedReason, createHistory, fileNameOf, firstPrefer, mathParts, pageQuery, readerPlan, sourceOf, stepBack } from './browser-state.js';
 
 const FRAME_SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox';
 
@@ -32,7 +32,7 @@ export function createBrowserPanel({ host, doc, win, into }) {
     b.addEventListener('click', run);
     return b;
   };
-  const back = tool('back', 'Back', () => { const entry = history.back(); if (entry) void show(entry, false); });
+  const back = tool('back', 'Back', () => { const step = stepBack(history); if ('show' in step) void show(step.show, false); else api.close(); });
   const where = h(doc, 'div', 'sbw-browser-where');
   const titleEl = h(doc, 'span', 'sbw-browser-title');
   const addressEl = h(doc, 'span', 'sbw-browser-address');
@@ -62,7 +62,8 @@ export function createBrowserPanel({ host, doc, win, into }) {
     titleEl.textContent = title || addressOf(url);
     addressEl.textContent = source ? `${source} · ${addressOf(url)}` : addressOf(url);
     root.dataset.url = url;
-    back.disabled = !history.canGoBack;
+    // on the first page ← closes the panel, so it is never greyed out
+    back.title = history.canGoBack ? 'Back' : 'Back (close)';
   }
 
   /** @param {string} reason @param {string} url @param {string} [title] */

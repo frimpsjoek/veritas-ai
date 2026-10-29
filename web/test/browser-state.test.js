@@ -129,3 +129,13 @@ test('TeX in a math answer is found even glued to a word (PtSe$_2$), and money s
   assert.deepEqual(mathParts('Tickets cost $5 and $10.'), [{ text: 'Tickets cost $5 and $10.' }]);
   assert.deepEqual(mathParts('no math'), [{ text: 'no math' }]);
 });
+
+test('← shows the page before, and on the first page closes the panel (back to where the link was clicked)', async () => {
+  const { stepBack } = await import('../src/browser-state.js');
+  const h = createHistory();
+  h.push({ url: 'https://a.org/' });
+  h.push({ url: 'https://b.org/' });
+  assert.deepEqual(stepBack(h), { show: { url: 'https://a.org/' } });
+  assert.deepEqual(stepBack(h), { close: true });
+  assert.deepEqual(stepBack(createHistory()), { close: true });
+});

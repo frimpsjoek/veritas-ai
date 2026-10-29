@@ -75,6 +75,17 @@ export async function runBrowserChecks(browser, port, outDir) {
     await page.click('.sbw-browser-tool[aria-label="Back"]');
     await page.waitForFunction(() => document.querySelector('.sbw-browser-title')?.textContent === 'Voles in the reader');
     await page.screenshot({ path: join(outDir, `browser-reader-${width}.png`) });
+    // on the first page ← closes the panel instead of sitting greyed out
+    await page.click('.sbw-browser-tool[aria-label="Close"]');
+    await open('https://reader.example/first');
+    await page.waitForSelector('.sbw-browser-article');
+    const firstBack = (await panel()).back;
+    await page.click('.sbw-browser-tool[aria-label="Back"]');
+    check(`${tag} ← on the first page closes the panel`, firstBack === false && (await panel()).open === false, { firstBack });
+    await open('https://frame.example/page');
+    await page.waitForSelector('.sbw-browser-frame');
+    await page.click('.sbw-browser-text');
+    await page.waitForSelector('.sbw-browser-article');
 
     // a PDF link goes to the PDF reader, with no /web/page round trip
     const before = calls.filter((c) => c.includes('/web/page')).length;

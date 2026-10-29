@@ -19,6 +19,14 @@ export function createHistory() {
   };
 }
 
+/** What ← does: the page before in the panel, or, on the first page, close the panel (focus goes back to the link
+ *  it was opened from), so ← always does something. A framed site's own history is not reachable from here.
+ *  @param {ReturnType<typeof createHistory>} history @returns {{ show: Entry } | { close: true }} */
+export function stepBack(history) {
+  const entry = history.back();
+  return entry ? { show: entry } : { close: true };
+}
+
 /** What to ask /web/page for. A framed http page inside an https app is blocked by the browser (mixed content), so it
  *  gets the reader view straight away. @param {string} url @param {string} appProtocol e.g. "https:" @returns {'reader' | undefined} */
 export function firstPrefer(url, appProtocol) {
