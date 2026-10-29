@@ -180,5 +180,34 @@ present (tested with a fixture).
 ./check.sh: all parts passed. tools 15, agent 809, ui 290, web 62, obsidian 27, zotero 12,
 server 351 passed / 3 skipped.
 
+## TG5: Windows process fixes left open by TG1 (branch `ai/024-windows-spawn`)
+1. CLI shims: on Windows `spawn()` resolves `.cmd`/`.bat` (and bare names found through PATH, such as `npx`) before
+   starting them (`agent/src/node/windows-command.mjs`): npm's shim → `node <script>` (node.exe beside the shim, else
+   node on PATH); else an `.exe` beside it; else cmd.exe only when every argument is plain (`[A-Za-z0-9_\-.,:/\\=@+]`);
+   else a child that exits 127 with the reason. macOS/Linux take the old line unchanged.
+2. Stop indexing: the server writes `index-stop` in the data folder; `Progress.advance` checks it between batches on
+   every system; SIGTERM stays the fast path off Windows (where `os.kill` would be TerminateProcess). A new or
+   stopped run removes the file.
+3. Self-update: `replace_self()`; `os.execv` on macOS/Linux; on Windows close the listener, start the new server
+   detached (`DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`), `os._exit(0)`.
+- Each: failing test first, smallest change, one commit; `./check.sh` at the end.
+
+### TG5 evidence (2026-10-28, macOS 26 arm64, Node 22, Python 3.12 venv)
+- Before (at `2c19ef3`): agent 817, server 370 passed + 3 skipped.
+- 7dd5beb shims: agent 817 → 823. Fixture shims on a mocked win32: cmd-shim's exact format (script after
+  `%dp0%`, node.exe beside it preferred), Node's `npx.cmd` (script in a variable set twice, bare `npx` via PATH),
+  a non-npm shim with an `.exe` neighbour, an unknown `.bat` (plain args → `shell: true` with the path quoted;
+  spaces, `&`, `%VAR%`, `|`, quotes, `^`, empty → refused), `.exe` and missing commands passed through, and a real
+  spawn through the mocked-win32 platform (npm shim → node runs the script with `a & b` intact; refused → 127 + reason).
+- 524ae30 stop: server 370 → 374 (stop file written on darwin/linux/win32, SIGTERM only off Windows; a stale file
+  cleared, a new one stops the run at the next batch).
+- 56c7bba self-update: server 374 → 377 (darwin/linux execv; win32 close → detached start → exit, in that order).
+- `./check.sh` after: all parts passed; tools 31 (30 + 1 skipped), agent 823, ui 291, web 62, obsidian 27,
+  zotero 12, server 377 passed + 3 skipped.
+- Not checked here: a real Windows machine (none available). Still open: the detached server on Windows writes to
+  whatever stdout/stderr it inherits (none when started from a console that then closes); under the desktop app
+  (TG2) a self-replacing server leaves Tauri's supervision, so the app should restart its sidecar rather than rely
+  on this path. The agentd entry spawn (TG2) was not touched.
+
 ## Merge order
 TG4 → TG1 → TG3 → TG2 (TG2 is largest and depends on TG1's platform code for the Windows/Linux builds).
