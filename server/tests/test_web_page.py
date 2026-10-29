@@ -326,3 +326,12 @@ def test_a_byline_of_last_first_names_reads_first_last():
     assert byline("Curie, Marie", "Bohr, Niels") == "Marie Curie, Niels Bohr"
     assert byline("Marie Curie", "Bohr, Niels") == "Marie Curie, Bohr, Niels", "flipped only when every name has one comma"
     assert byline(*[f"Last{i}, First{i}" for i in range(8)]) == ", ".join(f"First{i} Last{i}" for i in range(6)) + " et al."
+
+
+def test_a_title_with_the_site_name_still_counts_as_repeated():
+    """Quanta (2026-10-29): <title> "Story | Quanta Magazine", and the story's name twice at the top of its text."""
+    head = '<title>How Spiders Spin Silk | Field Notes</title><meta property="og:site_name" content="Field Notes">'
+    page = f"<html><head>{head}</head><body><main><p>How Spiders Spin Silk</p><h1>How Spiders Spin Silk</h1>{ARTICLE}</main></body></html>"
+    read = web_page.reader("https://notes.example/silk", page.encode())
+    assert read["title"] == "How Spiders Spin Silk", "the site's name is not part of the title"
+    assert "How Spiders Spin Silk" not in read["html"]

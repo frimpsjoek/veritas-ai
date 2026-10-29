@@ -608,13 +608,14 @@ def _tidy(root: _Node, title: str, byline: str) -> None:
     """Every page: the block repeating the title goes (the header shows it), glued field labels go, an abstract gets a
     small "Abstract" label instead of a quote."""
     out = []
-    title_seen = False
-    for at, kid in enumerate(root.kids):
+    blocks = 0
+    for kid in root.kids:
         if isinstance(kid, str):
             out.append(kid)
             continue
-        if not title_seen and at < 40 and kid.tag in ("p", "h1", "h2", "h3") and _same(kid.text(), title):
-            title_seen = True
+        blocks += 1
+        # near the top only: a site may print the title twice (a kicker and the heading); later it is a quotation
+        if blocks <= 8 and kid.tag in ("p", "h1", "h2", "h3") and _same(kid.text(), title):
             continue
         if _words(kid.text()).lower() == "abstract" and HEADING.fullmatch(kid.tag):
             out.append(_label("Abstract"))
@@ -667,6 +668,9 @@ def reader(url: str, page: bytes, kind_charset: str = "") -> dict | None:
     body = best if zoned else "".join(parser.out)
     meta = parser.meta
     title = html.unescape((meta.get("citation_title") or meta.get("og:title") or [parser.title.strip()])[0] or url).strip()
+    site = html.unescape((meta.get("og:site_name") or [""])[0]).strip()
+    if site:  # "Story | Quanta Magazine": the header shows the story; the site's name is in the address line
+        title = re.sub(rf"\s+[|\-–—·:]\s+{re.escape(site)}$", "", title) or title
     byline = _names(meta.get("citation_author") or meta.get("author") or [])
     root = _tree(body)
     # An <article> is the site's own choice of text and is kept whole; the whole body, or a <main> (often the page
