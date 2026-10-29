@@ -5,7 +5,7 @@
 // user typed; a failed lookup comes back as a plain sentence.
 import { politeFetch } from './radar-sources.js';
 import { fetchFeed } from './feeds.js';
-import { openAlexWorks, arxivCategoryOf, arxivCategoryFeed } from './scholarly.js';
+import { openAlexWorks, arxivCategoryOf, arxivCategoryFeed, arxivQuery } from './scholarly.js';
 import { normTitle, isNonPaper, seedBody, seedsKey } from './radar.js';
 import { nameKey } from './radar-score.js';
 
@@ -114,30 +114,40 @@ export async function seedCategories(fetchFn, titles) {
 }
 
 /**
+ * Recent papers of one arXiv category: its daily RSS listing, or, when that is empty (no announcement at weekends, and
+ * between a listing and the next), the newest submissions from the arXiv API. An empty listing left calibration
+ * without unrelated papers, and the radar on its default threshold.
+ * @param {typeof fetch} fetchFn @param {typeof fetch} api a polite fetch for export.arxiv.org @param {string} category @param {number} n
+ * @returns {Promise<{ title: string, abstract: string, arxiv: string | null }[]>}
+ */
+async function categoryPapers(fetchFn, api, category, n) {
+  const got = await fetchFeed(fetchFn, arxivCategoryFeed(category), null).catch(() => ({ items: [], error: 'unreachable' }));
+  const listed = got.items.filter((i) => i.summary).slice(0, n).map((i) => ({ title: i.title, abstract: i.summary, arxiv: i.arxiv ?? null }));
+  if (listed.length >= n / 2) return listed;
+  const recent = await arxivQuery(api, `cat:${category}`, n).catch(() => []);
+  return recent.length > listed.length ? recent.filter((r) => r.abstract).map((r) => ({ title: r.title, abstract: r.abstract, arxiv: r.arxiv || null })) : listed;
+}
+
+/**
  * Calibrates a seed radar (G4): the server compares the seeds with each other and with recent papers from fields far
  * from them (arXiv's daily listings), and sets the thresholds where the two separate.
- * @param {{ fetch: typeof fetch, library: import("./tools").LibraryBackend, seeds: RadarSeeds }} q
+ * @param {{ fetch: typeof fetch, library: import("./tools").LibraryBackend, seeds: RadarSeeds, sleep?: (ms: number) => Promise<void> }} q
  * @returns {Promise<{ threshold: import("./radar-types").RadarThreshold | null, problem: string | null }>}
  */
 export async function calibrateRadar(q) {
   if (!q.library.radarCalibrate) return { threshold: null, problem: 'The library server is too old to calibrate the radar.' };
   const own = new Set(q.seeds.categories.map((c) => c.split('.')[0]));
   const contrast = CONTRAST.filter((c) => !own.has(c.split('.')[0])).slice(0, 4);
+  const api = politeFetch(q.fetch, contrast.length + 2, q.sleep ? { sleep: q.sleep } : {}).fetch;
   /** @type {{ title: string, abstract: string, arxiv: string | null }[]} */
   const unrelated = [];
-  for (const category of contrast) {
-    const got = await fetchFeed(q.fetch, arxivCategoryFeed(category), null).catch(() => ({ items: [], error: 'unreachable' }));
-    unrelated.push(...got.items.filter((i) => i.summary).slice(0, PER_CONTRAST).map((i) => ({ title: i.title, abstract: i.summary, arxiv: i.arxiv ?? null })));
-  }
+  for (const category of contrast) unrelated.push(...(await categoryPapers(q.fetch, api, category, PER_CONTRAST)).slice(0, PER_CONTRAST));
   if (unrelated.length < 10) return { threshold: null, problem: "Couldn't fetch enough unrelated papers from arXiv to calibrate; the radar uses 0.70 until the next try." };
   // Today's papers in the seeds' own categories: most are not for this person, so they set each seed's baseline
   // and the cut that keeps only the closest tenth of the field.
   /** @type {{ title: string, abstract: string, arxiv: string | null }[]} */
   const field = [];
-  for (const category of q.seeds.categories.slice(0, 2)) {
-    const got = await fetchFeed(q.fetch, arxivCategoryFeed(category), null).catch(() => ({ items: [], error: 'unreachable' }));
-    field.push(...got.items.filter((i) => i.summary).slice(0, PER_FIELD).map((i) => ({ title: i.title, abstract: i.summary, arxiv: i.arxiv ?? null })));
-  }
+  for (const category of q.seeds.categories.slice(0, 2)) field.push(...(await categoryPapers(q.fetch, api, category, PER_FIELD)).slice(0, PER_FIELD));
   try {
     const r = await q.library.radarCalibrate({ seeds: seedBody(q.seeds), unrelated, field, full_papers: FULL_UNRELATED });
     return {

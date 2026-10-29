@@ -38,8 +38,9 @@ export const NEEDS_SERVER = 'The reading radar needs the library server, which i
  * @param {{
  *   config: import("./radar-types").RadarConfig, since: string, now: string, fetch: typeof fetch,
  *   library: import("./tools").LibraryBackend, hub?: any, state: RadarState, signal?: AbortSignal, budget?: number,
- *   keyed?: boolean, abstractFetch?: typeof fetch,
+ *   keyed?: boolean, abstractFetch?: typeof fetch, sleep?: (ms: number) => Promise<void>,
  * }} run `keyed`: the user has saved an OpenAlex key; "Might interest you" needs one, and is left out when it is false or absent.
+ *   `sleep` stands in for the waits between arXiv API requests (tests).
  *   `abstractFetch` (abstractNet): papers that came without an abstract are looked up before the final ranking; absent,
  *   only the picked rows are, in OpenAlex, after it.
  * @returns {Promise<{ picked: RadarItem[], older: RadarItem[], olderNote: string | null, discover: RadarItem[], discoverNote: string | null, announced: string[], state: RadarState, failed: { source: string, error: string }[], sourcesAnswered: number, requests: number, threshold: import("./radar-types").RadarThreshold | null }>}
@@ -82,7 +83,7 @@ export async function collectRadar(run) {
   let calibrated = null, calibrateTried = state.calibrateTried;
   if (seeds && config.seeds && library.radarCalibrate && wantsCalibration(config.seeds, seeds, threshold, state.calibrateTried, run.now)) {
     calibrateTried = run.now;
-    const got = await calibrateRadar({ fetch: run.fetch, library, seeds: config.seeds });
+    const got = await calibrateRadar({ fetch: run.fetch, library, seeds: config.seeds, ...(run.sleep ? { sleep: run.sleep } : {}) });
     if (got.threshold) threshold = calibrated = got.threshold;
   }
   const cut = seeds ? (threshold ? threshold.abstract - ABSTRACT_MARGIN : DEFAULT_CUT) : undefined;

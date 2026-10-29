@@ -170,18 +170,38 @@ test('a run that could not calibrate tries again the next day, and a radar with 
   const fetch = async (url) => (String(url) === arxivCategoryFeed('cond-mat.mtrl-sci') ? res(200, arxivFeed([])) : res(404));
   const config = validateRadar({ scope: { kind: 'library' }, profile: profile({ topics: [] }), sources: [{ id: 'database:arxiv', on: true, kind: 'database', db: 'arxiv' }], size: { fresh: 15, older: 0 }, seeds: seeds() });
   const tried = { ...emptyState(), calibrateTried: '2026-10-20T01:00:00Z' };
-  await collectRadar({ config, since: '2026-09-01', now: NOW, fetch, library: lib, state: tried });
+  await collectRadar({ config, since: '2026-09-01', now: NOW, fetch, library: lib, state: tried, sleep: async () => {} });
   assert.equal(asked, 0, 'tried six hours ago');
-  await collectRadar({ config, since: '2026-09-01', now: '2026-10-21T07:00:00Z', fetch, library: lib, state: tried });
+  await collectRadar({ config, since: '2026-09-01', now: '2026-10-21T07:00:00Z', fetch, library: lib, state: tried, sleep: async () => {} });
   assert.equal(asked, 0, 'too few unrelated papers to fetch: calibrateRadar gives up before the server');
   const few = { ...config, seeds: { ...config.seeds, mine: [], papers: ['K1', 'K2'] } };
   const rss = async (url) => (String(url).startsWith('https://rss.arxiv.org/rss/') ? res(200, arxivFeed(Array.from({ length: 10 }, (_, i) => ({ id: `2610.3000${i}`, title: `U ${i}`, summary: 's' })))) : res(404));
-  await collectRadar({ config: few, since: '2026-09-01', now: NOW, fetch: rss, library: lib, state: emptyState() });
+  await collectRadar({ config: few, since: '2026-09-01', now: NOW, fetch: rss, library: lib, state: emptyState(), sleep: async () => {} });
   assert.equal(asked, 0, 'two seeds and no collection: the server would refuse');
-  const out = await collectRadar({ config, since: '2026-09-01', now: NOW, fetch: rss, library: lib, state: emptyState() });
+  const out = await collectRadar({ config, since: '2026-09-01', now: NOW, fetch: rss, library: lib, state: emptyState(), sleep: async () => {} });
   assert.equal(asked, 1);
   assert.equal(out.threshold, null, 'a failed calibration leaves the radar as it was');
   assert.equal(out.state.calibrateTried, NOW);
+});
+
+test('calibration reads the arXiv API when the daily RSS listings are empty (weekends, and between announcements)', async () => {
+  const empty = feedXml([]);
+  const entry = (c, i) => `<entry><id>http://arxiv.org/abs/2610.4${String(i).padStart(4, '0')}v1</id><title>Paper ${i} in ${c}</title><summary>Invented summary ${i}.</summary><published>2026-10-27T00:00:00Z</published></entry>`;
+  const asked = [], urls = [];
+  const fetch = async (url) => {
+    const u = String(url);
+    urls.push(u);
+    if (u.startsWith('https://rss.arxiv.org/rss/')) return res(200, empty);
+    const c = /search_query=cat:([^&]+)/.exec(u)?.[1];
+    return c ? res(200, `<feed>${Array.from({ length: 12 }, (_, i) => entry(c, i)).join('')}</feed>`) : res(404);
+  };
+  const library = { async radarCalibrate(q) { asked.push(q); return { abstract: { threshold: 0.6, overlap: false }, full: null, seeds: 3, at: 1792500000, baseline: null }; } };
+  const out = await calibrateRadar({ fetch, library: /** @type {any} */ (library), seeds: /** @type {any} */ (seeds()), sleep: async () => {} });
+  assert.equal(out.problem, null);
+  assert.equal(asked[0].unrelated.length, 40);
+  assert.ok(asked[0].unrelated.every((u) => u.arxiv && u.abstract));
+  assert.equal(asked[0].field.length, 12, "the seeds' own category too");
+  assert.ok(urls.some((u) => u.includes('search_query=cat:cond-mat.mtrl-sci')));
 });
 
 test('the why line names the closest seed', () => {

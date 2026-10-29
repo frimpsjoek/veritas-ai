@@ -459,7 +459,7 @@ test('a radar routine writes one "New" papers result in a new session, with a ne
 test('a seed radar saved without a calibration calibrates on its first run and keeps the threshold on the routine', async () => {
   const { CONTRAST } = await import('../src/radar-seeds.js');
   const { arxivCategoryFeed } = await import('../src/scholarly.js');
-  const far = feedXml([1, 2, 3].map((n) => ({ title: `Invented far paper ${n}`, link: `https://arxiv.org/abs/2610.0000${n}`, summary: 'stars and galaxies' })));
+  const far = feedXml([1, 2, 3, 4, 5].map((n) => ({ title: `Invented far paper ${n}`, link: `https://arxiv.org/abs/2610.0000${n}`, summary: 'stars and galaxies' })));
   const fetch = routedFetch({ [RADAR_FEED]: res(200, feedXml([2, 3].map((n) => ({ title: `Spindle study number ${n} of sleep`, link: `https://j.example/a/${n}`, doi: `10.9999/inv.${n}`, summary: 'Spindles.' })))),
     ...Object.fromEntries(CONTRAST.map((c) => [arxivCategoryFeed(c), res(200, far)])) });
   const library = radarLibrary({ known });
