@@ -34,7 +34,7 @@ import { syncEndpointProviders } from './providers/index.js';
 import { createSettingsStore, DEFAULT_TURN_WALL_CLOCK_MS, DEFAULT_TOOL_CALL_BUDGET, localRoleRefusal, viewSettings, viewMcpConfig } from './settings.js';
 import { createSecretStore } from './secrets.js';
 import { myPapers as findMyPapers, seedCategories, calibrateRadar } from './radar-seeds.js';
-import { rowIdFor, manifest, legacyView, isLegacy, nextStepId, nextResultId, manifestBlock, partialStepPath, subsetRows, chatPapersBlock, newsOf } from './sessions.js';
+import { rowIdFor, manifest, legacyView, isLegacy, nextStepId, nextResultId, manifestBlock, partialStepPath, subsetRows, chatPapersBlock, newsOf, viewedSince } from './sessions.js';
 import { CHAT_PAPERS_INSTRUCTIONS, LOCAL_INSTRUCTIONS, LOCAL_SMALL_TALK } from './prompts.js';
 import { retrievePassages, passagesFromSet, queryFor, passageBlock, notFoundAnswer, questionOf, isSmallTalk } from './local/retrieve.js';
 import { selectTargets, estimateStep, extractBatches, textFor, versionCells, changeLine, cellKey, errorText } from './extract.js';
@@ -1096,7 +1096,7 @@ export async function createLocalRuntime(deps) {
     /** @type {import("./domain").ActivityLine} */
     const line = { id: stepId, icon: 'scholarly', title: `Routine found ${rows.length} new ${rows.length === 1 ? 'paper' : 'papers'}`, detail: skipped ? `${skipped} already here` : null, state: 'done', items: [], reasoning: null };
     await store.append(session, { type: 'step_end', id: stepId, status: 'done', writes: [ref], line, at: now });
-    await store.append(session, { type: 'routine_run', routine: routine.id, added: rows.length, at: now });
+    await store.append(session, { type: 'routine_run', routine: routine.id, added: rows.length, rows: rows.map((r) => r.id), at: now });
     return withNote({ status: /** @type {const} */ ('done'), added: rows.length, writes: [ref], summary: change });
   }
 
@@ -1242,7 +1242,7 @@ export async function createLocalRuntime(deps) {
     await store.append(sessionId, { type: 'step_end', id: stepId, status: 'done', writes, line, at: now });
     const lead = out.picked[0];
     const by = [lead.authors?.[0], lead.venue].filter(Boolean).join(', ');
-    await store.append(sessionId, { type: 'routine_run', routine: routine.id, added: rows.length, top: { title: lead.title, ...(by ? { by } : {}) }, at: now });
+    await store.append(sessionId, { type: 'routine_run', routine: routine.id, added: rows.length, rows: rows.map((r) => r.id), top: { title: lead.title, ...(by ? { by } : {}) }, at: now });
     await settleRadarState(routine.id, out.state, out.announced);
     // The vault note is a copy for reading in Obsidian: failing to write it is reported on the run, never fatal.
     let noteProblem = null;
@@ -1400,6 +1400,21 @@ export async function createLocalRuntime(deps) {
         // Never earlier than the news itself, so a clock that runs behind cannot leave it unread.
         const now = new Date(clock()).toISOString();
         await store.append(id, { type: 'seen', at: now > news.at ? now : news.at });
+      },
+      async markViewed(id, rowIds) {
+        const records = await store.load(id);
+        const news = newsOf(records);
+        if (!news) return; // nothing unread: viewing a paper changes no count, so nothing is written
+        const viewed = viewedSince(records);
+        const rows = [...new Set((rowIds ?? []).map(String))].filter((row) => row && !viewed.has(row));
+        if (!rows.length) return;
+        // After the news it counts against (and after the last `seen`), even with a clock that runs behind.
+        const now = new Date(clock()).toISOString();
+        /** @type {import("./domain").ConversationRecord} */
+        const record = { type: 'viewed', rows: /** @type {import("./domain").RowId[]} */ (rows), at: now > news.at ? now : news.at };
+        // Rows that were never news (a radar's "Worth reading") change no count, so they are not written either.
+        if ((newsOf([...records, record])?.papers ?? 0) === news.papers) return;
+        await store.append(id, record);
       },
       remove: (id) => store.remove(id),
       adopt: (files) => store.adopt(files),

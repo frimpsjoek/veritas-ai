@@ -36,8 +36,8 @@ export function chatMarkdown(records) {
   if (!meta) return null;
   const rename = [...records].reverse().find((r) => r.type === 'rename');
   const title = rename?.title ?? meta.title ?? '(untitled)';
-  // Opening a chat (`seen`) is not activity, the same rule as the history list (store.js summarize).
-  const last = [...records].reverse().find((r) => r.type !== 'seen' && r.type !== 'meta' && r.at);
+  // Opening a chat or viewing its papers (`seen`, `viewed`) is not activity, the same rule as the history list (store.js summarize).
+  const last = [...records].reverse().find((r) => r.type !== 'seen' && r.type !== 'viewed' && r.type !== 'meta' && r.at);
   const updated = last?.at ?? meta.created;
 
   const sections = [];

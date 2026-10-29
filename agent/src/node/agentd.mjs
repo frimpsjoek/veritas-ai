@@ -77,6 +77,7 @@ export function routes() {
     { method: 'POST', path: '/conversations', call: (svc, { mode, project }) => svc.conversations.create(mode, project ? { project } : undefined) },
     { method: 'POST', path: '/conversations/rename', call: (svc, { id, title }) => svc.conversations.rename(id, title) },
     { method: 'POST', path: '/conversations/seen', call: async (svc, { id }) => { await svc.conversations.markSeen(id); return { ok: true }; } },
+    { method: 'POST', path: '/conversations/viewed', call: async (svc, { id, rows }) => { await svc.conversations.markViewed(id, Array.isArray(rows) ? rows : []); return { ok: true }; } },
     { method: 'DELETE', path: '/conversations', call: (svc, { id }) => svc.conversations.remove(id) },
     { method: 'POST', path: '/conversations/cancel', call: async (svc, { id }) => { await svc.conversations.cancel(id); return { ok: true }; } },
     { method: 'GET', path: '/conversations/cursor', call: (svc, { id }) => svc.conversations.cursor(id) },

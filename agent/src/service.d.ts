@@ -33,6 +33,9 @@ export interface AgentService {
     /** The user opened this chat: routine news in it is no longer news (`ConversationSummary.news`). Writes nothing
      *  when there is none, so calling it on every open is cheap. */
     markSeen(id: ConversationId): Promise<void>;
+    /** The user opened these papers (rows of a routine's results) without opening the chat: each is one paper less of
+     *  news. Idempotent; writes nothing when there is no news or every row was already viewed. */
+    markViewed(id: ConversationId, rowIds: RowId[]): Promise<void>;
     remove(id: ConversationId): Promise<void>;
     /** Streams one turn. Aborting the signal interrupts the provider; the stream then ends with failed{cancelled}.
      *  `after` resumes a stream this client lost (reconnect, phone waking up). */
