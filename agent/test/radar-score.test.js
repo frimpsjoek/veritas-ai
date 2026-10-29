@@ -4,7 +4,7 @@ import { score, WEIGHTS, nameKey } from '../src/radar-score.js';
 import { normalise } from '../src/radar.js';
 import { radarLibrary, profile } from './support/radar-fakes.mjs';
 
-const item = (n, over = {}) => normalise({ title: `Study ${n} of cortical oscillations`, doi: `10.9999/inv.${n}`, authors: [], venue: '', abstract: '', ...over }, 's');
+const item = (n, over = {}) => normalise({ title: `Study ${n} of cortical oscillations`, doi: `10.9999/inv.${n}`, authors: [], venue: '', abstract: 'Invented recordings.', ...over }, 's');
 const ctx = (backend, over = {}) => ({ backend, collections: null, profile: profile({ topics: [] }), state: { examples: { positive: [], negative: [] } }, ...over });
 
 test('score is similarity plus the bonuses, and every part is kept on the row', async () => {
@@ -76,4 +76,23 @@ test('more items than one server call takes are scored in batches, and every ite
   assert.deepEqual(calls, [500, 500, 200]);
   assert.equal(out.length, 1200);
   assert.ok(out.every((it) => it.why.similarity === 0.9));
+});
+
+test('a paper with no abstract is discounted, not dropped, and its why says it was judged on its title only', async () => {
+  const lib = radarLibrary({ sim: () => 0.85 });
+  const [read, bare] = await score([item(1), item(2, { abstract: '' })], ctx(lib));
+  assert.equal(read.why.titleOnly, undefined);
+  assert.equal(bare.why.titleOnly, -WEIGHTS.titleOnly);
+  assert.equal(bare.why.similarity, 0.85, 'the plain similarity is still what people read');
+  assert.ok(Math.abs(bare.score - (0.85 - WEIGHTS.titleOnly)) < 1e-9);
+  const floor = await score([item(3, { abstract: '' })], ctx(radarLibrary({ sim: () => WEIGHTS.floor + WEIGHTS.titleOnly / 2 })));
+  assert.deepEqual(floor, [], 'a title alone must clear the floor by the discount');
+});
+
+test('a seed radar keeps a title-only paper only when its margin clears the cut by the discount', async () => {
+  const backend = { async radarScore(q) { return Object.fromEntries(q.items.map((i) => [i.id, { similarity: 0, negative: 0, seed_max: 0.8, seed_raw: 0.8, seed_best: 'zotero/S1' }])); } };
+  const seeds = { keys: ['S1'], collections: [], texts: [] };
+  const out = await score([item(1), item(2, { abstract: '' })], ctx(backend, { seeds, cut: 0.75 }));
+  assert.deepEqual(out.map((r) => r.doi), ['10.9999/inv.1']);
+  assert.equal((await score([item(2, { abstract: '' })], ctx(backend, { seeds, cut: 0.7 })))[0].why.titleOnly, -WEIGHTS.titleOnly);
 });

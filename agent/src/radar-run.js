@@ -7,7 +7,7 @@ import { fetchAll, politeFetch, REQUEST_BUDGET, HOST_GAPS } from './radar-source
 import { worthReading } from './radar-older.js';
 import { mightInterest } from './radar-discover.js';
 import { mergeItems, dropKnown, pickTop, keysOf, seedBody } from './radar.js';
-import { score, rescoreWhole } from './radar-score.js';
+import { score, rescoreWhole, seedBar } from './radar-score.js';
 import { abstractsByDoi, fillAbstracts } from './scholarly.js';
 
 /** @typedef {import("./radar-types").RadarItem} RadarItem */
@@ -168,7 +168,7 @@ async function decideWhole(ranked, ctx) {
     const w = whole[it.id];
     if (w && typeof w.seed_max === 'number' && w.seed_best) {
       if (w.seed_max >= /** @type {number} */ (wholeCut)) out.push(rescoreWhole(it, w.seed_raw ?? w.seed_max, { label: w.seed_best, title: ctx.seedTitle(w.seed_best), margin: Math.round(w.seed_max * 1000) / 1000 }));
-    } else if ((it.why?.seed?.margin ?? it.why?.similarity ?? 0) >= abstractCut) out.push(it);
+    } else if (seedBar(it) >= abstractCut) out.push(it);
   }
   return out.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
 }

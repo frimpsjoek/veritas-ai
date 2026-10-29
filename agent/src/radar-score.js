@@ -19,6 +19,11 @@ export const WEIGHTS = {
   /** Closeness to a dismissed paper below this costs nothing; at 1.0 it costs `negativePenalty`. */
   negativeStart: 0.8,
   negativePenalty: 0.3,
+  /** A paper with no abstract is embedded from its title alone, and a short title sharing one noun phrase with a seed
+   *  scores close to it whatever the paper is about. On the 2026-10-29 issue, the five papers scored both ways were
+   *  0.04-0.13 closer by title alone (mean 0.078), so a title-only paper counts this much less and must clear the
+   *  floor (or a seed radar's cut) by as much. */
+  titleOnly: 0.08,
   /** Rows scoring below this are not worth a place in a digest: a day with none writes nothing. */
   floor: 0.7, // 2026-10-11 live run: similarities 0.61-0.86 (median 0.73); an unrelated text scored 0.68
   /** Examples sent to the server per call. */
@@ -105,20 +110,27 @@ export async function score(items, ctx) {
       topic: round(matched.reduce((sum, t) => sum + WEIGHTS.topicMatch * t.weight, 0)),
       negative: round(-WEIGHTS.negativePenalty * Math.max(0, s.negative - WEIGHTS.negativeStart) / (1 - WEIGHTS.negativeStart)) || 0,
       ...(learnedHit ? { learned: learnedHit.text } : {}),
+      ...(String(it.abstract ?? '').trim() ? {} : { titleOnly: -WEIGHTS.titleOnly }),
     };
-    return { ...it, why, score: round(why.similarity + why.author + why.journal + why.topic + why.negative) };
+    return { ...it, why, score: round(why.similarity + why.author + why.journal + why.topic + why.negative + (why.titleOnly ?? 0)) };
   });
   const cut = ctx.cut ?? WEIGHTS.floor;
   // A seed radar's threshold is calibrated on similarity alone (spec 021 G4); the bonuses only rank.
-  const kept = ctx.seeds ? out.filter((it) => (it.why?.seed?.margin ?? it.why?.similarity ?? 0) >= cut) : out.filter((it) => (it.score ?? 0) >= cut);
+  const kept = ctx.seeds ? out.filter((it) => seedBar(it) >= cut) : out.filter((it) => (it.score ?? 0) >= cut);
   return kept.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
 }
 
 const round = (/** @type {number} */ n) => Math.round(n * 1000) / 1000;
 
+/** What a seed radar's cut compares: the margin over the closest seed's baseline, less the title-only discount.
+ *  @param {RadarItem} it */
+export const seedBar = (it) => (it.why?.seed?.margin ?? it.why?.similarity ?? 0) + (it.why?.titleOnly ?? 0);
+
 /** The score again after the paper was read whole (spec 021 G3): the whole-paper similarity replaces the
  *  abstract's, the bonuses stay. @param {RadarItem} it @param {number} similarity @param {{ label: string, title: string, margin?: number }} seed */
 export function rescoreWhole(it, similarity, seed) {  // seed: { label, title, margin? }
-  const why = /** @type {import("./radar-types").RadarWhy} */ ({ ...it.why, similarity: round(similarity), seed: { ...seed, whole: true } });
+  // Read whole, the paper is no longer judged on its title.
+  const { titleOnly: _read, ...rest } = /** @type {import("./radar-types").RadarWhy} */ (it.why);
+  const why = /** @type {import("./radar-types").RadarWhy} */ ({ ...rest, similarity: round(similarity), seed: { ...seed, whole: true } });
   return { ...it, why, score: round(why.similarity + why.author + why.journal + why.topic + why.negative) };
 }

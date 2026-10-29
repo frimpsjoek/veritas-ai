@@ -76,6 +76,8 @@ export interface RadarWhy {
   citedBy?: { count: number; titles: string[]; newCount?: number };
   /** The learned topic this row matched (spec 017): the why-line says so. */
   learned?: string;
+  /** No abstract: the paper was judged on its title alone, and counts this much less (negative). */
+  titleOnly?: number;
 }
 
 export interface RadarItem {
