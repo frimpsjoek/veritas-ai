@@ -1,0 +1,73 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Veritas",
+  "version": "0.54.0",
+  "identifier": "io.github.frimpsjoek.veritas",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Veritas",
+        "url": "index.html",
+        "width": 1280,
+        "height": 860,
+        "minWidth": 720,
+        "minHeight": 520,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg", "nsis", "appimage", "deb"],
+    "category": "Productivity",
+    "shortDescription": "Research assistant you can check",
+    "longDescription": "Veritas AI: your papers, notes and new literature, searched and discussed with citations, on your own computer.",
+    "copyright": "MIT License",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "externalBin": ["binaries/veritas-server", "binaries/agentd"],
+    "resources": {
+      "../../web/dist-web/": "web/"
+    },
+    "createUpdaterArtifacts": true,
+    "macOS": {
+      "signingIdentity": "-",
+      "hardenedRuntime": false,
+      "minimumSystemVersion": "11.0"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": []
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQwNjVFMDgxMUE5REM3QkQKUldTOXg1MGFnZUJsUUVUOUpUcENacTg4bG81UnZGelhKOEtwbTUzM1V5Ukk3YWg5eEpJbUZUWlgK",
+      "endpoints": [
+        "https://github.com/frimpsjoek/veritas-ai/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}
