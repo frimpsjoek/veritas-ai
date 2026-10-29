@@ -456,6 +456,28 @@ test('a radar routine writes one "New" papers result in a new session, with a ne
   await ai.dispose();
 });
 
+test('a seed radar saved without a calibration calibrates on its first run and keeps the threshold on the routine', async () => {
+  const { CONTRAST } = await import('../src/radar-seeds.js');
+  const { arxivCategoryFeed } = await import('../src/scholarly.js');
+  const far = feedXml([1, 2, 3].map((n) => ({ title: `Invented far paper ${n}`, link: `https://arxiv.org/abs/2610.0000${n}`, summary: 'stars and galaxies' })));
+  const fetch = routedFetch({ [RADAR_FEED]: res(200, feedXml([2, 3].map((n) => ({ title: `Spindle study number ${n} of sleep`, link: `https://j.example/a/${n}`, doi: `10.9999/inv.${n}`, summary: 'Spindles.' })))),
+    ...Object.fromEntries(CONTRAST.map((c) => [arxivCategoryFeed(c), res(200, far)])) });
+  const library = radarLibrary({ known });
+  const asked = [];
+  library.radarCalibrate = async (q) => { asked.push(q); return { abstract: { threshold: 0.42, overlap: false }, full: null, seeds: 3, at: 1792500000, baseline: { labels: [], abstract: [], full: [] } }; };
+  const t = setup({ library, fetch });
+  const ai = await t.make();
+  const mine = (key) => ({ title: `Invented seed paper ${key}`, year: 2025, doi: null, key, abstract: '', openalexId: null });
+  const r = await ai.routines.create(radarDraft({ radar: { ...radarDraft().radar, seeds: { mine: [mine('S1'), mine('S2'), mine('S3')], papers: [], collections: [], author: null, categories: [] } } }));
+  const run = await until(async () => (await ai.routines.list())[0].lastRun, 'the radar run', 10_000);
+  assert.equal(run.status, 'done');
+  assert.equal(asked.length, 1);
+  const saved = (await ai.routines.list()).find((x) => x.id === r.id);
+  assert.equal(saved?.radar?.threshold?.abstract, 0.42);
+  assert.ok(saved?.radar?.threshold?.calibration?.seedsKey, 'the calibration remembers its seeds');
+  await ai.dispose();
+});
+
 test('a radar with older papers writes "Worth reading" as its own result; the badge counts New only; a quiet day writes nothing', async () => {
   const libWorks = [1, 2, 3].map((n) => ({ id: `W${n}`, doi: `10.1/l${n}`, title: `Invented library paper ${n} on sleep`, year: 2020 + n, refs: n < 3 ? ['X', 'P'] : ['X'] }));
   const graph = [...libWorks, { id: 'X', doi: '10.1/x', title: 'Thalamic spindle generation revisited', year: 1995, cited: 812, refs: [] }, { id: 'P', doi: '10.1/p', title: 'Cortical up states', year: 1993, refs: [] }];

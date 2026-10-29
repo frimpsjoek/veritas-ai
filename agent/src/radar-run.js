@@ -6,7 +6,8 @@
 import { fetchAll, politeFetch, REQUEST_BUDGET, HOST_GAPS } from './radar-sources.js';
 import { worthReading } from './radar-older.js';
 import { mightInterest } from './radar-discover.js';
-import { mergeItems, dropKnown, pickTop, keysOf, seedBody } from './radar.js';
+import { mergeItems, dropKnown, pickTop, keysOf, seedBody, seedsKey, MIN_SEEDS } from './radar.js';
+import { calibrateRadar } from './radar-seeds.js';
 import { score, rescoreWhole, seedBar } from './radar-score.js';
 import { abstractsByDoi, fillAbstracts } from './scholarly.js';
 
@@ -23,6 +24,8 @@ export const ABSTRACT_MARGIN = 0.03;
 /** Until a radar is calibrated, the 2026-10-11 floor stands in. */
 const DEFAULT_CUT = 0.7;
 const HISTORY_DAYS = 7;
+/** A run that tried to calibrate and failed tries again after this long. */
+const CALIBRATE_RETRY_MS = 86_400_000;
 /** Title-only papers whose abstract is looked up one by one per run (Crossref, Semantic Scholar, arXiv), best first. */
 export const ABSTRACT_LOOKUPS = 20;
 
@@ -39,7 +42,8 @@ export const NEEDS_SERVER = 'The reading radar needs the library server, which i
  * }} run `keyed`: the user has saved an OpenAlex key; "Might interest you" needs one, and is left out when it is false or absent.
  *   `abstractFetch` (abstractNet): papers that came without an abstract are looked up before the final ranking; absent,
  *   only the picked rows are, in OpenAlex, after it.
- * @returns {Promise<{ picked: RadarItem[], older: RadarItem[], olderNote: string | null, discover: RadarItem[], discoverNote: string | null, announced: string[], state: RadarState, failed: { source: string, error: string }[], sourcesAnswered: number, requests: number }>}
+ * @returns {Promise<{ picked: RadarItem[], older: RadarItem[], olderNote: string | null, discover: RadarItem[], discoverNote: string | null, announced: string[], state: RadarState, failed: { source: string, error: string }[], sourcesAnswered: number, requests: number, threshold: import("./radar-types").RadarThreshold | null }>}
+ *   `threshold`: a calibration this run made (the caller saves it on the radar); null when it made none.
  */
 export async function collectRadar(run) {
   const { config, library, state } = run;
@@ -72,7 +76,15 @@ export async function collectRadar(run) {
   const titles = new Map(libraryItems.map((it) => [`zotero/${it.key}`, it.title]));
   // Zotero titles can hold markup (<i>GW</i>); the why line is plain text.
   const seedTitle = (/** @type {string} */ label) => String(titles.get(label) ?? label.replace(/^text:/, '')).replace(/<[^>]+>/g, '');
-  const threshold = config.threshold ?? null;
+  let threshold = config.threshold ?? null;
+  // Without a calibration every margin is the plain similarity and a seed close to everything wins by default; the
+  // setup calibrates, but a failed try there (arXiv busy, say) left the radar on the 0.70 default for good.
+  let calibrated = null, calibrateTried = state.calibrateTried;
+  if (seeds && config.seeds && library.radarCalibrate && wantsCalibration(config.seeds, seeds, threshold, state.calibrateTried, run.now)) {
+    calibrateTried = run.now;
+    const got = await calibrateRadar({ fetch: run.fetch, library, seeds: config.seeds });
+    if (got.threshold) threshold = calibrated = got.threshold;
+  }
   const cut = seeds ? (threshold ? threshold.abstract - ABSTRACT_MARGIN : DEFAULT_CUT) : undefined;
   const baseline = threshold?.calibration?.baseline ?? null;
   const scoring = { backend: library, collections, profile: config.profile, state, watched, seeds, cut, seedTitle, baseline };
@@ -118,7 +130,7 @@ export async function collectRadar(run) {
   } else if (wantsDiscover && run.keyed === false) discoverNote = 'Might interest you skipped (no OpenAlex key)';
 
   /** @type {RadarState} */
-  const next = { ...state, refs, abstracts, phrases: { ...state.phrases, rotation: state.phrases.rotation + 1, announce: [] }, seen: { ...state.seen }, sourceStatus: { ...state.sourceStatus }, feedCache: { ...state.feedCache }, shown: { ...state.shown } };
+  const next = { ...state, refs, abstracts, ...(calibrateTried ? { calibrateTried } : {}), phrases: { ...state.phrases, rotation: state.phrases.rotation + 1, announce: [] }, seen: { ...state.seen }, sourceStatus: { ...state.sourceStatus }, feedCache: { ...state.feedCache }, shown: { ...state.shown } };
   // Per source, how many items it gave and how many made the digest, over the last week (spec 021 G2b).
   const keptBy = new Map();
   for (const it of top) for (const id of it.sources) keptBy.set(id, (keptBy.get(id) ?? 0) + 1);
@@ -135,7 +147,21 @@ export async function collectRadar(run) {
     // What a click on this row needs later (radar-feedback.js): the text for the examples, the people and venue to learn.
     next.shown[it.id] = { keys: keysOf(it), title: it.title, text: `${it.title}. ${it.abstract}`.slice(0, SHOWN_TEXT), authors: it.authors, venue: it.venue, sources: it.sources, ...(it.keywords?.length ? { keywords: it.keywords } : {}) };
   }
-  return { picked: top, older, olderNote, discover, discoverNote, announced: state.phrases.announce, state: next, failed, sourcesAnswered: answered, requests: fetched.requests + olderRequests + discoverRequests };
+  return { picked: top, older, olderNote, discover, discoverNote, announced: state.phrases.announce, state: next, failed, sourcesAnswered: answered, requests: fetched.requests + olderRequests + discoverRequests, threshold: calibrated };
+}
+
+/**
+ * A seed radar calibrates on a run when it has no threshold, or when its seeds changed since the calibration (one made
+ * before calibrations remembered their seeds is kept); not when a try failed less than a day ago, nor with fewer seeds
+ * than the server's minimum and no collection to fill them.
+ * @param {import("./radar-types").RadarSeeds} seeds @param {import("./radar-types").SeedBody} body
+ * @param {import("./radar-types").RadarThreshold | null} threshold @param {string | undefined} tried @param {string} now
+ */
+function wantsCalibration(seeds, body, threshold, tried, now) {
+  if (tried && Date.parse(now) - Date.parse(tried) < CALIBRATE_RETRY_MS) return false;
+  if (!body.collections.length && body.keys.length + body.texts.length < MIN_SEEDS) return false;
+  const made = threshold?.calibration?.seedsKey;
+  return !threshold || Boolean(made && made !== seedsKey(seeds));
 }
 
 /** Search phrases from the seeds' titles (the server's profile narrowed to them); none when the server cannot.

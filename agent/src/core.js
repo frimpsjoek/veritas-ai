@@ -1164,6 +1164,11 @@ export async function createLocalRuntime(deps) {
     try {
       out = await collectRadar({ config, since, now, fetch: net, library: deps.library, hub: deps.gateway.mcpServers, state: await radarStore.read(routine.id), signal, keyed: Boolean((await settingsStore.get()).openalex.apiKey?.trim()), abstractFetch: abstractNet(net) });
     } catch (e) { return { status: /** @type {const} */ ('failed'), reason: `${errorText(e).replace(/\.$/, '')}.` }; }
+    // A calibration the run made is kept on the radar, read fresh: the scheduler re-reads the record after the run too.
+    if (out.threshold) {
+      const current = await routineStore.read(routine.id);
+      if (current?.radar) await routineStore.write({ ...current, radar: { ...current.radar, threshold: out.threshold } });
+    }
     const failures = out.failed.length ? ` (${out.failed.map((f) => `${f.source} failed: ${f.error}`).join('; ')})` : '';
     if (!out.picked.length) {
       await settleRadarState(routine.id, out.state, out.announced);

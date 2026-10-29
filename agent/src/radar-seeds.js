@@ -6,7 +6,7 @@
 import { politeFetch } from './radar-sources.js';
 import { fetchFeed } from './feeds.js';
 import { openAlexWorks, arxivCategoryOf, arxivCategoryFeed } from './scholarly.js';
-import { normTitle, isNonPaper, seedBody } from './radar.js';
+import { normTitle, isNonPaper, seedBody, seedsKey } from './radar.js';
 import { nameKey } from './radar-score.js';
 
 /** @typedef {import("./radar-types").MyPaper} MyPaper */
@@ -141,7 +141,7 @@ export async function calibrateRadar(q) {
   try {
     const r = await q.library.radarCalibrate({ seeds: seedBody(q.seeds), unrelated, field, full_papers: FULL_UNRELATED });
     return {
-      threshold: { abstract: r.abstract.threshold, full: r.full?.threshold ?? null, calibration: { abstract: r.abstract, full: r.full, seeds: r.seeds, at: new Date(r.at * 1000).toISOString(), baseline: r.baseline ?? null, ...(r.field ? { field: r.field } : {}) } },
+      threshold: { abstract: r.abstract.threshold, full: r.full?.threshold ?? null, calibration: { abstract: r.abstract, full: r.full, seeds: r.seeds, at: new Date(r.at * 1000).toISOString(), baseline: r.baseline ?? null, seedsKey: seedsKey(q.seeds), ...(r.field ? { field: r.field } : {}) } },
       problem: r.abstract.overlap ? 'Your seed papers are about as close to unrelated papers as to each other; the threshold is set just above the unrelated ones. More seeds help.' : null,
     };
   } catch (e) { return { threshold: null, problem: `Calibration failed (${message(e)}).` }; }

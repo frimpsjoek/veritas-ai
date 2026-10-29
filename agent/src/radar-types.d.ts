@@ -53,7 +53,7 @@ export interface RadarThreshold {
   abstract: number;
   /** One read whole from arXiv, at or above this; null until calibrated with whole papers. */
   full: number | null;
-  calibration?: { abstract: ThresholdStats; full: ThresholdStats | null; seeds: number; at: string; baseline?: SeedBaseline | null; field?: { abstracts: number; whole: number } } | null;
+  calibration?: { abstract: ThresholdStats; full: ThresholdStats | null; seeds: number; at: string; baseline?: SeedBaseline | null; field?: { abstracts: number; whole: number }; seedsKey?: string } | null;
 }
 
 /** What a fetcher returns before normalising: scholarly.js results, feed items and MCP text rows all fit. */
@@ -154,6 +154,8 @@ export interface RadarState {
   phrases: PhraseLedger;
   /** Abstracts looked up for papers that came without one, by "doi:<doi>" or "arxiv:<id>"; text '' is a miss (asked again after 30 days). Absent in older files. */
   abstracts?: Record<string, { text: string; at: number }>;
+  /** When a run last tried to calibrate a seed radar that had no calibration (ISO); a failed try waits a day. */
+  calibrateTried?: string;
 }
 
 /** A journal OpenAlex knows, as the setup sheet offers it. */
