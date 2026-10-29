@@ -408,7 +408,7 @@ test('routines.list() also returns a broken routine file as a { broken, file, na
 
 const RADAR_FEED = 'https://j.example/feed';
 const radarDraft = (over = {}) => ({
-  name: 'Sleep radar', kind: 'radar', schedule: { kind: 'daily', time: '23:59' }, // not due: only Run now fires it
+  name: 'Sleep radar', kind: 'radar', schedule: { kind: 'daily', time: '23:59' }, // not due: after the first run on save, only Run now fires it
   radar: { scope: { kind: 'library' }, profile: { topics: [{ text: 'sleep spindle' }] }, sources: [{ kind: 'feed', url: RADAR_FEED, title: 'J' }, { kind: 'feed', url: 'https://broken.example/feed' }], size: { fresh: 5, older: 0 } },
   ...over,
 });
@@ -424,7 +424,7 @@ test('a radar routine writes one "New" papers result in a new session, with a ne
   assert.equal(r.prompt, 'Reading radar');
   assert.equal(r.radar.sources[0].id, 'feed:https://j.example/feed');
   assert.equal(r.target.kind, 'session');
-  assert.deepEqual(await ai.routines.runNow(r.id), { started: true });
+  // Saving a new radar starts its first run (no runNow needed).
   const run = await until(async () => (await ai.routines.list())[0].lastRun, 'the radar run');
   assert.equal(run.status, 'done');
   assert.equal(run.added, 2, 'study 1 is in the library');
@@ -493,6 +493,18 @@ test('a radar with older papers writes "Worth reading" as its own result; the ba
   const [second] = await ai.routines.list();
   assert.equal(second.lastRun.session, undefined, 'no New rows: no session, even if older papers are waiting');
   assert.equal(oa.calls.length, before, 'and no OpenAlex requests');
+  await ai.dispose();
+});
+
+test('a new radar starts as soon as it is saved, without waiting for its slot or the next tick', async () => {
+  const t = setup({ library: radarLibrary({ known }), fetch: radarFeed(), routines: { tickMs: 3_600_000 } }); // no tick in this test
+  const ai = await t.make();
+  const r = await ai.routines.create(radarDraft());
+  const run = await until(async () => (await ai.routines.list())[0].lastRun, 'the first run');
+  assert.equal(run.status, 'done');
+  assert.equal(run.added, 2);
+  const saved = (await ai.routines.list()).find((x) => x.id === r.id);
+  assert.ok(saved.nextRun > run.at, 'then it waits for its slot');
   await ai.dispose();
 });
 

@@ -6,6 +6,7 @@
 // Guarantees: one run at a time; a slot is written to the store BEFORE its run starts (so a restart, catch-up or a
 // second owner can never run the same slot twice, and a crash mid-run consumes the slot); missed days collapse to
 // one run (isDue); the first tick waits out a startup grace; dispose() stops the timer and aborts the running run.
+// One exception to the slot: a reading radar that has never run starts on the next tick (see dueNow).
 
 import { isDue } from './routines.js';
 
@@ -25,6 +26,20 @@ import { isDue } from './routines.js';
  *   log?: (line: string) => void,
  * }} RoutineSchedulerDeps
  */
+
+/**
+ * isDue, plus a reading radar that has never run (no lastRun, no lastDone): it is due now, so a new radar fills Home
+ * at once instead of after its first slot. Only radars: a watch or digest calls a model, so it keeps to the time the
+ * user chose. Its slot is now and is claimed like any other, so it happens once: a slot claimed after the routine was
+ * created means this first run already started (a crash mid-run must not repeat it on every restart).
+ * @param {Routine} r @param {number} nowMs @returns {{ due: boolean, slot: string | null }}
+ */
+function dueNow(r, nowMs) {
+  const hit = isDue(r, nowMs);
+  if (hit.due || r.kind !== 'radar' || r.status !== 'active' || r.lastRun || r.lastDone) return hit;
+  if (r.lastSlot && Date.parse(r.lastSlot) >= Date.parse(r.created)) return hit;
+  return { due: true, slot: new Date(nowMs).toISOString() };
+}
 
 /**
  * @param {RoutineSchedulerDeps} deps
@@ -82,7 +97,7 @@ export function createRoutineScheduler(deps) {
       const due = [];
       for (const r of await store.list()) {
         try {
-          const hit = isDue(r, clock());
+          const hit = dueNow(r, clock());
           if (hit.due) due.push({ r, slot: /** @type {string} */ (hit.slot) });
         } catch (err) { log(`routine ${r?.id}: skipped, record is invalid (${/** @type {any} */ (err)?.message ?? err})`); }
       }
@@ -94,7 +109,7 @@ export function createRoutineScheduler(deps) {
         let claimed;
         try {
           const fresh = await store.read(r.id);
-          if (!fresh || !isDue(fresh, clock()).due) continue;
+          if (!fresh || !dueNow(fresh, clock()).due) continue;
           // Claim the slot first. From here the routine is never due for it again, whatever happens next.
           claimed = { ...fresh, lastSlot: slot };
           await store.write(claimed);
