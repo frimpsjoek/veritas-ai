@@ -454,6 +454,15 @@ def code_is_current() -> bool:
 PROGRESS_FILE = paths.data_dir(HOME) / "index-progress.json"
 LOCK_FILE = paths.data_dir(HOME) / "index.lock"
 STOP = threading.Event()  # set by "Stop" in the plugin (or SIGTERM): indexing ends after its current batch
+# "Stop" for an indexing process: Windows has no SIGTERM to catch (os.kill there is TerminateProcess, which would end
+# the run mid-batch), so the server leaves this file and the run checks for it between batches, on every system.
+STOP_FILE = paths.data_dir(HOME) / "index-stop"
+
+
+def clear_stop() -> None:
+    """A new run starts unstopped, whatever an earlier Stop left behind."""
+    STOP.clear()
+    STOP_FILE.unlink(missing_ok=True)
 
 
 class Stopped(Exception):
@@ -491,7 +500,7 @@ class Progress:
         self.write(force=True)
 
     def advance(self, done: int, total: int | None = None) -> None:
-        if STOP.is_set():
+        if STOP.is_set() or STOP_FILE.exists():
             raise Stopped
         self.state["done"] = done
         if total is not None:
@@ -573,7 +582,7 @@ def index(full: bool = False, verbose: bool = True, reread_zotero: bool = False,
     with open(LOCK_FILE, "a") as lock:
         if not _try_lock(lock):
             return {"skipped": True}
-        STOP.clear()
+        clear_stop()
         progress = Progress()
         try:
             if reread_zotero or reread_media:
@@ -585,6 +594,7 @@ def index(full: bool = False, verbose: bool = True, reread_zotero: bool = False,
                 db.commit()
             result = _index(full, verbose, progress)
         except Stopped:
+            clear_stop()  # the request is met; the file should not outlive the run
             progress.finish(stopped=True)
             return {"stopped": True}
         except Exception as error:

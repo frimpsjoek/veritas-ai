@@ -357,10 +357,12 @@ def stop_indexing() -> bool:
         return False
     if pid == os.getpid():
         kb.STOP.set()  # the automatic check running inside this server
-    else:
+        return True
+    kb.STOP_FILE.write_text("")  # read between batches, on every system
+    if sys.platform != "win32":  # on Windows this would be TerminateProcess: the batch would not finish
         import signal
 
-        os.kill(pid, signal.SIGTERM)
+        os.kill(pid, signal.SIGTERM)  # the fast path: the process sets STOP at once
     return True
 
 
