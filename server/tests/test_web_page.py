@@ -176,7 +176,9 @@ def test_a_closed_paper_shows_its_abstract_and_the_publisher_link(web):
     pages[openalex_url(DOI)] = Response("x", 200, {}, json.dumps(WORK_CLOSED).encode())
     answer = web_page.page(f"https://doi.org/{DOI}", get=get)
     assert answer["mode"] == "reader" and answer["source"] == "openalex"
-    assert "Spins flip here." in answer["html"] and 'href="https://pubs.acs.org/doi/10.1021/acsnano.6c11666"' in answer["html"]
+    # the same paper shape as an arXiv answer: the abstract under its label, the way out as a button in the header
+    assert answer["abstract"] == "Spins flip here." and "Only the abstract is open." in answer["html"]
+    assert answer["links"] == [{"label": "Publisher's page", "url": "https://pubs.acs.org/doi/10.1021/acsnano.6c11666", "kind": "page"}]
     assert answer["byline"] == "A. Author, B. Author"
 
 

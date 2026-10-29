@@ -102,3 +102,30 @@ test('math is drawn only for answers the server marked (arXiv, LaTeXML, MathML),
   assert.equal(readerPlan({ mode: 'reader', title: 'PtSe$_2$', html: '', source: 'arxiv', math: true }).math, true);
   assert.equal(readerPlan({ mode: 'reader', title: 'x', html: '', math: 'yes' }).math, false);
 });
+
+test('an arXiv answer shows its subjects, dates and the PDF / full-text buttons in the header', async () => {
+  const { readerPlan } = await import('../src/browser-state.js');
+  const plan = readerPlan({
+    mode: 'reader', url: 'https://arxiv.org/abs/2607.25690', title: 'First-Principles Wannier Representation of Proximity Effects',
+    byline: 'Yaroslav Zhumagulov, Johan Félisaz', abstract: 'Graphene/PtSe$_2$ develops a coupling.', html: '', source: 'arxiv', math: true,
+    paper: { arxiv: '2607.25690', version: 'v2', submitted: '28 Jul 2026', revised: '25 Oct 2026', doi: '10.48550/arXiv.2607.25690',
+      subjects: [{ code: 'cond-mat.mes-hall', name: 'Mesoscale and Nanoscale Physics', primary: true }, { code: 'physics.comp-ph', name: '', primary: false }] },
+    links: [{ label: 'PDF', url: 'https://arxiv.org/pdf/2607.25690', kind: 'pdf' }, { label: 'Full text', url: 'https://arxiv.org/html/2607.25690v2', kind: 'reader' },
+      { label: 'Bad', url: 'javascript:alert(1)', kind: 'page' }],
+  });
+  assert.deepEqual(plan.subjects, [{ label: 'Mesoscale and Nanoscale Physics', code: 'cond-mat.mes-hall', primary: true }, { label: 'physics.comp-ph', code: 'physics.comp-ph', primary: false }]);
+  assert.equal(plan.meta, 'arXiv:2607.25690v2 · Submitted 28 Jul 2026 · revised 25 Oct 2026');
+  assert.deepEqual(plan.links.map((l) => l.label), ['PDF', 'Full text'], 'only web links become buttons');
+  assert.equal(plan.paper, true, '"Original page" goes to the system browser (the panel would show this paper again)');
+  assert.equal(plan.math, true);
+  const page = readerPlan({ mode: 'reader', title: 'A blog', html: '<p>x</p>' });
+  assert.deepEqual([page.subjects, page.meta, page.links, page.paper], [[], '', [], false]);
+});
+
+test('TeX in a math answer is found even glued to a word (PtSe$_2$), and money still is not', async () => {
+  const { mathParts } = await import('../src/browser-state.js');
+  assert.deepEqual(mathParts('Graphene/PtSe$_2$ develops'), [{ text: 'Graphene/PtSe' }, { tex: '_2' }, { text: ' develops' }]);
+  assert.deepEqual(mathParts('the operator \\(\\Delta(\\omega)\\) here'), [{ text: 'the operator ' }, { tex: '\\Delta(\\omega)' }, { text: ' here' }]);
+  assert.deepEqual(mathParts('Tickets cost $5 and $10.'), [{ text: 'Tickets cost $5 and $10.' }]);
+  assert.deepEqual(mathParts('no math'), [{ text: 'no math' }]);
+});

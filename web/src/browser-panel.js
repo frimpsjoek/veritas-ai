@@ -7,8 +7,8 @@ import { icon } from '../../ui/src/icons.js';
 import { interceptLinks, isPdfUrl } from '../../ui/src/links.js';
 import { noteFragment } from '../../ui/src/sources/view-kit.js';
 import { PdfViewer } from './pdf-viewer.js';
-import { titleNodes } from '../../ui/src/chat/markdown.js';
-import { addressOf, blockedReason, createHistory, fileNameOf, firstPrefer, pageQuery, readerPlan, sourceOf } from './browser-state.js';
+import { mathNode } from '../../ui/src/chat/markdown.js';
+import { addressOf, blockedReason, createHistory, fileNameOf, firstPrefer, mathParts, pageQuery, readerPlan, sourceOf } from './browser-state.js';
 
 const FRAME_SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox';
 
@@ -118,13 +118,35 @@ export function createBrowserPanel({ host, doc, win, into }) {
   function readerView(page) {
     const plan = readerPlan(page);
     // inline TeX ($…$, \(…\)) drawn as MathML, only for answers the server marked as having math
-    const words = (/** @type {string} */ value) => plan.math ? titleNodes(doc, value) : doc.createTextNode(value);
+    const words = (/** @type {string} */ value) => plan.math ? withMath(value) : doc.createTextNode(value);
     const article = h(doc, 'article', plan.articleClass);
     const top = h(doc, 'header', 'sbw-reader-head');
     const heading = h(doc, 'h1', 'sbw-reader-title');
     heading.append(words(plan.title));
     top.append(heading);
     if (plan.byline) top.append(h(doc, 'p', 'sbw-reader-authors', plan.byline));
+    if (plan.meta) top.append(h(doc, 'p', 'sbw-reader-venue', plan.meta));
+    if (plan.subjects.length) {
+      const chips = h(doc, 'p', 'sbw-reader-chips');
+      for (const s of plan.subjects) {
+        const chip = h(doc, 'span', `sbw-reader-chip${s.primary ? ' is-primary' : ''}`, s.label);
+        if (s.code && s.code !== s.label) chip.title = s.code;
+        chips.append(chip);
+      }
+      top.append(chips);
+    }
+    if (plan.links.length) {
+      const row = h(doc, 'p', 'sbw-reader-links');
+      for (const link of plan.links) {
+        const b = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sbw-quiet', link.label));
+        b.setAttribute('type', 'button');
+        b.title = addressOf(link.url);
+        // the PDF goes to the PDF reader and the full text to this reader, both in the panel (Back returns here)
+        b.addEventListener('click', () => api.open(link.url));
+        row.append(b);
+      }
+      top.append(row);
+    }
     article.append(top);
     const text = h(doc, 'div', 'sbw-note-body');
     if (plan.abstract) {
@@ -141,7 +163,10 @@ export function createBrowserPanel({ host, doc, win, into }) {
     body.scrollTop = 0;
     modeButton.hidden = false;
     modeButton.textContent = 'Original page';
-    modeButton.onclick = () => { if (history.current) void show({ url: history.current.url }, false); };
+    // a paper answer comes back for its own address whatever is asked (arXiv refuses frames), so its page opens outside
+    modeButton.onclick = plan.paper
+      ? () => host.openLink(page.url, { outside: true })
+      : () => { if (history.current) void show({ url: history.current.url }, false); };
   }
 
   /** Draws the TeX in the reader's text nodes (not in code). @param {HTMLElement} root */
@@ -151,7 +176,14 @@ export function createBrowserPanel({ host, doc, win, into }) {
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       if (/[$\\]/.test(node.nodeValue ?? '') && !node.parentElement?.closest('code, pre')) found.push(/** @type {Text} */ (node));
     }
-    for (const node of found) node.replaceWith(titleNodes(doc, node.nodeValue ?? ''));
+    for (const node of found) node.replaceWith(withMath(node.nodeValue ?? ''));
+  }
+
+  /** A text with its TeX drawn as MathML (KaTeX, as in chat). @param {string} text */
+  function withMath(text) {
+    const out = doc.createDocumentFragment();
+    for (const part of mathParts(text)) out.append('tex' in part ? mathNode(doc, part.tex, false) : part.text);
+    return out;
   }
 
   /** @param {string} url @param {string} title */

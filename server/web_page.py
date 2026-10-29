@@ -19,14 +19,17 @@ import re
 import socket
 import sqlite3
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import kb
 import pdf_route
+import radar_api
 import site_icons
 import zotero
 
@@ -221,9 +224,10 @@ def _paper(url: str, doi: str, get) -> dict | None:
     if not text:
         return None
     landing = ((work.get("primary_location") or {}).get("landing_page_url")) or f"https://doi.org/{doi}"
-    body = (f"<p>{html.escape(text)}</p><p><em>Only the abstract is open. "
-            f'<a href="{html.escape(landing, quote=True)}">Open the publisher\'s page</a>.</em></p>')
-    return {"mode": "reader", "url": url, "title": title, "byline": byline_of(work), "html": body, "source": "openalex"}
+    # the paper shape arXiv answers use too: the abstract under its label, the publisher's page as a header button
+    return {"mode": "reader", "url": url, "title": title, "byline": byline_of(work), "abstract": text,
+            "html": "<p><em>Only the abstract is open.</em></p>", "source": "openalex",
+            "links": [{"label": "Publisher's page", "url": landing, "kind": "page"}]}
 
 
 # --- ordinary pages ------------------------------------------------------------------------------------------------
@@ -630,12 +634,17 @@ def _tidy(root: _Node, title: str, byline: str) -> None:
     root.kids = out
 
 
-def _names(authors: list[str]) -> str:
-    """The byline: "Last, First" entries turned round when every entry has exactly one comma (citation_author's
-    form), at most six names then "et al."."""
+def _flip(authors: list[str]) -> list[str]:
+    """"Last, First" names turned round when every entry has exactly one comma (citation_author's form)."""
     names = [_words(a) for a in authors if a.strip()]
     if names and all(n.count(",") == 1 for n in names):
         names = [" ".join(reversed([p.strip() for p in n.split(",")])) for n in names]
+    return names
+
+
+def _names(authors: list[str]) -> str:
+    """The byline: names in natural order, at most six then "et al."."""
+    names = _flip(authors)
     return ", ".join(names[:6]) + (" et al." if len(names) > 6 else "")
 
 
@@ -686,6 +695,11 @@ def page(url: str, prefer: str | None = None, get=fetch) -> dict:
         return {"mode": "blocked", "url": url, "title": url, "reason": str(error)}
     host = urllib.parse.urlparse(url).hostname or url
     doi = doi_of(url)
+    arxiv = arxiv_of(url) or ((radar_api.arxiv_id(doi[len(ARXIV_DOI):]), "abs") if doi and doi.startswith(ARXIV_DOI) else None)
+    if arxiv and arxiv[0]:
+        found = _arxiv(url, arxiv[0], arxiv[1], prefer, get)
+        if found:
+            return found
     if doi:
         found = _paper(url, doi, get)
         if found:
@@ -714,6 +728,192 @@ def page(url: str, prefer: str | None = None, get=fetch) -> dict:
     if read:
         return {"mode": "reader", "url": final, **read}
     return {"mode": "blocked", "url": final, "title": title, "reason": NO_TEXT}
+
+
+# --- arXiv links ---------------------------------------------------------------------------------------------------
+# An arXiv link answers the paper itself: the API's metadata (clean title, authors in order, dates, version), the
+# abstract page's subject names and its "HTML (experimental)" link, and for /html/ the LaTeXML full text around them.
+
+ARXIV_HOSTS = ("arxiv.org", "export.arxiv.org")
+ARXIV_API = "http://export.arxiv.org/api/query?id_list={}"
+ARXIV_DOI = "10.48550/arxiv."
+ARXIV_DAYS = 1
+ATOM = {"a": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
+MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
+# TeX accents in arXiv titles, names and abstracts ("F\'elisaz"), as combining marks; letters LaTeX writes as commands.
+ACCENTS = {"'": "́", "`": "̀", "^": "̂", '"': "̈", "~": "̃", "=": "̄", ".": "̇",
+           "u": "̆", "v": "̌", "H": "̋", "c": "̧", "k": "̨", "r": "̊"}
+LETTERS = {"ss": "ß", "aa": "å", "AA": "Å", "ae": "æ", "AE": "Æ", "oe": "œ", "OE": "Œ", "o": "ø", "O": "Ø", "l": "ł",
+           "L": "Ł", "i": "ı"}
+SIGN_ACCENT = re.compile(r"\{?\\(['`^\"~=.])\s*\{?\\?([A-Za-z])\}?\}?")
+WORD_ACCENT = re.compile(r"\{?\\([uvHckr])(?:\{\\?([A-Za-z])\}|\s+([A-Za-z]))\}?")
+LETTER = re.compile(r"\{\\(ss|aa|AA|ae|AE|oe|OE|[oOlLi])\}|\\(ss|aa|AA|ae|AE|oe|OE|[oOlLi])(?![A-Za-z])\s?")
+MATH = re.compile(r"(\$\$.+?\$\$|\$[^$]+\$)", re.S)
+
+
+def arxiv_of(url: str) -> tuple[str, str] | None:
+    """(arXiv id, "abs" | "pdf" | "html") for arxiv.org/abs|pdf|html/<id>[vN][.pdf], new or old-style ids."""
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        return None
+    if (parsed.hostname or "").lower().removeprefix("www.") not in ARXIV_HOSTS:
+        return None
+    found = re.fullmatch(r"/(abs|pdf|html)/(.+?)(?:\.pdf)?/?", parsed.path)
+    arxiv = radar_api.arxiv_id(found.group(2)) if found else None
+    return (arxiv, found.group(1)) if arxiv else None
+
+
+def tex_text(text: str) -> str:
+    """arXiv's TeX for letters turned into letters, whitespace collapsed; $…$ is left for the client's KaTeX."""
+    def letters(part: str) -> str:
+        part = SIGN_ACCENT.sub(lambda m: m.group(2) + ACCENTS[m.group(1)], part)
+        part = WORD_ACCENT.sub(lambda m: (m.group(2) or m.group(3)) + ACCENTS[m.group(1)], part)
+        return LETTER.sub(lambda m: LETTERS[m.group(1) or m.group(2)], part)
+    parts = MATH.split(text or "")
+    out = "".join(part if at % 2 else letters(part) for at, part in enumerate(parts))
+    return unicodedata.normalize("NFC", _words(out))
+
+
+def _day(stamp: str) -> str:
+    """"28 Jul 2026" from an ISO stamp, without the locale's month names."""
+    found = re.match(r"(\d{4})-(\d{2})-(\d{2})", stamp or "")
+    return f"{int(found.group(3))} {MONTHS[int(found.group(2)) - 1]} {found.group(1)}" if found else ""
+
+
+def _arxiv_api(arxiv: str, get) -> dict | None:
+    """The paper as the arXiv API (Atom) has it, or None when it is away or does not know the id."""
+    try:
+        answer = get(ARXIV_API.format(arxiv), 2_000_000, "application/atom+xml")
+    except (OSError, Refused):
+        return None
+    if answer.status != 200:
+        return None
+    try:
+        entry = ET.fromstring(answer.body).find("a:entry", ATOM)
+    except ET.ParseError:
+        return None
+    if entry is None or "/api/errors" in entry.findtext("a:id", "", ATOM) or not entry.findtext("a:title", "", ATOM).strip():
+        return None
+    version = re.search(r"(v\d+)$", entry.findtext("a:id", "", ATOM).strip())
+    primary = entry.find("arxiv:primary_category", ATOM)
+    published, updated = _day(entry.findtext("a:published", "", ATOM)), _day(entry.findtext("a:updated", "", ATOM))
+    return {
+        "title": tex_text(entry.findtext("a:title", "", ATOM)),
+        "authors": [tex_text(a.findtext("a:name", "", ATOM)) for a in entry.findall("a:author", ATOM)],
+        "abstract": tex_text(entry.findtext("a:summary", "", ATOM)),
+        "version": version.group(1) if version else "",
+        "submitted": published,
+        "revised": updated if updated != published else "",
+        "codes": [c.get("term", "") for c in entry.findall("a:category", ATOM) if c.get("term")],
+        "primary": primary.get("term", "") if primary is not None else "",
+        "doi": (entry.findtext("arxiv:doi", "", ATOM) or "").strip(),
+        "comment": tex_text(entry.findtext("arxiv:comment", "", ATOM)),
+    }
+
+
+def _arxiv_abs(arxiv: str, get) -> dict | None:
+    """What the abstract page adds: subject names, the HTML full text's address (only papers that have one), and, when
+    the API is away, citation_* meta tags and the dateline."""
+    url = f"https://arxiv.org/abs/{arxiv}"
+    try:
+        answer = get(url)
+    except (OSError, Refused):
+        return None
+    if answer.status != 200:
+        return None
+    page = answer.body.decode("utf-8", "replace")
+    parser = _Reader(url)
+    try:
+        parser.feed(page)
+    except Exception:  # noqa: BLE001 - a broken page still has its head
+        pass
+    meta = parser.meta
+    cell = re.search(r'class="tablecell subjects"[^>]*>(.*?)</td>', page, re.S)
+    subjects = []
+    for item in html.unescape(re.sub(r"<[^>]+>", "", cell.group(1))).split(";") if cell else []:
+        found = re.fullmatch(r"(.+?)\s*\(([^()]+)\)", _words(item))
+        if found:
+            subjects.append({"code": found.group(2), "name": found.group(1)})
+    full = re.search(r'href="([^"]*/html/[^"]+)"[^>]*>\s*HTML', page)
+    doi = re.search(r'class="tablecell doi"[^>]*>.*?href="https?://(?:dx\.)?doi\.org/([^"]+)"', page, re.S)
+    submitted = re.search(r"\[Submitted on ([^(\]]+?)\s*[(\]]", page)
+    revised = re.search(r"last revised ([^(]+?)\s*\(this version, (v\d+)\)", page)
+    return {
+        "title": tex_text(html.unescape((meta.get("citation_title") or [""])[0])),
+        "authors": _flip([tex_text(html.unescape(a)) for a in meta.get("citation_author") or []]),
+        "abstract": tex_text(html.unescape((meta.get("citation_abstract") or [""])[0])),
+        "version": revised.group(2) if revised else ("v1" if submitted else ""),
+        "submitted": _words(submitted.group(1)) if submitted else "",
+        "revised": _words(revised.group(1)) if revised else "",
+        "subjects": subjects,
+        "html": urllib.parse.urljoin(url, html.unescape(full.group(1))) if full else "",
+        "doi": urllib.parse.unquote(doi.group(1)) if doi else "",
+    }
+
+
+def arxiv_paper(arxiv: str, get=fetch) -> dict | None:
+    """One arXiv paper (API first, the abstract page for what it lacks), kept a day; None when neither answers."""
+    path = folder("arxiv") / f"{hashlib.sha1(arxiv.encode()).hexdigest()}.json"
+    if _fresh(path, ARXIV_DAYS * 86400):
+        try:
+            return json.loads(path.read_text()) or None
+        except (OSError, ValueError):
+            pass
+    api, page = _arxiv_api(arxiv, get), _arxiv_abs(arxiv, get)
+    if not (api or {}).get("title") and not (page or {}).get("title"):
+        return None  # arXiv away or no such paper: not remembered
+    api, page = api or {}, page or {}
+    names = {s["code"]: s["name"] for s in page.get("subjects", [])}
+    codes = api.get("codes") or [s["code"] for s in page.get("subjects", [])]
+    primary = api.get("primary") or (codes[0] if codes else "")
+    codes = sorted(codes, key=lambda code: code != primary)  # the primary subject first, the rest as listed
+    paper = {
+        "arxiv": arxiv,
+        "title": api.get("title") or page["title"],
+        "authors": api.get("authors") or page.get("authors", []),
+        "abstract": api.get("abstract") or page.get("abstract", ""),
+        "version": api.get("version") or page.get("version", ""),
+        "submitted": api.get("submitted") or page.get("submitted", ""),
+        "revised": api["revised"] if api else page.get("revised", ""),
+        "subjects": [{"code": code, "name": names.get(code, ""), "primary": code == primary} for code in codes],
+        "doi": api.get("doi") or page.get("doi") or f"10.48550/arXiv.{arxiv}",
+        "comment": api.get("comment", ""),
+        "html": page.get("html", ""),
+    }
+    path.write_text(json.dumps(paper))
+    return paper
+
+
+def _arxiv(url: str, arxiv: str, kind: str, prefer: str | None, get) -> dict | None:
+    """The paper answer for an arXiv link; None to treat it as an ordinary page. A /pdf/ link stays the PDF unless the
+    reader is asked for; /html/ is the full text read from its LaTeXML <article>, with the paper's header."""
+    if kind == "pdf" and prefer != "reader":
+        return None
+    paper = arxiv_paper(arxiv, get)
+    if not paper:
+        return None
+    links = [{"label": "PDF", "url": f"https://arxiv.org/pdf/{arxiv}", "kind": "pdf"}]
+    answer = {"mode": "reader", "url": url, "title": paper["title"], "byline": _names(paper["authors"]),
+              "abstract": paper["abstract"], "html": "", "source": "arxiv", "math": True,
+              "paper": {k: paper[k] for k in ("arxiv", "version", "submitted", "revised", "subjects", "doi", "comment")},
+              "links": links}
+    if kind == "html":
+        read = None
+        try:
+            full = get(url)
+            if full.status < 400 and not _is_pdf(full):
+                read = reader(full.url or url, full.body[:PAGE_MAX_BYTES], full.headers.get("content-type", ""))
+        except (OSError, Refused):
+            pass
+        if read:
+            answer["html"] = read["html"]
+            del answer["abstract"]  # the full text has its own
+            links.append({"label": "Abstract", "url": f"https://arxiv.org/abs/{arxiv}", "kind": "reader"})
+        return answer
+    if paper["html"]:
+        links.append({"label": "Full text", "url": paper["html"], "kind": "reader"})
+    return answer
 
 
 # --- /web/pdf ------------------------------------------------------------------------------------------------------
