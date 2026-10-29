@@ -781,3 +781,41 @@ test('R4 spec check 7: after 10 Not relevant clicks on one topic the next run ra
   assert.equal(JSON.parse(t.fs.files.get(`/data/radar/${r.id}/state.json`)).sourceStatus['feed:https://j.example/feed'].suggestRemove, true, 'ten dismissals in a row also suggest dropping that feed');
   await ai.dispose();
 });
+
+test('Redo today rebuilds the latest radar issue over the same window: rated papers stay out, the old issue is hidden, over the wire too', async () => {
+  const t = setup({ library: radarLibrary({ known }), fetch: radarFeed() });
+  const local = await t.make();
+  const ai = createRemoteRuntime(loopbackTransport(local));
+  const r = await ai.routines.create(radarDraft());
+  const first = await until(async () => (await ai.routines.list())[0].lastRun, 'the first run');
+  assert.equal(first.added, 2);
+  // "Later", not "Not relevant": a dismissal teaches a negative example, and the fixture's papers differ by one digit.
+  await ai.radar.feedback(r.id, 'doi:10.9999/inv.2', 'later');
+
+  t.clock.t += 60_000;
+  assert.deepEqual(await ai.routines.redo(r.id), { started: true });
+  await until(async () => (await ai.routines.list())[0].lastRun.at !== first.at, 'the redo');
+  const [after] = await ai.routines.list();
+  assert.equal(after.lastRun.added, 1, 'the paper shown and not rated comes back; the rated one does not');
+  assert.notEqual(after.lastRun.session, first.session);
+  assert.equal(after.redo, undefined, 'the routine forgets the redo');
+  const listed = (await ai.conversations.list()).map((c) => c.id);
+  assert.deepEqual(listed, [after.lastRun.session], 'the old issue is listed nowhere');
+  const view = await local.sessions.view(after.lastRun.session);
+  const body = await local.sessions.read(after.lastRun.session, view.results[0].ref);
+  assert.deepEqual(body.rows.map((x) => x.doi), ['10.9999/inv.3']);
+  const state = JSON.parse(t.fs.files.get(`/data/radar/${r.id}/state.json`));
+  assert.equal(state.seen['doi:10.9999/inv.2'].verdict, 'later');
+  await local.dispose();
+});
+
+test('Redo today is refused for a radar with no issue yet and for a routine that is not a radar', async () => {
+  const t = setup({ library: radarLibrary({ known }), fetch: routedFetch({}) });
+  const ai = await t.make();
+  const plain = await ai.routines.create({ name: 'Digest', prompt: 'p', schedule: { kind: 'daily', time: '23:59' }, target: { kind: 'session' } });
+  assert.deepEqual(await ai.routines.redo(plain.id), { started: false, reason: 'Only a reading radar can redo its issue.' });
+  const r = await ai.routines.create(radarDraft());
+  await until(async () => (await ai.routines.list()).find((x) => x.id === r.id).lastRun, 'the first run');
+  assert.deepEqual(await ai.routines.redo(r.id), { started: false, reason: 'There is no issue to redo yet.' });
+  await ai.dispose();
+});

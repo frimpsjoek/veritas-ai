@@ -1154,12 +1154,54 @@ export async function createLocalRuntime(deps) {
       phrases: { ...fresh.phrases, rotation: next.phrases.rotation, announce: fresh.phrases.announce.filter((a) => !announced.includes(a)) } });
   });
 
+  /** A redo asks every feed afresh: a feed answers "not modified" to the conditional request the last run's cache
+   *  makes, and the redo would read nothing. @param {import("./domain").Routine} routine */
+  async function radarState(routine) {
+    const state = await radarStore.read(routine.id);
+    return routine.redo ? { ...state, feedCache: {} } : state;
+  }
+
+  /** After a redo: the old issue is hidden behind the new one (kept on disk, out of every list), and the routine
+   *  forgets the redo. A redo that found nothing keeps the old issue.
+   *  @param {import("./domain").Routine} routine @param {string | null} replacedBy @param {string} now */
+  async function finishRedo(routine, replacedBy, now) {
+    const redo = routine.redo;
+    if (!redo) return;
+    if (replacedBy && redo.replaces !== replacedBy) await store.append(/** @type {any} */ (redo.replaces), /** @type {any} */ ({ type: 'replaced', by: replacedBy, at: now }));
+    const current = await routineStore.read(routine.id);
+    if (current?.redo) { const { redo: _done, ...rest } = current; await routineStore.write(rest); }
+  }
+
+  /** Redo today's issue: forget the papers that issue showed (and those the profile check left out of it), keeping
+   *  every paper the user rated, then run again over the same window. @param {string} id */
+  async function redoRadar(id) {
+    const routine = await routineStore.read(id);
+    if (!routine || routine.kind !== 'radar') return { started: false, reason: 'Only a reading radar can redo its issue.' };
+    const session = routine.lastRun?.session;
+    const records = session ? await store.load(session) : [];
+    const meta = records.find((r) => r.type === 'meta');
+    const step = /** @type {any} */ (records.find((r) => r.type === 'step' && /** @type {any} */ (r).input?.kind === 'radar'));
+    if (!session || !meta || !step?.input?.since) return { started: false, reason: 'There is no issue to redo yet.' };
+    if (routineScheduler.runningId()) return { started: false, reason: 'Another routine is running.' };
+    const at = /** @type {any} */ (meta).created;
+    await radarSerial(async () => {
+      const state = await radarStore.read(id);
+      const seen = Object.fromEntries(Object.entries(state.seen).filter(([, v]) => !(v.at === at && (v.verdict === 'shown' || v.verdict === 'off'))));
+      await radarStore.write(id, { ...state, seen });
+    });
+    await routineStore.write({ ...routine, redo: { since: step.input.since, replaces: session } });
+    const { started, reason } = await routineScheduler.runNow(id);
+    if (!started) { const { redo: _drop, ...rest } = routine; await routineStore.write(rest); }
+    return { started, ...(reason ? { reason } : {}) };
+  }
+
   /** A radar's digest: a new session holding a papers result titled "New" and, when the citation graph has any, one titled "Worth reading". The only model call writes the why lines.
    *  @returns {Promise<import("./routine-scheduler.js").RunResult>} */
   async function runRadar(/** @type {import("./domain").Routine} */ routine, /** @type {AbortSignal} */ signal) {
     const config = routine.radar;
     if (!config) return { status: /** @type {const} */ ('failed'), reason: 'This radar has no settings.' };
-    const since = planSince(routine, clock());
+    // Redo today: the same window as the issue it replaces, so the same papers are read again with today's rules.
+    const since = routine.redo?.since ?? planSince(routine, clock());
     const now = new Date(clock()).toISOString();
     let out;
     const noTools = { scope: { kind: /** @type {const} */ ('library') }, web: /** @type {const} */ ('off'), sources: { papers: false, notes: false, scholarly: false, web: false }, audit: `radar-why:${routine.id}`, none: true };
@@ -1167,7 +1209,7 @@ export async function createLocalRuntime(deps) {
     const judge = (/** @type {import("./radar-types").RadarItem[]} */ pool, /** @type {{ topics: string[], seeds: string[], rejected: string[] }} */ profile) =>
       judgeFit(pool, { ...profile, turn: (prompt, schema) => runner.structured('writer', prompt, schema, { ...noTools, audit: `radar-judge:${routine.id}` }, signal) });
     try {
-      out = await collectRadar({ config, since, now, fetch: net, library: deps.library, hub: deps.gateway.mcpServers, state: await radarStore.read(routine.id), signal, keyed: Boolean((await settingsStore.get()).openalex.apiKey?.trim()), abstractFetch: abstractNet(net), judge });
+      out = await collectRadar({ config, since, now, fetch: net, library: deps.library, hub: deps.gateway.mcpServers, state: await radarState(routine), signal, keyed: Boolean((await settingsStore.get()).openalex.apiKey?.trim()), abstractFetch: abstractNet(net), judge });
     } catch (e) { return { status: /** @type {const} */ ('failed'), reason: `${errorText(e).replace(/\.$/, '')}.` }; }
     // A calibration the run made is kept on the radar, read fresh: the scheduler re-reads the record after the run too.
     if (out.threshold) {
@@ -1177,6 +1219,7 @@ export async function createLocalRuntime(deps) {
     const failures = out.failed.length ? ` (${out.failed.map((f) => `${f.source} failed: ${f.error}`).join('; ')})` : '';
     if (!out.picked.length) {
       await settleRadarState(routine.id, out.state, out.announced);
+      await finishRedo(routine, null, now);
       return { status: /** @type {const} */ ('done'), added: 0, summary: `Radar: nothing new above the bar${failures}` };
     }
 
@@ -1244,6 +1287,7 @@ export async function createLocalRuntime(deps) {
     const by = [lead.authors?.[0], lead.venue].filter(Boolean).join(', ');
     await store.append(sessionId, { type: 'routine_run', routine: routine.id, added: rows.length, rows: rows.map((r) => r.id), top: { title: lead.title, ...(by ? { by } : {}) }, at: now });
     await settleRadarState(routine.id, out.state, out.announced);
+    await finishRedo(routine, sessionId, now);
     // The vault note is a copy for reading in Obsidian: failing to write it is reported on the run, never fatal.
     let noteProblem = null;
     if (config.note && deps.library.writeDigest) {
@@ -1345,6 +1389,7 @@ export async function createLocalRuntime(deps) {
       const { started, reason } = await routineScheduler.runNow(id);
       return { started, ...(reason ? { reason } : {}) };
     },
+    redo: (id) => redoRadar(id),
     pause: (id) => setRoutineStatus(id, 'paused'),
     resume: (id) => setRoutineStatus(id, 'active'),
     archive: (id) => setRoutineStatus(id, 'archived'),

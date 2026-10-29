@@ -105,7 +105,8 @@ export function conversationStore(fs, dir, opts = {}) {
       const summaries = [];
       for (const id of ids) {
         const records = await readRecords(id);
-        if (records?.length) summaries.push(summarize(id, records));
+        // A radar issue redone is kept on disk but listed nowhere: its replacement stands in for it.
+        if (records?.length && !records.some((r) => r.type === 'replaced')) summaries.push(summarize(id, records));
       }
       return summaries.sort((a, b) => (a.updated < b.updated ? 1 : -1));
     },

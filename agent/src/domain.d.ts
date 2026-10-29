@@ -287,6 +287,8 @@ export type ConversationRecord =
   /** These rows of a routine's papers were opened (from Home's issue or the digest table): each is one less paper of
    *  news. Written by `conversations.markViewed`, only for rows not already viewed and only while there is news. */
   | { type: "viewed"; rows: RowId[]; at: string }
+  /** A radar issue redone: `by` is the session that replaced it; the store lists this one nowhere. */
+  | { type: "replaced"; by: string; at: string }
   /** A routine run put `added` papers into this session (a new version of its table, or the report a new session holds). */
   | { type: "routine_run"; routine: string; added: number; at: string;
       /** The rows it added, when they are rows of a papers result (not a digest's report): viewing any other row (a
@@ -380,6 +382,8 @@ export interface Routine {
   /** ISO of the last run that finished "done"; the next watch run searches from the day before it. */
   lastDone?: string | null;
   lastRun: RoutineRun | null; notify: boolean;
+  /** Redo today (radar): the window of the issue being rebuilt and that issue's session; cleared when the run ends. */
+  redo?: { since: string; replaces: string };
   /** spec 012: missing means today's behaviour (a watch when `target` is an artifact, else a digest). */
   kind?: "watch" | "digest" | "radar";
   /** Present when `kind` is "radar". */

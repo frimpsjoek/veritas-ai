@@ -17,7 +17,8 @@ import { dueSlot } from './schedule.js';
  *   id: string, name: string, prompt: string, skills: string[], depth: 'fastest' | 'quick' | 'standard' | 'deep', schedule: Schedule,
  *   target: RoutineTarget, sources: any, scope: any, status: 'active' | 'paused' | 'archived', created: string, updated: string,
  *   lastSlot: string | null, lastDone?: string | null, lastRun: RoutineRun | null, notify: boolean, project?: string,
- *   kind?: 'watch' | 'digest' | 'radar', radar?: import("./radar-types").RadarConfig
+ *   kind?: 'watch' | 'digest' | 'radar', radar?: import("./radar-types").RadarConfig,
+ *   redo?: { since: string, replaces: string }
  * }} Routine
  */
 /** @typedef {{ percentUsed: number, at: number | string, windowMinutes: number, provider?: string, resetsAt?: string }} Usage */

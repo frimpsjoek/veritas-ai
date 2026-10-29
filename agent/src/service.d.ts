@@ -137,6 +137,8 @@ export interface AgentService {
     update(id: string, patch: Partial<import("./domain").RoutineDraft>): Promise<import("./domain").Routine>;
     /** Starts at once and returns; ignores the 50% rule and the slot; refused while another routine runs. */
     runNow(id: string): Promise<{ started: boolean; reason?: string }>;
+    /** A radar only: forget the papers its latest issue showed (rated ones stay out) and build that issue again over the same window; the old issue is hidden behind the new one. */
+    redo(id: string): Promise<{ started: boolean; reason?: string }>;
     pause(id: string): Promise<import("./domain").Routine>;
     resume(id: string): Promise<import("./domain").Routine>;
     archive(id: string): Promise<import("./domain").Routine>;

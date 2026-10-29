@@ -185,6 +185,7 @@ export function createRemoteRuntime(transport) {
       create: (draft) => /** @type {any} */ (transport.request('POST', '/routines', draft)),
       update: (id, patch) => /** @type {any} */ (transport.request('POST', '/routines/update', { id, patch })),
       runNow: (id) => /** @type {any} */ (transport.request('POST', '/routines/run', { id })),
+      redo: (id) => /** @type {any} */ (transport.request('POST', '/routines/redo', { id })),
       pause: (id) => /** @type {any} */ (transport.request('POST', '/routines/pause', { id })),
       resume: (id) => /** @type {any} */ (transport.request('POST', '/routines/resume', { id })),
       archive: (id) => /** @type {any} */ (transport.request('POST', '/routines/archive', { id })),

@@ -187,12 +187,14 @@ const REFUSAL_MS = 4000;
  * "Run now" in the today bar: starts the radar through the routines service, reads "Running…" while it runs (also when
  * it was already running as Home painted, as on a radar's first run), shows a refusal in its own place for a moment,
  * and calls `onRan` once the run is recorded. Home is painted once, so it asks the routines list every few seconds.
+ * "Redo today" is the same link calling `routines.redo`: today's issue built again with today's rules.
  * @param {Document} doc @param {any} ai @param {any} routine @param {HTMLElement} block @param {() => void} onRan
+ * @param {{ label: string, start: (id: string) => Promise<any>, watch?: boolean }} [how] `watch`: also show a run already going
  */
-function runNowLink(doc, ai, routine, block, onRan) {
+function runNowLink(doc, ai, routine, block, onRan, how = { label: 'Run now', start: (id) => ai.routines.runNow(id), watch: true }) {
   const run = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sbw-quiet sbw-today-run'));
   run.type = 'button';
-  const idle = () => { run.textContent = 'Run now'; run.disabled = false; run.removeAttribute('title'); };
+  const idle = () => { run.textContent = how.label; run.disabled = false; run.removeAttribute('title'); };
   /** @param {string | null} lastAt the lastRun.at before this run */
   const wait = (lastAt, left = RUN_POLL_TIMES) => {
     run.textContent = 'Running…';
@@ -214,12 +216,12 @@ function runNowLink(doc, ai, routine, block, onRan) {
     const lastAt = routine.lastRun?.at ?? null;
     run.disabled = true;
     try {
-      const out = await ai.routines.runNow(routine.id);
+      const out = await how.start(routine.id);
       if (out.started) wait(lastAt);
       else refused(runNowLine(out));
     } catch (error) { refused(String(/** @type {any} */ (error)?.message ?? error)); }
   });
-  if (routine.running) wait(routine.lastRun?.at ?? null);
+  if (routine.running && how.watch) wait(routine.lastRun?.at ?? null);
   else idle();
   return run;
 }
@@ -287,6 +289,8 @@ async function todayBlock(doc, ai, host, links, { issues, routine, pick, unknown
   bar.append(nav, chat, sources);
   // Hosts whose server predates runNow get no link rather than one that fails.
   if (routine && onRan && typeof ai.routines?.runNow === 'function') bar.append(runNowLink(doc, ai, routine, block, () => onRan(block)));
+  // Redo today rebuilds the latest issue; only a radar that has one, on a server that offers it.
+  if (routine && onRan && routine.lastRun?.session && typeof ai.routines?.redo === 'function') bar.append(runNowLink(doc, ai, routine, block, () => onRan(block), { label: 'Redo today', start: (id) => ai.routines.redo(id) }));
   bar.append(shows);
   nav.append(older, newer);
   block.append(stage, bar, list);

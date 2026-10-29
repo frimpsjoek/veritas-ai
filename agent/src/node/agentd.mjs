@@ -163,6 +163,7 @@ export function routes() {
     { method: 'POST', path: '/routines', call: (svc, body) => svc.routines.create(body) },
     { method: 'POST', path: '/routines/update', call: (svc, { id, patch }) => svc.routines.update(id, patch ?? {}) },
     { method: 'POST', path: '/routines/run', call: (svc, { id }) => svc.routines.runNow(id) },
+    { method: 'POST', path: '/routines/redo', call: (svc, { id }) => svc.routines.redo(id) },
     { method: 'POST', path: '/routines/pause', call: (svc, { id }) => svc.routines.pause(id) },
     { method: 'POST', path: '/routines/resume', call: (svc, { id }) => svc.routines.resume(id) },
     { method: 'POST', path: '/routines/archive', call: (svc, { id }) => svc.routines.archive(id) },
