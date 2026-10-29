@@ -1824,6 +1824,10 @@ def main() -> None:
     p = sub.add_parser("web-origins", help="web-app origins allowed to call this server (phase 3)")
     p.add_argument("action", nargs="?", default="list", choices=["list", "add", "remove"])
     p.add_argument("origin", nargs="?")
+    p = sub.add_parser("import-data", help="reuse an index another install built (import_data.py)")
+    p.add_argument("source", nargs="?", help="the data folder to copy from")
+    p.add_argument("--find", action="store_true", help="list the indexes found on this computer, as JSON")
+    p.add_argument("--replace", action="store_true", help="overwrite this install's index")
     args = parser.parse_args()
     if args.cmd == "index":
         import signal
@@ -1863,6 +1867,10 @@ def main() -> None:
             print(origin)
     elif args.cmd == "sources":
         sources_cli(args.action, args.target, args.name)
+    elif args.cmd == "import-data":
+        import import_data
+
+        import_data.cli(args.source, args.find, args.replace)
     else:
         print(json.dumps(stats(), indent=2, ensure_ascii=False))
 
