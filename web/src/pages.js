@@ -10,6 +10,7 @@ import { paintPhone } from './phone.js';
 import { paintSetup } from './setup-view.js';
 import { paintHome } from '../../ui/src/home/home.js';
 import { SettingsView } from '../../ui/src/settings/settings-view.js';
+import { ocrLine } from '../../ui/src/settings/settings-schema.js';
 import { foldersWidget } from './folders-view.js';
 import { progressPanel } from './progress-view.js';
 import { mountSources } from '../../ui/src/sources/sources-view.js';
@@ -125,6 +126,7 @@ export async function paintSettings(into, { host, doc, section, links }) {
       radarSetup: (_row, ctx) => { const box = h(ctx.doc, 'div', 'sbw-settings-radar'); void mountSources(box, { host: ctx.host, doc: ctx.doc, links }, { mode: 'settings' }); return box; },
       routinesList: (_row, ctx) => routinesList(ctx.doc, ctx.host),
       version: (_row, ctx) => versionLine(ctx.doc, ctx.host),
+      ocrEngine: (_row, ctx) => ocrEngineLine(ctx.doc, ctx.host),
     },
     actions: { copyDiagnostics: () => copyDiagnostics(doc, host) },
   });
@@ -196,6 +198,13 @@ function indexStatus(doc, host) {
 function versionLine(doc, host) {
   const line = h(doc, 'span', 'sbs-help', 'Veritas web app');
   host.json('/status').then((status) => { if (status?.version) line.textContent = `Veritas ${status.version}`; }).catch(() => {});
+  return line;
+}
+
+/** On this computer > Reading scans and images: which OCR engine the server has (spec 024 G2). @param {Document} doc @param {any} host */
+function ocrEngineLine(doc, host) {
+  const line = h(doc, 'span', 'sbs-help', '');
+  host.json('/status').then((status) => { line.textContent = ocrLine(status?.ocr); }).catch(() => { line.textContent = "Couldn't ask the server."; });
   return line;
 }
 

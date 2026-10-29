@@ -919,7 +919,7 @@ export async function runWebChecks(browser, port, outDir) {
     await page.screenshot({ path: join(outDir, 'models-1280.png') });
 
     await page.getByRole('button', { name: 'Open ›' }).click();
-    check(`${tag} the On this Mac row opens that section`, (await page.locator('.sbs-nav-item.is-active').textContent()) === 'On this Mac');
+    check(`${tag} the On this Mac row opens that section`, (await page.locator('.sbs-nav-item.is-active').textContent()) === 'On this computer');
     check(`${tag} the section list fills the height of the window`, await page.evaluate(() => { const side = document.querySelector('.sbs-side').getBoundingClientRect(); return Math.abs(side.bottom - window.innerHeight) <= 1; }));
     check(`${tag} logged no errors`, page.errors.filter((e) => !/Failed to load resource/.test(e)).length === 0, page.errors);
     await page.close();

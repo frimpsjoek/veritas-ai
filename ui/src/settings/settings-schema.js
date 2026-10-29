@@ -24,7 +24,7 @@
 export const SECTIONS = [
   { id: 'general', label: 'General', icon: 'settingsGeneral' },
   { id: 'models', label: 'Models', icon: 'settingsModels' },
-  { id: 'mac', label: 'On this Mac', icon: 'settingsMac' },
+  { id: 'mac', label: 'On this computer', icon: 'settingsMac' },
   { id: 'research', label: 'Research', icon: 'settingsResearch' },
   { id: 'papers', label: 'Finding papers', icon: 'settingsPapers' },
   { id: 'radar', label: 'Reading radar', icon: 'settingsRadar' },
@@ -70,11 +70,12 @@ export const ROWS = [
   // ------------------------------------------------------------------ Models (models-widget.js draws it whole)
   { id: 'models.main', section: 'models', label: '', help: '', kind: 'custom', hosts: ALL, store: 'none', custom: 'models', keywords: 'models default model per task effort claude codex sonnet opus haiku provider cloud service endpoint openrouter lm studio add model id answer with menu' },
 
-  // ------------------------------------------------------------------ On this Mac
+  // ------------------------------------------------------------------ On this computer (local models; how scans are read)
   { id: 'mac.scanDirs', section: 'mac', label: 'Folders to look for models in', help: 'One folder per line. Models are found live, so adding one here is enough.', kind: 'lines', hosts: ALL, store: 'engine', key: 'local.scanDirs' },
   { id: 'mac.idleMinutes', section: 'mac', label: 'Stop an idle model after', help: 'Minutes without a question. The model opens again on the next one. Stopping it frees the memory it uses.', kind: 'number', hosts: ALL, store: 'engine', key: 'local.idleMinutes', min: 1, def: 5, unit: 'minutes' },
   { id: 'mac.allowReports', section: 'mac', label: 'Allow local models for reports', help: 'Not recommended. In tests a small model made up numbers and looped on long reports. Reports are written by Codex or Claude Code unless you turn this on.', kind: 'toggle', hosts: ALL, store: 'engine', key: 'local.allowReports', def: false },
   { id: 'mac.python', section: 'mac', label: 'Python for local models', help: 'Leave empty to use the arm64 environment Veritas set up. Only change it if you moved that environment.', kind: 'text', hosts: ALL, store: 'engine', key: 'local.python', nullable: true, advanced: true, def: null, placeholder: 'Automatic' },
+  { id: 'mac.ocr', section: 'mac', label: 'Reading scans and images', help: '', kind: 'custom', hosts: WEB, store: 'none', custom: 'ocrEngine', keywords: 'ocr text recognition scan image tesseract vision' },
   { id: 'mac.external', section: 'mac', label: 'Use models from other apps', help: 'Also offer models that other apps on this Mac already downloaded.', kind: 'toggle', hosts: ALL, store: 'engine', key: 'local.external', advanced: true, def: true },
 
   // ------------------------------------------------------------------ Research
@@ -131,6 +132,14 @@ export const ROWS = [
   { id: 'about.logs', section: 'about', label: 'Logs folder', help: 'Where Veritas writes its logs, for when something goes wrong.', kind: 'action', hosts: ALL, store: 'none', action: 'openLogs', buttonLabel: 'Show' },
   { id: 'about.diagnostics', section: 'about', label: 'Copy diagnostics', help: 'Copies version and status details you can paste into a message. It contains no keys or notes.', kind: 'action', hosts: ALL, store: 'none', action: 'copyDiagnostics', buttonLabel: 'Copy' },
 ];
+
+/** The server's OCR engine (GET /status `ocr`, server/media.py) in one sentence, for On this computer (spec 024 G2).
+ *  @param {string | null | undefined} engine "vision", "tesseract" or none */
+export function ocrLine(engine) {
+  if (engine === 'vision') return 'Scanned pages and images are read on this computer with Apple Vision.';
+  if (engine === 'tesseract') return 'Scanned pages and images are read on this computer with Tesseract.';
+  return 'No text recognition here, so only PDFs with a text layer are searchable. Install Tesseract, restart Veritas and re-read images to search scans and images too.';
+}
 
 // ---------------------------------------------------------------------------------------- reading and writing
 

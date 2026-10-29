@@ -21,6 +21,39 @@ passes. Pushes, Homebrew installs and tool installs (Rust, PyInstaller) are gate
 5. `check.yml` runs on `ubuntu-latest`, `macos-latest`, `windows-latest`.
 - [ ] Done when `./check.sh` is green locally and the three CI jobs are defined and pass on a push (push = user gate).
 
+### TG1 evidence (2026-10-28, branch `ai/024-g2-platforms`, macOS 26 arm64, Node 22, Python 3.12 venv)
+- `./check.sh` before (at `4fdcd01`): all parts passed; tools 15, agent 808, ui 290, web 62, obsidian 27, zotero 12,
+  server 357 passed + 3 skipped.
+- `./check.sh` after (at `044c0eb`): all parts passed; tools 19 (18 pass + 1 skipped: the `veritas.cmd` run is
+  Windows-only), agent 816, ui 291, web 62, obsidian 27, zotero 12, server 369 passed + 3 skipped.
+- New tests: Zotero profile folders per system (4 cases + Linux prefs found), `zotero_files` prefs at call time and the
+  Python PDF walk; OCR engine per system, Tesseract through stdin, no engine = text-layer PDFs only, `/status` `ocr`;
+  agent keys on Linux (secret-tool), Windows (PowerShell, script decoded and checked to hold no key), both fallbacks
+  and the error path; server Zotero keys the same three ways plus the owner-only file (0600 checked on POSIX);
+  `which()` with PATHEXT; index lock exclusive; indexing spawns without `taskpolicy` off macOS; `veritas.cmd` parity
+  with `bin/veritas` and CRLF endings.
+- Real Tesseract smoke test: `test_real_tesseract_reads_a_rendered_page` passed with `/opt/homebrew/bin/tesseract`
+  (reads "solar" from a rendered PNG). The xpi built through the Python `zipfile` fallback has the same 70 entries as
+  the `zip` one.
+- Not checked here: Windows and Linux themselves. Only macOS was available; the `check.yml` matrix (ubuntu, macos,
+  windows; Git Bash, `core.autocrlf false`, `PYTHONUTF8=1`) runs first on a push, which is the user's gate. The
+  Windows code paths (Credential Manager script, `msvcrt` lock, `veritas.cmd`, PATHEXT) are covered only by mocked
+  tests until then, and the spec's "Windows run with a real Zotero library" is still to do.
+- Left open (written down, not fixed here):
+  - Node refuses to spawn `.cmd`/`.bat` files without a shell (CVE-2024-27980), so on Windows the npm shims
+    `claude.cmd`, `codex.cmd` and `npx.cmd` that `which()` now finds will fail with EINVAL; a fix needs `shell: true`
+    with cmd.exe quoting of prompt arguments, or resolving the shim to its `node <script>` (a decision for TG2/G3).
+  - Windows: "Stop" indexing is `os.kill(SIGTERM)` = TerminateProcess (no finishing the batch); the self-update
+    `os.execv` starts a new process instead of replacing this one.
+  - The server needs UTF-8 mode on Windows: `veritas.cmd` and CI set `PYTHONUTF8=1`; the PyInstaller sidecar (TG2)
+    must set it too (`-X utf8`).
+  - `secret-tool store` may keep the trailing newline the agent writes on stdin; both readers strip it.
+  - Images read while no OCR engine was installed are cached as empty: after installing Tesseract, restart Veritas and
+    re-read images (the Settings line says so).
+- Installs for the user to approve: none needed for this group. Optional on Windows/Linux machines: Tesseract
+  (`winget install UB-Mannheim.TesseractOCR`, `apt install tesseract-ocr`) for scans and images; `libsecret-tools`
+  on Linux for `secret-tool`.
+
 ## TG2: desktop app (Tauri, unsigned)
 1. `app/`: Tauri 2 shell loading `web/dist-web` from the bundled server (`http://127.0.0.1:<port>/app/`), Veritas icon,
    tray icon, "start at login", window state remembered.

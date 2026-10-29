@@ -142,3 +142,23 @@ def test_seeded_vault_stays_main_without_obsidian_folder(home, monkeypatch):
     sources.seed()
     layout = sources.resolved()
     assert layout.main == v and layout.others == []
+
+
+@pytest.mark.parametrize("system, env, app, profiles", [
+    ("darwin", {}, "Library/Application Support/Zotero", "Library/Application Support/Zotero/Profiles"),
+    ("win32", {"APPDATA": "{home}/Roaming"}, "Roaming/Zotero/Zotero", "Roaming/Zotero/Zotero/Profiles"),
+    ("win32", {}, "AppData/Roaming/Zotero/Zotero", "AppData/Roaming/Zotero/Zotero/Profiles"),  # no APPDATA set
+    ("linux", {}, ".zotero/zotero", ".zotero/zotero"),  # profiles sit beside profiles.ini there
+])
+def test_zotero_profile_folder_per_system(tmp_path, system, env, app, profiles):
+    env = {k: v.format(home=tmp_path) for k, v in env.items()}
+    assert sources.zotero_app_dir(system, env, tmp_path) == tmp_path / app
+    assert sources.zotero_profiles_dir(system, env, tmp_path) == tmp_path / profiles
+
+
+def test_zotero_prefs_found_on_linux(tmp_path, monkeypatch):
+    prefs = tmp_path / ".zotero" / "zotero" / "x1y2.default" / "prefs.js"
+    prefs.parent.mkdir(parents=True)
+    prefs.write_text("")
+    monkeypatch.setattr(sources, "ZOTERO_PROFILES", sources.zotero_profiles_dir("linux", {}, tmp_path))
+    assert sources.zotero_prefs() == prefs

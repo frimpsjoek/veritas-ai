@@ -179,7 +179,7 @@ export function modelsWidget(doc, host, ctx = {}) {
     const name = h(doc, 'span', 'sbs-label', 'Models on this Mac ');
     if (local) name.append(h(doc, 'span', `sbm-pill${local.state === 'ready' ? '' : ' is-off'}`, local.state === 'ready' ? 'Ready' : local.state === 'missing' ? 'Not set up' : 'Not ready'));
     const r = row('', '', [textButton(doc, 'Open ›', 'sbm-link', () => ctx.select?.('mac'))]);
-    /** @type {HTMLElement} */ (r.firstElementChild).replaceChildren(name, h(doc, 'span', 'sbs-help', `${local?.detail ? `${local.detail} ` : ''}Folders, idle time and reports are in On this Mac.`.trim()));
+    /** @type {HTMLElement} */ (r.firstElementChild).replaceChildren(name, h(doc, 'span', 'sbs-help', `${local?.detail ? `${local.detail} ` : ''}Folders, idle time and reports are in On this computer.`.trim()));
     g.append(r);
     return g;
   };

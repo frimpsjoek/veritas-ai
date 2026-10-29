@@ -1,9 +1,11 @@
 """Zotero online library connector (phase 2 task 4): items read through the Zotero Web API, no network in tests."""
 from __future__ import annotations
 
+import base64
 import io
 import json
 import os
+import re
 import urllib.error
 from urllib.parse import parse_qs, urlparse
 
@@ -228,6 +230,8 @@ def test_store_key_never_puts_the_key_on_the_command_line(monkeypatch):
         return Done()
 
     monkeypatch.setattr(zotero_web.subprocess, "run", fake_run)
+    monkeypatch.setattr(zotero_web.sys, "platform", "darwin")
+    monkeypatch.setattr(zotero_web.shutil, "which", lambda name: f"/usr/bin/{name}")
     zotero_web.store_key("123", "abcDEF123456")
     assert seen["args"] == ["security", "-i"] and "abcDEF123456" in seen["input"]
     with pytest.raises(zotero_web.ZoteroWebError):
@@ -263,3 +267,83 @@ def test_store_key_runs_a_real_security_with_the_command_on_stdin(tmp_path, monk
     (tmp_path / "security.fail").touch()
     with pytest.raises(zotero_web.ZoteroWebError, match="denied"):
         zotero_web.store_key("123", "abcDEF123456")
+
+
+class FakeStore:
+    """subprocess.run for the system key stores (spec 024 G2): keeps keys in a dict, records each call."""
+
+    def __init__(self, fail_with=None):
+        self.items, self.calls, self.fail_with = {}, [], fail_with
+
+    def __call__(self, args, input=None, **kw):
+        self.calls.append((args, input))
+        done = type("Done", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        if self.fail_with:
+            done.returncode, done.stderr = 1, self.fail_with
+        elif args[0] == "secret-tool":
+            account = args[args.index("account") + 1]
+            if args[1] == "store":
+                self.items[account] = input
+            elif account in self.items:
+                done.stdout = self.items[account]
+            else:
+                done.returncode = 1
+        elif args[0] == "powershell.exe":
+            script = base64.b64decode(args[-1]).decode("utf-16-le")
+            op, account = re.search(r"\$op = '(\w+)'", script)[1], re.search(r"\$name = '([^']+)'", script)[1]
+            if op == "set":
+                self.items[account] = input
+            elif account in self.items:
+                done.stdout = self.items[account]
+            else:
+                done.returncode = 44
+        return done
+
+
+@pytest.fixture()
+def system(monkeypatch, tmp_path):
+    monkeypatch.setenv("VERITAS_DATA", str(tmp_path))
+    store = FakeStore()
+    monkeypatch.setattr(zotero_web.subprocess, "run", store)
+
+    def pin(platform, installed=()):
+        monkeypatch.setattr(zotero_web.sys, "platform", platform)
+        monkeypatch.setattr(zotero_web.shutil, "which", lambda name: name if name in installed else None)
+        return store
+    return pin
+
+
+def test_linux_key_goes_to_the_secret_service_on_stdin(system):
+    store = system("linux", ["secret-tool"])
+    zotero_web.store_key("123", "abcDEF123456")
+    assert store.items == {"zotero-web:123": "abcDEF123456"}
+    assert all("abcDEF123456" not in " ".join(args) for args, _ in store.calls)
+    assert zotero_web.get_key("123") == "abcDEF123456"
+    assert zotero_web.get_key("999") is None
+
+
+def test_windows_key_goes_to_credential_manager_on_stdin(system):
+    store = system("win32", ["powershell.exe"])
+    zotero_web.store_key("123", "abcDEF123456")
+    assert store.items == {"zotero-web:123": "abcDEF123456"}
+    for args, _ in store.calls:
+        assert "abcDEF123456" not in " ".join(args) + base64.b64decode(args[-1]).decode("utf-16-le")
+    assert zotero_web.get_key("123") == "abcDEF123456"
+
+
+def test_no_usable_store_means_the_owner_only_file(system, tmp_path, monkeypatch):
+    system("linux")  # no secret-tool
+    zotero_web.store_key("123", "abcDEF123456")
+    file = tmp_path / "agent" / "secrets.json"  # the agent's file, so both read the same keys
+    assert json.loads(file.read_text()) == {"zotero-web:123": "abcDEF123456"}
+    if os.name == "posix":
+        assert file.stat().st_mode & 0o777 == 0o600
+    assert zotero_web.get_key("123") == "abcDEF123456"
+    store = system("linux", ["secret-tool"])  # a Secret Service with no D-Bus session (SSH): the file too
+    store.fail_with = "secret-tool: Cannot autolaunch D-Bus without X11 $DISPLAY"
+    zotero_web.store_key("456", "ghiJKL789012")
+    assert json.loads(file.read_text()) == {"zotero-web:123": "abcDEF123456", "zotero-web:456": "ghiJKL789012"}
+    assert zotero_web.get_key("456") == "ghiJKL789012"
+    store.fail_with = "secret-tool: disk full"
+    with pytest.raises(zotero_web.ZoteroWebError, match="Secret Service"):
+        zotero_web.store_key("789", "mnoPQR345678")

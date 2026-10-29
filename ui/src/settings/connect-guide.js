@@ -86,7 +86,7 @@ export function connectGuide(doc, host, entry, { existing, onDone, onCancel }) {
     paste.append(h(doc, 'span', 'sbs-label', fields.some((f) => f.kind === 'key') ? 'Paste it here' : 'Fill in'));
     for (const f of fields) {
       const saved = existing ? (f.in === 'env' ? existing.env?.[f.name] : existing.headers?.[f.name]) : null;
-      const hint = [f.optional ? 'Optional.' : '', f.kind === 'key' ? 'Kept in the Keychain; never shown again.' : '', keyLine(saved) ? `${keyLine(saved)}. Leave empty to keep it.` : ''].filter(Boolean).join(' ');
+      const hint = [f.optional ? 'Optional.' : '', f.kind === 'key' ? 'Kept in the key store on this computer; never shown again.' : '', keyLine(saved) ? `${keyLine(saved)}. Leave empty to keep it.` : ''].filter(Boolean).join(' ');
       const { wrap, input } = field(doc, f.label, f.kind === 'key' ? 'password' : 'email', hint);
       input.dataset.field = f.name;
       inputs[f.name] = input;
@@ -132,7 +132,7 @@ export function customServerForm(doc, host, { onDone }) {
   const root = h(doc, 'div', 'sbs-guide sbs-guide-custom');
   const name = field(doc, 'Name', 'text', 'Short, like "my-search".');
   const where = field(doc, 'Address or command', 'text', 'An address such as https://example.org/mcp, or the command its README gives, such as npx -y some-mcp-server.');
-  const key = field(doc, 'Key', 'password', 'Optional. Kept in the Keychain; never shown again.');
+  const key = field(doc, 'Key', 'password', 'Optional. Kept in the key store on this computer; never shown again.');
   const keyName = field(doc, 'Key goes in', 'text', 'For an address: the header (Authorization sends "Bearer <key>"). For a command: the variable its README names, such as EXAMPLE_API_KEY.');
   keyName.input.value = 'Authorization';
   where.input.addEventListener('input', () => {

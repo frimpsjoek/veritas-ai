@@ -4,6 +4,7 @@
 import { spawn as nodeSpawn } from 'node:child_process';
 import { promises as fsp, constants as fsConstants } from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import http from 'node:http';
 import readline from 'node:readline';
 import { randomBytes } from 'node:crypto';
@@ -49,7 +50,10 @@ async function exists(filePath) {
 }
 
 /** @returns {import("../platform").Platform} */
-export function createNodePlatform({ homeDir = process.env.HOME ?? '' } = {}) {
+/** `system` and `env` stand in for process.platform and process.env in tests (spec 024 G2: Windows and Linux too). */
+export function createNodePlatform({ homeDir = os.homedir(), system = process.platform, env = process.env } = {}) {
+  // Windows finds `claude` as claude.cmd and `node` as node.exe: a bare name is tried with each PATHEXT extension.
+  const extensions = system === 'win32' ? ['', ...(env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean).map((e) => e.toLowerCase())] : [''];
   let server = null;
   let serverPort = null;
   const routes = new Map();
@@ -92,13 +96,16 @@ export function createNodePlatform({ homeDir = process.env.HOME ?? '' } = {}) {
     async which(candidates) {
       for (const candidate of candidates) {
         if (!candidate) continue;
-        if (candidate.includes(path.sep) || candidate.startsWith('/')) {
+        if (path.isAbsolute(candidate) || candidate.includes('/') || candidate.includes(path.sep)) {
           if (await exists(candidate)) return candidate;
           continue;
         }
-        for (const dir of (process.env.PATH ?? '').split(path.delimiter)) {
-          const full = path.join(dir, candidate);
-          if (await exists(full)) return full;
+        const named = path.extname(candidate) ? [''] : extensions;
+        for (const dir of (env.PATH ?? env.Path ?? '').split(system === 'win32' ? ';' : ':')) {
+          for (const ext of named) {
+            const full = path.join(dir, candidate + ext);
+            if (dir && await exists(full)) return full;
+          }
         }
       }
       return null;
@@ -139,7 +146,11 @@ export function createNodePlatform({ homeDir = process.env.HOME ?? '' } = {}) {
       async symlink(target, filePath) {
         await fsp.mkdir(path.dirname(filePath), { recursive: true });
         try { await fsp.symlink(target, filePath); }
-        catch (error) { if (errorField(error, 'code') !== 'EEXIST') throw error; }
+        catch (error) {
+          // Windows makes symlinks only in Developer Mode or as admin: a copy of the file then stands in for the link.
+          if (errorField(error, 'code') === 'EPERM' && system === 'win32') await fsp.copyFile(target, filePath);
+          else if (errorField(error, 'code') !== 'EEXIST') throw error;
+        }
       },
     },
 
@@ -153,5 +164,6 @@ export function createNodePlatform({ homeDir = process.env.HOME ?? '' } = {}) {
     },
 
     homeDir,
+    os: system,
   };
 }

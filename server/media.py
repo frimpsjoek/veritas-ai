@@ -1,7 +1,9 @@
 """Text from the vault's PDFs and images, for the index.
 
 PDFs: the text layer via pdfium; a page with no text layer (a scan) is rendered and read with OCR.
-Images: OCR with Apple's Vision framework (on-device, accurate mode, ~0.3 s an image once warm).
+Images: OCR with Apple's Vision framework on macOS (on-device, accurate mode, ~0.3 s an image once warm); elsewhere
+with Tesseract (the `tesseract` command) when it is installed. With neither, images read as empty and scanned pages
+are skipped: only PDFs with a text layer are searchable (spec 024 G2; Settings > On this computer says which).
 
 Results are cached in the index database (media_cache) by path, mtime and size, so a file is read once;
 images with no text are cached too and never re-read. Only files with real text (MIN_TEXT characters) become
@@ -9,8 +11,12 @@ searchable documents.
 """
 from __future__ import annotations
 
+import functools
 import io
 import os
+import shutil
+import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -41,6 +47,30 @@ def kind_of(rel: str) -> str:
     return "pdf" if os.path.splitext(rel)[1].lower() in PDF_EXTENSIONS else "image"
 
 
+def _vision_available() -> bool:
+    try:
+        import Vision  # noqa: F401  (pyobjc-framework-Vision)
+        import Quartz  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+@functools.cache
+def ocr_engine() -> str | None:
+    """"vision" (macOS with pyobjc), "tesseract" (its command on PATH) or None: no OCR here."""
+    if sys.platform == "darwin" and _vision_available():
+        return "vision"
+    return "tesseract" if shutil.which("tesseract") else None
+
+
+def _tesseract(source: str, data: bytes | None = None) -> str:
+    """Tesseract on a file, or on image bytes through stdin ("stdin"); the text comes back on stdout."""
+    out = subprocess.run([shutil.which("tesseract") or "tesseract", source, "stdout"], input=data,
+                         capture_output=True, timeout=300)
+    return out.stdout.decode("utf-8", errors="replace").strip() if out.returncode == 0 else ""
+
+
 def _vision_text(cg_image) -> str:
     import Vision
 
@@ -53,6 +83,9 @@ def _vision_text(cg_image) -> str:
 
 
 def ocr_image(path: Path) -> str:
+    engine = ocr_engine()
+    if engine != "vision":
+        return _tesseract(str(path)) if engine == "tesseract" else ""
     import Quartz
     from Foundation import NSURL
 
@@ -62,6 +95,9 @@ def ocr_image(path: Path) -> str:
 
 
 def _ocr_png(data: bytes) -> str:
+    engine = ocr_engine()
+    if engine != "vision":
+        return _tesseract("stdin", data) if engine == "tesseract" else ""
     import Quartz
     from Foundation import NSData
 
@@ -72,8 +108,10 @@ def _ocr_png(data: bytes) -> str:
 
 def pdf_text(path: Path, max_pages: int = 300, ocr: bool = True) -> str:
     """Markdown with one '## Page N' section per page, so search results can open the PDF at that page. `ocr=False`
-    skips pages with no text layer instead of reading them with Vision (arXiv PDFs, spec 021)."""
+    skips pages with no text layer instead of reading them with OCR (arXiv PDFs, spec 021), as does having no OCR engine."""
     import pypdfium2 as pdfium
+
+    ocr = ocr and ocr_engine() is not None
 
     with _PDFIUM_LOCK:
         pdf = pdfium.PdfDocument(str(path))

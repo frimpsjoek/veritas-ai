@@ -5,6 +5,11 @@
 set -e
 cd "$(dirname "$0")"
 step() { printf '\n== %s\n' "$1"; }
+# The server's Python: its venv (bin/ on macOS and Linux, Scripts/ on Windows), else the system's.
+if [ -x server/.venv/bin/python ]; then PY="$PWD/server/.venv/bin/python"
+elif [ -x server/.venv/Scripts/python.exe ]; then PY="$PWD/server/.venv/Scripts/python.exe"
+elif command -v python3 >/dev/null && python3 -c '' 2>/dev/null; then PY=python3
+else PY=python; fi
 
 step "tools: boundary check tests + repo scan"
 node --test tools/*.test.mjs
@@ -43,11 +48,10 @@ step "zotero: build + tests + package checks"
 (cd zotero && for f in bootstrap.js content/*.js; do
   node -e 'new (require("vm").Script)(require("fs").readFileSync(process.argv[1], "utf8"), { filename: process.argv[1] })' "$f"
 done)
-python3 -c "import xml.dom.minidom as m; m.parse('zotero/content/preferences.xhtml')"
+"$PY" -c "import xml.dom.minidom as m; m.parse('zotero/content/preferences.xhtml')"
 (cd zotero && version=$(node -p 'require("./manifest.json").version') && node -e 'const u = require("./dist/update.json"); const v = Object.values(u.addons)[0].updates[0].version; if (v !== process.argv[1]) { console.error(`update.json says ${v}`); process.exit(1); }' "$version")
 
 step "server: tests"
-if [ -x server/.venv/bin/python ]; then PY="$PWD/server/.venv/bin/python"; else PY=python3; fi
 if "$PY" -c "import pytest" 2>/dev/null; then
   (cd server && KB_BACKEND=onnx "$PY" -m pytest tests -q -p no:cacheprovider)
 else

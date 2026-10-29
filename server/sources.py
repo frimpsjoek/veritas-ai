@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -31,7 +32,26 @@ import paths
 ROOT = Path(__file__).resolve().parent
 FILE = Path(os.environ.get("KB_SOURCES", paths.data_dir() / "sources.json"))
 OUTPUT_DEFAULT = Path.home() / "Documents" / "Veritas"  # where notes go unless a listed vault is chosen
-ZOTERO_PROFILES = Path.home() / "Library" / "Application Support" / "Zotero" / "Profiles"
+
+
+def zotero_app_dir(system: str | None = None, env=None, home: Path | None = None) -> Path:
+    """The folder that holds Zotero's profiles.ini, per system: macOS ~/Library/Application Support/Zotero,
+    Windows %APPDATA%\\Zotero\\Zotero, Linux ~/.zotero/zotero."""
+    system, env, home = system or sys.platform, os.environ if env is None else env, home or Path.home()
+    if system == "darwin":
+        return home / "Library" / "Application Support" / "Zotero"
+    if system == "win32":
+        return (Path(env["APPDATA"]) if env.get("APPDATA") else home / "AppData" / "Roaming") / "Zotero" / "Zotero"
+    return home / ".zotero" / "zotero"
+
+
+def zotero_profiles_dir(system: str | None = None, env=None, home: Path | None = None) -> Path:
+    """The folder whose subfolders are Zotero profiles: Profiles/ beside profiles.ini, except on Linux."""
+    app = zotero_app_dir(system, env, home)
+    return app if (system or sys.platform) not in ("darwin", "win32") else app / "Profiles"
+
+
+ZOTERO_PROFILES = zotero_profiles_dir()
 
 NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 # Names become source labels and path prefixes: none may read as a label the index already gives.
@@ -199,7 +219,7 @@ def accounts() -> list[Account]:
 
 
 def add_account(kind: str, user_id: str, *, key: str | None = None, name: str | None = None) -> dict:
-    """Adds an online source; its API key (when given) goes to the Keychain, never to sources.json."""
+    """Adds an online source; its API key (when given) goes to the key store (zotero_web.py), never to sources.json."""
     if kind != "zotero-web":
         raise SourceError(f"unknown kind of online source {kind!r}")
     if not re.fullmatch(r"\d{1,12}", str(user_id)):

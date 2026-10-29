@@ -1,7 +1,7 @@
 """HTTP API over the index, for the Obsidian plugin on the Mac and on the phone.
 
 GET  /ping                                     is the server up (no database work)
-GET  /status                                   index counts
+GET  /status                                   index counts, and which OCR engine reads scans and images
 GET  /links?path=...   GET /recent?days=&folder=&limit=
 GET  /search?q=...&limit=&source=&exclude_source=&folder=&tag=&collections=K1,K2&year_from=&year_to=
                                                 same search the agents use; `collections` takes Zotero collection
@@ -53,7 +53,7 @@ POST /index                                    re-index changed notes now
 GET  /setup/suggest                            what a new user could add: Zotero, Obsidian vaults, PDF folders (spec 023)
 GET  /sources                                  the folders the index reads, each with kind, role and count (spec 018)
 POST /sources {"path","name"?}                 add a folder (400 unreadable/too broad, 409 already listed); starts indexing
-POST /sources {"kind":"zotero-web","user_id","key"?,"name"?}  add an online Zotero library (key goes to the Keychain)
+POST /sources {"kind":"zotero-web","user_id","key"?,"name"?}  add an online Zotero library (key goes to the key store)
 PATCH /sources/<name> {"enabled"?,"skip"?}     switch a folder on or off, or set its skip patterns
 PATCH /sources/output {"name": str|null}       where notes are written: a listed notes folder, or ~/Documents/Veritas
 DELETE /sources/<name>                         take a folder off the list (its rows go on the next index run)
@@ -264,7 +264,8 @@ def index_status() -> dict:
     if not running and progress.get("running"):  # the process died without finishing
         progress.update(running=False, stage="idle", label="Interrupted")
     return {**_coverage["stats"], "coverage": _coverage["rows"], "indexing": progress, "running": running,
-            "next_check_at": LAST_CHECK["at"] + kb.FRESH_EVERY if LAST_CHECK["at"] else None}
+            "next_check_at": LAST_CHECK["at"] + kb.FRESH_EVERY if LAST_CHECK["at"] else None,
+            "ocr": kb.media.ocr_engine()}  # "vision", "tesseract" or None: Settings > On this computer says which
 
 
 LAST_CHECK = {"at": 0.0}
@@ -331,8 +332,10 @@ def sources_changed() -> None:
 
 def start_indexing(reread: str | None) -> None:
     """A separate process, so a long run (re-reading every image) outlives server restarts and can be stopped."""
-    # taskpolicy -b: background priority, like the indexing threads (kb.background_priority)
-    args = ["/usr/sbin/taskpolicy", "-b", sys.executable, str(kb.HOME / "kb.py"), "index"]
+    # taskpolicy -b: background priority, like the indexing threads (kb.background_priority); macOS only
+    args = [sys.executable, str(kb.HOME / "kb.py"), "index"]
+    if sys.platform == "darwin":
+        args = ["/usr/sbin/taskpolicy", "-b", *args]
     if reread == "zotero":
         args.append("--reread-zotero")
     elif reread == "media":
