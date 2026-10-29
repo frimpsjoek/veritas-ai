@@ -25,12 +25,16 @@ if [ -n "$VERITAS_BROWSER" ]; then
 fi
 
 step "obsidian: typecheck + tests + build"
-(cd obsidian && npm ci --silent && npx tsc -p . && npm test && node esbuild.config.mjs)
-# styles.css is generated from ui's CSS but committed (Obsidian loads it as is): the committed copy must be current.
-if git rev-parse --git-dir >/dev/null 2>&1 && ! git diff --quiet -- obsidian/styles.css; then
-  echo "check.sh: obsidian/styles.css is out of date; commit the rebuilt file" >&2
+# styles.css is generated from ui's CSS but committed (Obsidian loads it as is): build it to a temp file and
+# compare, so the check never rewrites the tracked copy.
+styles=$(mktemp)
+(cd obsidian && npm ci --silent && npx tsc -p . && npm test && STYLES_OUT="$styles" node esbuild.config.mjs)
+if ! cmp -s "$styles" obsidian/styles.css; then
+  rm -f "$styles"
+  echo "check.sh: obsidian/styles.css is out of date; rebuild it (cd obsidian && node esbuild.config.mjs) and commit it" >&2
   exit 1
 fi
+rm -f "$styles"
 
 step "zotero: build + tests + package checks"
 (cd zotero && ./build.sh && node --test test/*.test.mjs)
