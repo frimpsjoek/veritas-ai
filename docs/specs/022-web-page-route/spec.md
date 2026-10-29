@@ -124,3 +124,59 @@ No other client change: the four modes already work in the harness.
       arxiv.org/pdf/2301.06171, source: open access, version: submitted}`; `/web/pdf` 200 application/pdf 6.1 MB,
       Range 0-1023 → 206; `arxiv.org/abs/2301.06171` → reader (arXiv refuses frames); Wikipedia → frame
 - [ ] The user opens the DOI in the web app's panel and confirms (no screenshot taken by the agent)
+
+## 2026-10-29: arXiv paper view and cleaner reader
+
+The user (2026-10-28): the reader view for web pages, arXiv in particular, "is terrible"; keep the app's look. Seen
+on `arxiv.org/abs/2607.25690` (`evidence/arxiv-before.png`): the title twice in two fonts ("Title:" glued on), the
+byline "Zhumagulov, Yaroslav, Félisaz, Johan, …" (citation_author is "Last, First"), the whole page body (arXiv's
+`<main>` holds every sidebar: breadcrumb, "View PDF", submission history, "Full-text links", browse context,
+"Loading…", the arXivLabs toggles, "Disable MathJax"), raw TeX (`F\'elisaz`, `PtSe$_2$`), the abstract as a grey quote.
+
+What changed:
+
+- **arXiv links answer a paper** (`web_page.arxiv_of`, `arxiv_paper`, `_arxiv`). `arxiv.org/abs|pdf|html/<id>`, any
+  version, old-style ids (`radar_api.arxiv_id`), and the arXiv DOI `10.48550/arXiv.<id>`: `{mode: reader, source:
+  arxiv, title, byline, abstract, math: true, paper: {arxiv, version, submitted, revised, subjects [{code, name,
+  primary}], doi, comment}, links: [PDF, Full text]}`. Metadata from the arXiv API (Atom, stdlib XML), subject names
+  and the "HTML (experimental)" address from the abstract page, which is also the fallback (citation_* tags,
+  dateline); kept a day in `data/web-pages/arxiv/`. TeX accents become letters on the server; `$…$` is left for the
+  panel. A `/pdf/` link stays the PDF reader unless the reader is asked for. `/html/<id>` is the LaTeXML article
+  under the same header (`<math>` → `$alttext$`, figure captions kept, author block, dates and footer dropped), with
+  PDF and Abstract buttons. A DOI's abstract-only answer (OpenAlex) has the same shape (abstract, Publisher's page).
+- **The generic reader is cleaner for every site** (`reader()`): text outside any kept block becomes a paragraph, so
+  each piece of the page can be weighed; hidden and screen-reader-only text is skipped. Without an `<article>`
+  (`<main>` is pruned too): empty and link-heavy blocks, breadcrumb headings, short lines printed twice or more,
+  sections that are mostly furniture with little text left, and short blocks matching a few phrases ("Toggle",
+  "(What is …?)", "Loading...", "Cite as", "Submission history", cookie banners …) go; a section under a furniture
+  heading goes with it. Every page: the block(s) repeating the title near the top go, a site suffix ("| Quanta
+  Magazine") leaves the title, glued "Title:/Authors:/Abstract:" labels go, "Abstract" becomes a small label
+  (`h2.sbw-reader-label`) over plain text, "Last, First" bylines flip, six names then "et al.".
+- **Panel** (`browser-panel.js`, `readerPlan`/`mathParts` in `browser-state.js`): one font family (the note's prose
+  font) for title, byline and text; abstract under the small label; subject chips small and muted; PDF / Full text /
+  Publisher's page as quiet header buttons (in the panel; "Original page" of a paper opens outside, since the paper
+  answer comes back for its own address); KaTeX (the chat's `mathNode`) only for answers marked `math`, so "$5 and
+  $10" on an ordinary page stays money.
+- **← in the panel** always does something: the page before, or on the first page it closes the panel (focus back
+  to the link). The panel keeps its own history, so the desktop app's web view behaves the same.
+
+Evidence (2026-10-29):
+
+- Tests first: `tests/test_web_arxiv.py` (10: id forms, accents, API answer, abstract-page fallback, no HTML version,
+  pdf vs reader, LaTeXML full text, unknown id, old-style id, arXiv DOI), `tests/test_web_page.py` +6 (the real abs
+  page as a fixture, `fixtures/web_page/arxiv-abs-2607.25690.html`, fetched once: no chrome phrase left, title once,
+  byline flipped, abstract label; an `<article>` blog keeps every paragraph; a div page keeps its paragraphs and drops
+  link lists and repeated labels; "$5 and $10" not math, MathML is; byline flip; site-suffixed title). Web unit
+  tests: `readerPlan` (one font class, abstract label, math only when marked, chips/meta/links), `mathParts`
+  (PtSe$_2$, money), `stepBack`. Harness (`dev/browser-checks.mjs`, system Chrome): title once in the same computed
+  font family as the text, abstract label with TeX drawn, chips and header buttons, prices not math, ← on the first
+  page closes; 81 browser checks pass at 1280/700/360 px.
+- Live (scratch server from the worktree, scratch `VERITAS_DATA`): `/web/page?url=https://arxiv.org/abs/2607.25690
+  &prefer=reader` → `source: arxiv`, byline "Yaroslav Zhumagulov, Johan Félisaz, Stepan S. Tsirkin, Denis Kochan,
+  Oleg V. Yazyev", v2, submitted 28 Jul 2026, revised 25 Oct 2026, three subjects, PDF + Full text
+  (`arxiv.org/html/2607.25690v2`); the HTML full text reads with 227 formulas as `$…$` and 3 figure captions; a Quanta
+  article keeps its text and loses "Read Later" and the related-story list. Screenshots (gitignored, local):
+  `evidence/arxiv-after.png`, `evidence/arxiv-html-after.png`, `evidence/quanta-after.png`.
+- Open: in-page anchors of the full text (`#bib.bib7`, `#S1`) reload the page in the panel instead of scrolling (the
+  reader drops ids); `Read Later`-like lines that appear once and site-specific promos ("Click to tell Google …")
+  stay; the user's own look at the panel.
