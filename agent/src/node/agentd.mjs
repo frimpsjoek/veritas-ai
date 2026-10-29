@@ -271,7 +271,7 @@ async function main() {
   if (!secret) { console.error('SECOND_BRAIN_AGENTD_SECRET is required (set by the Python supervisor)'); process.exit(1); }
 
   const platform = createNodePlatform();  // home from os.homedir(): Windows sets USERPROFILE, not HOME
-  const library = createHttpLibraryBackend(platform.fetch, { baseUrl: kbBaseUrl, token: process.env.SECOND_BRAIN_KB_TOKEN ?? null });
+  const library = createHttpLibraryBackend(platform.fetch, { baseUrl: kbBaseUrl, token: process.env.SECOND_BRAIN_KB_TOKEN ?? null, slowFetch: /** @type {typeof fetch} */ (/** @type {unknown} */ (platform.slowFetch)) });
   // T6.2: the one persisted settings.json under `dataDir` (settings.js) is what createLocalRuntime's own
   // internal store reads and writes from here on; this one read just seeds the gateway's McpHub with whatever
   // servers were already saved, so they're connected on this very startup, not just the next one.

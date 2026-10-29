@@ -186,3 +186,14 @@ test('items on a server without the route is an error, not an empty library', as
   const library = createHttpLibraryBackend(async () => ({ ok: false, status: 404, json: async () => null }), { baseUrl: 'http://127.0.0.1:27182' });
   await assert.rejects(library.items({ collections: null }), /too old/);
 });
+
+test('the whole-paper and calibration calls go through slowFetch when the host has one', async () => {
+  const quick = [], slow = [];
+  const answer = (list) => async (url) => { list.push(new URL(url).pathname); return { ok: true, status: 200, json: async () => ({ scores: {} }) }; };
+  const lib = createHttpLibraryBackend(answer(quick), { baseUrl: 'http://127.0.0.1:1', slowFetch: answer(slow) });
+  await lib.radarFulltext?.({ seeds: { keys: [], collections: [], texts: [] }, items: [] });
+  await lib.radarCalibrate?.({ seeds: { keys: [], collections: [], texts: [] }, unrelated: [] });
+  await lib.radarScore?.({ scope: { collections: null }, positives: [], negatives: [], items: [] });
+  assert.deepEqual(slow, ['/radar/fulltext', '/radar/calibrate']);
+  assert.deepEqual(quick, ['/radar/score']);
+});
