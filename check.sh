@@ -38,7 +38,11 @@ rm -f "$styles"
 
 step "zotero: build + tests + package checks"
 (cd zotero && ./build.sh && node --test test/*.test.mjs)
-(cd zotero && for f in bootstrap.js content/*.js; do node --check "$f"; done)
+# Zotero loads these with loadSubScript, as classic scripts; `node --check` would parse them as modules
+# (package.json "type": "module") and let a stray import/export through.
+(cd zotero && for f in bootstrap.js content/*.js; do
+  node -e 'new (require("vm").Script)(require("fs").readFileSync(process.argv[1], "utf8"), { filename: process.argv[1] })' "$f"
+done)
 python3 -c "import xml.dom.minidom as m; m.parse('zotero/content/preferences.xhtml')"
 (cd zotero && version=$(node -p 'require("./manifest.json").version') && node -e 'const u = require("./dist/update.json"); const v = Object.values(u.addons)[0].updates[0].version; if (v !== process.argv[1]) { console.error(`update.json says ${v}`); process.exit(1); }' "$version")
 
