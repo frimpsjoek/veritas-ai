@@ -72,3 +72,26 @@ def test_indexing_stops_after_its_batch_when_the_stop_file_appears(tmp_path, mon
     kb.STOP_FILE.write_text("")
     with pytest.raises(kb.Stopped):
         progress.advance(2)
+
+
+@pytest.mark.parametrize("system", ["darwin", "linux", "win32"])
+def test_self_update_replaces_the_server_on_every_system(monkeypatch, system):
+    """os.execv swaps the process image on macOS and Linux. On Windows it starts a second process and the old one
+    keeps the port, so there the listener closes first, the new server starts detached, and this one exits."""
+    events = []
+
+    class Listener:
+        def server_close(self):
+            events.append("close")
+
+    monkeypatch.setattr(http_api.sys, "platform", system)
+    monkeypatch.setattr(http_api, "LISTENER", Listener())
+    monkeypatch.setattr(http_api.os, "execv", lambda exe, argv: events.append(("execv", exe, argv)))
+    monkeypatch.setattr(http_api.os, "_exit", lambda code: events.append(("exit", code)))
+    monkeypatch.setattr(subprocess, "Popen", lambda args, **kw: events.append(("start", args, kw.get("creationflags"))))
+    http_api.replace_self()
+    argv = [sys.executable, *sys.argv]
+    if system == "win32":
+        assert events == ["close", ("start", argv, 0x00000008 | 0x00000200), ("exit", 0)]
+    else:
+        assert events == [("execv", sys.executable, argv)]
