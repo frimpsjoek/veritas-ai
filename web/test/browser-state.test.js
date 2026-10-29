@@ -139,3 +139,22 @@ test('← shows the page before, and on the first page closes the panel (back to
   assert.deepEqual(stepBack(h), { close: true });
   assert.deepEqual(stepBack(createHistory()), { close: true });
 });
+
+test('a DOI answered with its abstract only is a landing page: journal and date, html abstract, DOI, citation, publisher outside', async () => {
+  const { readerPlan } = await import('../src/browser-state.js');
+  const plan = readerPlan({
+    mode: 'reader', url: 'https://doi.org/10.1021/acs.jctc.6c01423', title: 'Multipolar Polarizabilities in Materials', byline: 'Diem Thi-Xuan Dang, Dai-Nam Le',
+    abstract: 'We develop CO2.', abstract_html: '<p>We develop CO<sub>2</sub>.</p>', html: '', source: 'openalex',
+    paper: { doi: '10.1021/acs.jctc.6c01423', journal: 'Journal of Chemical Theory and Computation', published: '28 Oct 2026', citation: 'Dang, Le. Multipolar. 2026.' },
+    links: [{ label: "Publisher's page", url: 'https://doi.org/10.1021/acs.jctc.6c01423', kind: 'outside' }, { label: 'PDF', url: 'https://repo.example/p.pdf', kind: 'pdf' }],
+  });
+  assert.equal(plan.landing, true);
+  assert.equal(plan.meta, 'Journal of Chemical Theory and Computation · 28 Oct 2026');
+  assert.equal(plan.abstractHtml, '<p>We develop CO<sub>2</sub>.</p>');
+  assert.deepEqual([plan.doi, plan.doiUrl, plan.citation], ['10.1021/acs.jctc.6c01423', 'https://doi.org/10.1021/acs.jctc.6c01423', 'Dang, Le. Multipolar. 2026.']);
+  assert.deepEqual(plan.links.map((l) => [l.label, l.outside]), [["Publisher's page", true], ['PDF', false]], 'only the publisher goes outside; a PDF opens in the panel');
+  const numbered = readerPlan({ source: 'openalex', paper: { journal: 'ACS Nano', published: '5 Mar 2026', volume: '12', issue: '3', pages: '101-118' } });
+  assert.equal(numbered.meta, 'ACS Nano · 5 Mar 2026 · 12 (3), 101-118');
+  const arxiv = readerPlan({ source: 'arxiv', abstract_html: '<p>x</p>', paper: { doi: '10.48550/arXiv.1', arxiv: '1' } });
+  assert.deepEqual([arxiv.landing, arxiv.abstractHtml, arxiv.doi, arxiv.citation], [false, '', '', ''], 'an arXiv answer keeps its own look');
+});

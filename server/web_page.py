@@ -1,12 +1,14 @@
 """GET /web/page?url=&prefer=reader and GET /web/pdf?url= (spec 022): the server half of the web app's link panel.
 
 /web/page answers one of {mode: frame | reader | pdf | blocked}. A paper link (a DOI) first looks for a copy the user
-can read: the PDF in the Zotero library, then an open-access PDF from OpenAlex, then the abstract; only then the
+can read: the PDF in the Zotero library, then an open-access PDF from OpenAlex, then the paper's page built from
+OpenAlex and Crossref (journal, date, authors, the abstract's paragraphs, the DOI, a citation); only then the
 publisher's page, which most publishers refuse to non-browsers (bot protection) and to frames (x-frame-options).
 /web/pdf streams the PDF the reader shows; a DOI link there means the library's copy or the open-access one.
 
 Only public http(s) sites are asked, also after a redirect (site_icons.public_host). Nothing a site sends is served as
-a page: the reader view is rebuilt from an allow-list of tags. OpenAlex answers are kept a day, PDFs an hour.
+a page: the reader view is rebuilt from an allow-list of tags. OpenAlex and Crossref answers are kept a day, PDFs an
+hour.
 """
 from __future__ import annotations
 
@@ -163,7 +165,8 @@ def openalex(doi: str, get=fetch) -> dict | None:
             return json.loads(path.read_text()) or None
         except (OSError, ValueError):
             pass
-    select = "title,display_name,authorships,abstract_inverted_index,best_oa_location,locations,primary_location"
+    select = ("title,display_name,authorships,abstract_inverted_index,best_oa_location,locations,primary_location,"
+              "publication_date,publication_year,biblio,open_access")
     try:
         answer = get(f"https://api.openalex.org/works/doi:{urllib.parse.quote(doi, safe='/')}?select={select}",
                      2_000_000, "application/json")
@@ -207,6 +210,171 @@ def oa_pdf(work: dict) -> dict | None:
     return None
 
 
+def crossref(doi: str, get=fetch) -> dict | None:
+    """The Crossref record for a DOI (its JATS abstract, journal, volume and pages), kept a day; None when unknown or
+    away. Asked only for a paper with no open copy, whose page is then built from the record."""
+    path = folder("crossref") / f"{hashlib.sha1(doi.encode()).hexdigest()}.json"
+    if _fresh(path, OPENALEX_DAYS * 86400):
+        try:
+            return json.loads(path.read_text()) or None
+        except (OSError, ValueError):
+            pass
+    try:
+        answer = get(f"https://api.crossref.org/works/{urllib.parse.quote(doi, safe='/')}", 2_000_000, "application/json")
+    except (OSError, Refused):
+        return None
+    record = None
+    if answer.status == 200:
+        try:
+            record = json.loads(answer.body).get("message")
+        except (ValueError, AttributeError):
+            record = None
+    elif answer.status != 404:
+        return None
+    path.write_text(json.dumps(record or {}))
+    return record if isinstance(record, dict) else None
+
+
+# The word "Abstract" that opens many abstracts (JATS <title>, or glued to OpenAlex's text), and the heading names
+# that only repeat the panel's own label.
+ABSTRACT_WORD = re.compile(r"^\s*(?:Graphical\s+)?(?:Abstract|ABSTRACT)\s*[:.\u2014-]?\s+(?=[A-Z0-9(<\"\u201c])")
+ABSTRACT_TITLES = {"abstract", "graphical abstract", "summary", "toc", "table of contents graphic"}
+JATS_INLINE = {"sub": "sub", "sup": "sup", "italic": "i", "i": "i", "em": "i", "bold": "b", "b": "b", "strong": "b"}
+JATS_BLOCK = {"p", "sec", "list", "list-item", "title", "abstract", "trans-abstract", "fig", "caption", "disp-formula"}
+
+
+class _Jats(html.parser.HTMLParser):
+    """A Crossref abstract (JATS, tags prefixed "jats:" or not) as paragraphs: <p> for each paragraph and for loose
+    text, <h3> for a section title other than "Abstract", <ul><li> for lists; sub, sup, italic and bold kept, every other
+    tag dropped with its text kept, attributes never."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.blocks: list[str] = []  # finished blocks, html
+        self.run: list[str] = []  # the open paragraph
+        self.title: list[str] | None = None
+        self.items: list[str] | None = None  # list items being collected
+
+    def _end(self) -> None:
+        text = "".join(self.run).strip()
+        self.run = []
+        if re.sub(r"<[^>]+>", "", text).strip():
+            text = re.sub(r"\s+", " ", text)
+            if self.items is not None:
+                self.items.append(f"<li>{text}</li>")
+            else:
+                self.blocks.append(f"<p>{text}</p>")
+
+    def handle_starttag(self, tag, attrs):
+        name = tag.split(":")[-1]
+        if name in JATS_INLINE:
+            (self.title if self.title is not None else self.run).append(f"<{JATS_INLINE[name]}>")
+        elif name == "title":
+            self._end()
+            self.title = []
+        elif name == "list":
+            self._end()
+            self.items = []
+        elif name in JATS_BLOCK:
+            self._end()
+
+    def handle_endtag(self, tag):
+        name = tag.split(":")[-1]
+        if name in JATS_INLINE:
+            (self.title if self.title is not None else self.run).append(f"</{JATS_INLINE[name]}>")
+        elif name == "title" and self.title is not None:
+            text = re.sub(r"\s+", " ", "".join(self.title)).strip()
+            self.title = None
+            plain = re.sub(r"<[^>]+>", "", text).strip().rstrip(":.").strip()
+            if plain and plain.lower() not in ABSTRACT_TITLES:
+                self.blocks.append(f"<h3>{text}</h3>")
+        elif name == "list":
+            self._end()
+            if self.items:
+                self.blocks.append(f"<ul>{''.join(self.items)}</ul>")
+            self.items = None
+        elif name in JATS_BLOCK:
+            self._end()
+
+    def handle_data(self, data):
+        (self.title if self.title is not None else self.run).append(html.escape(data, quote=False))
+
+
+def jats_html(text: str) -> str:
+    """A Crossref (JATS) or plain abstract as clean paragraphs, without the "Abstract" heading or leading word."""
+    parser = _Jats()
+    parser.feed(text or "")
+    parser.close()
+    parser._end()
+    blocks = parser.blocks
+    if blocks and blocks[0].startswith("<p>"):
+        blocks[0] = "<p>" + ABSTRACT_WORD.sub("", blocks[0][3:], count=1)
+    return "".join(blocks)
+
+
+def abstract_text(fragment: str) -> str:
+    """The plain text of an abstract's html, its paragraphs as one run (for clients that draw text only)."""
+    return _words(html.unescape(re.sub(r"<[^>]+>", " ", re.sub(r"</?(?:sub|sup|i|b)>", "", fragment))))
+
+
+def journal_of(work: dict, record: dict | None) -> str:
+    """The journal's name, on one line (Crossref breaks "Journal of Chemical Theory and Computation" over two lines)."""
+    name = ((work.get("primary_location") or {}).get("source") or {}).get("display_name") or ""
+    if not name and record:
+        titles = record.get("container-title") or []
+        name = titles[0] if titles else ""
+    return _words(name)
+
+
+def published_of(work: dict, record: dict | None) -> str:
+    """"28 Oct 2026" (or "Oct 2026", "2026"): OpenAlex's publication date, else Crossref's."""
+    found = _day(work.get("publication_date") or "")
+    if found:
+        return found
+    for key in ("published", "published-online", "published-print", "issued"):
+        parts = (((record or {}).get(key) or {}).get("date-parts") or [[None]])[0]
+        if parts and parts[0]:
+            year, month, day = (list(parts) + [None, None])[:3]
+            return " ".join(str(x) for x in (day, MONTHS[month - 1] if month else None, year) if x)
+    return str(work.get("publication_year") or "")
+
+
+def citation_of(doi: str, title: str, names: list[str], journal: str, year: str, volume: str, issue: str,
+                pages: str) -> str:
+    """One line to paste: "A. Author, B. Author. Title. Journal 2026, 12 (3), 101-118. https://doi.org/…"."""
+    who = ", ".join(names[:20]) + (", et al." if len(names) > 20 else "")
+    where = " ".join(x for x in (journal, year) if x)
+    numbers = ", ".join(x for x in (where, f"{volume} ({issue})" if volume and issue else volume, pages) if x)
+    title = _words(re.sub(r"<[^>]+>", "", title))
+    return ". ".join(x.rstrip(".") for x in (who, title, numbers) if x) + f". https://doi.org/{doi}"
+
+
+def _landing(url: str, doi: str, work: dict, record: dict | None, text: str) -> dict:
+    """The page of a paper without an open copy: journal and date, authors, the abstract as paragraphs, the DOI, the
+    publisher's page (outside: publishers refuse in-app loads) and a citation; a free copy OpenAlex knows as a button."""
+    title = work.get("title") or work.get("display_name") or ((record or {}).get("title") or [doi])[0]
+    biblio = work.get("biblio") or {}
+    volume = str(biblio.get("volume") or (record or {}).get("volume") or "")
+    issue = str(biblio.get("issue") or (record or {}).get("issue") or "")
+    first, last = biblio.get("first_page"), biblio.get("last_page")
+    pages = (f"{first}-{last}" if first and last and first != last else str(first or "")) or str((record or {}).get("page") or "")
+    journal = journal_of(work, record)
+    published = published_of(work, record)
+    year = str(work.get("publication_year") or (published.rsplit(" ", 1)[-1] if published else ""))
+    names = [n for n in ((a.get("author") or {}).get("display_name") for a in work.get("authorships") or []) if n]
+    paper = {"doi": doi, "journal": journal, "published": published, "volume": volume, "issue": issue, "pages": pages,
+             "citation": citation_of(doi, title, names, journal, year, volume, issue, pages)}
+    links = [{"label": "Publisher's page", "url": f"https://doi.org/{doi}", "kind": "outside"}]
+    access = work.get("open_access") or {}
+    free = access.get("oa_url") if access.get("is_oa") else None
+    if free and doi_of(free) != doi:
+        links.append({"label": "PDF" if free.lower().split("?")[0].endswith(".pdf") else "Free copy", "url": free,
+                      "kind": "pdf" if free.lower().split("?")[0].endswith(".pdf") else "page"})
+    return {"mode": "reader", "url": url, "title": title, "byline": byline_of(work), "abstract": abstract_text(text),
+            "abstract_html": text, "html": "", "source": "openalex", "paper": {k: v for k, v in paper.items() if v},
+            "links": links}
+
+
 def _paper(url: str, doi: str, get) -> dict | None:
     """A paper link's answer from the library, OpenAlex's open-access copy or its abstract; None to try the page."""
     found = library_pdf(doi)
@@ -221,14 +389,12 @@ def _paper(url: str, doi: str, get) -> dict | None:
     if pdf:
         return {"mode": "pdf", "url": pdf["url"], "title": title, "source": "open access", "version": pdf["version"],
                 "where": pdf["where"]}
-    text = abstract_of(work)
+    record = crossref(doi, get)
+    # Crossref keeps the abstract's paragraphs, sub- and superscripts; OpenAlex only its words
+    text = jats_html((record or {}).get("abstract") or "") or jats_html(html.escape(abstract_of(work), quote=False))
     if not text:
         return None
-    landing = ((work.get("primary_location") or {}).get("landing_page_url")) or f"https://doi.org/{doi}"
-    # the paper shape arXiv answers use too: the abstract under its label, the publisher's page as a header button
-    return {"mode": "reader", "url": url, "title": title, "byline": byline_of(work), "abstract": text,
-            "html": "<p><em>Only the abstract is open.</em></p>", "source": "openalex",
-            "links": [{"label": "Publisher's page", "url": landing, "kind": "page"}]}
+    return _landing(url, doi, work, record, text)
 
 
 # --- ordinary pages ------------------------------------------------------------------------------------------------

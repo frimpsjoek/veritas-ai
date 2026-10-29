@@ -136,21 +136,36 @@ export function createBrowserPanel({ host, doc, win, into }) {
       }
       top.append(chips);
     }
-    if (plan.links.length) {
+    if (plan.links.length || plan.citation) {
       const row = h(doc, 'p', 'sbw-reader-links');
       for (const link of plan.links) {
         const b = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sbw-quiet', link.label));
         b.setAttribute('type', 'button');
-        b.title = addressOf(link.url);
-        // the PDF goes to the PDF reader and the full text to this reader, both in the panel (Back returns here)
-        b.addEventListener('click', () => api.open(link.url));
+        b.title = link.outside ? `${addressOf(link.url)} (opens in your browser)` : addressOf(link.url);
+        // the PDF goes to the PDF reader and the full text to this reader, both in the panel (Back returns here); a
+        // publisher's page goes to the system browser, since publishers refuse to load here (bot protection)
+        if (link.outside) b.append(icon(doc, 'open', 'sb-p-icon sbw-reader-out'));
+        b.addEventListener('click', () => (link.outside ? host.openLink(link.url, { outside: true }) : api.open(link.url)));
         row.append(b);
+      }
+      if (plan.citation) {
+        const cite = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sbw-quiet', 'Copy citation'));
+        cite.setAttribute('type', 'button');
+        cite.title = plan.citation;
+        cite.prepend(icon(doc, 'quote', 'sb-p-icon sbw-reader-cite'));
+        cite.addEventListener('click', () => copyText(plan.citation, 'Citation copied'));
+        row.append(cite);
       }
       top.append(row);
     }
     article.append(top);
+    // a paper's graphical abstract, only when the figure finder (Home's /paper-figure: the publisher page's preview
+    // image when that page answers, or a figure at a known address) has a real one; nothing is drawn while it looks
+    if (plan.landing && plan.doi) figureOf(plan.doi, top);
     const text = h(doc, 'div', 'sbw-note-body');
-    if (plan.abstract) {
+    if (plan.abstractHtml) {
+      text.append(h(doc, 'h2', 'sbw-reader-label', plan.abstractLabel), noteFragment(doc, plan.abstractHtml, host));
+    } else if (plan.abstract) {
       const abstract = h(doc, 'p');
       abstract.append(words(plan.abstract));
       text.append(h(doc, 'h2', 'sbw-reader-label', plan.abstractLabel), abstract);
@@ -160,14 +175,69 @@ export function createBrowserPanel({ host, doc, win, into }) {
     // links in the article are relative to the page; the server already made them absolute
     interceptLinks(text, innerHost);
     article.append(text);
+    if (plan.landing) article.append(landingFoot(plan));
     body.replaceChildren(article);
     body.scrollTop = 0;
-    modeButton.hidden = false;
+    // a paper's landing page has its publisher's page as a button already (and ↗ in the bar)
+    modeButton.hidden = plan.landing;
     modeButton.textContent = 'Original page';
     // a paper answer comes back for its own address whatever is asked (arXiv refuses frames), so its page opens outside
     modeButton.onclick = plan.paper
       ? () => host.openLink(page.url, { outside: true })
       : () => { if (history.current) void show({ url: history.current.url }, false); };
+  }
+
+  /** Under a paper's abstract: its DOI, and that only the abstract is open here, with the publisher's page (outside).
+   *  @param {ReturnType<typeof readerPlan>} plan */
+  function landingFoot(plan) {
+    const foot = h(doc, 'footer', 'sbw-reader-foot');
+    /** @param {string} label @param {string} url */
+    const outsideLink = (label, url) => {
+      const a = /** @type {HTMLAnchorElement} */ (h(doc, 'a', 'sbw-reader-out-link', label));
+      a.href = url;
+      a.rel = 'noopener noreferrer';
+      a.append(icon(doc, 'open', 'sb-p-icon sbw-reader-out'));
+      a.addEventListener('click', (event) => { event.preventDefault(); host.openLink(url, { outside: true }); });
+      return a;
+    };
+    if (plan.doi) {
+      const line = h(doc, 'p', 'sbw-reader-doi-line', 'DOI ');
+      line.append(outsideLink(plan.doi, plan.doiUrl));
+      foot.append(line);
+    }
+    const publisher = plan.links.find((l) => l.outside)?.url || plan.doiUrl;
+    if (publisher) {
+      const note = h(doc, 'p', 'sbw-reader-access', 'Only the abstract is open here. ');
+      note.append(outsideLink('Read it on the publisher\u2019s page', publisher));
+      foot.append(note);
+    }
+    return foot;
+  }
+
+  /** @param {string} doi @param {HTMLElement} after */
+  function figureOf(doi, after) {
+    const mine = token;
+    host.json(`/paper-figure?${new URLSearchParams({ doi })}`).then((/** @type {any} */ found) => {
+      if (mine !== token || !found?.image || !/^(https?:\/\/|data:image\/)/i.test(String(found.image))) return;
+      const box = h(doc, 'figure', 'sbw-reader-figure');
+      box.hidden = true;
+      const img = /** @type {HTMLImageElement} */ (h(doc, 'img'));
+      img.alt = 'Graphical abstract';
+      img.referrerPolicy = 'no-referrer';
+      img.decoding = 'async';
+      img.addEventListener('load', () => { box.hidden = false; }, { once: true });
+      img.addEventListener('error', () => box.remove(), { once: true });
+      img.src = String(found.image);
+      box.append(img);
+      after.after(box);
+    }, () => {});
+  }
+
+  /** @param {string} value @param {string} done */
+  function copyText(value, done) {
+    const clip = /** @type {any} */ (win.navigator)?.clipboard;
+    if (!clip?.writeText) { host.notice("Couldn't copy here; the citation is in the button's tooltip."); return; }
+    clip.writeText(value).then(() => host.notice(done), () => host.notice("Couldn't copy the citation."));
   }
 
   /** Draws the TeX in the reader's text nodes (not in code). @param {HTMLElement} root */

@@ -250,6 +250,18 @@ p.sbw-prose { margin: 0 0 var(--sbw-s3); max-width: var(--measure); }
 .sbw-reader-chip.is-primary { color: var(--sb-ui-text); }
 .sbw-reader-links { display: flex; flex-wrap: wrap; gap: var(--sbw-s1); margin: var(--sbw-s2) 0 0 calc(-1 * var(--sbw-s2)); }
 .sbw-reader-links .sbw-quiet { margin: 0; font-family: var(--sb-ui-font); font-size: var(--sbw-t-small); }
+/* A DOI's landing page (2026-10-29): line icons for "opens outside" and the citation, a graphical abstract only when
+   one was found, the DOI and the access note under the abstract in the same prose family, smaller and muted. */
+.sbw-reader-links .sbw-quiet:has(.sb-p-icon) { display: inline-flex; align-items: center; gap: 5px; }
+.sbw-reader-out, .sbw-reader-cite { width: 13px; height: 13px; stroke: currentColor; }
+.sbw-reader-figure { margin: 0 0 var(--sbw-s4); }
+.sbw-reader-figure img { display: block; max-width: 100%; max-height: 300px; margin-inline: auto; border-radius: 8px; background: #fff; }
+.sbw-browser-article .sbw-note-body h2.sbw-reader-label + p { margin-top: 0; }
+.sbw-reader-foot { max-width: var(--measure); margin-top: var(--sbw-s4); padding-top: var(--sbw-s3); border-top: 1px solid var(--sb-ui-line); color: var(--sb-ui-muted); }
+.sbw-reader-foot p { margin: 0 0 var(--sbw-s1); font-size: 15px; line-height: 1.5; }
+.sbw-reader-out-link { display: inline-flex; align-items: baseline; gap: 4px; color: var(--sb-ui-accent); text-decoration: none; overflow-wrap: anywhere; }
+.sbw-reader-out-link:hover { text-decoration: underline; }
+.sbw-reader-out-link .sbw-reader-out { align-self: center; }
 .sbw-browser-status { padding: var(--sbw-s4); }
 .sbw-browser-card { box-sizing: border-box; max-width: 420px; margin: 18vh auto 0; padding: var(--sbw-s4); text-align: center; }
 .sbw-browser-card-title { margin: 0 0 var(--sbw-s2); font-size: 18px; font-weight: 600; }
