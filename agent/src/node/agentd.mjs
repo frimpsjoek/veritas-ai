@@ -270,7 +270,7 @@ async function main() {
   const secret = process.env.SECOND_BRAIN_AGENTD_SECRET;
   if (!secret) { console.error('SECOND_BRAIN_AGENTD_SECRET is required (set by the Python supervisor)'); process.exit(1); }
 
-  const platform = createNodePlatform({ homeDir: process.env.HOME ?? '' });
+  const platform = createNodePlatform();  // home from os.homedir(): Windows sets USERPROFILE, not HOME
   const library = createHttpLibraryBackend(platform.fetch, { baseUrl: kbBaseUrl, token: process.env.SECOND_BRAIN_KB_TOKEN ?? null });
   // T6.2: the one persisted settings.json under `dataDir` (settings.js) is what createLocalRuntime's own
   // internal store reads and writes from here on; this one read just seeds the gateway's McpHub with whatever
@@ -279,7 +279,7 @@ async function main() {
   const saved = await createSettingsStore(platform.fs, dataDir, { secrets: createSecretStore(platform, dataDir) }).get();
   const gatewaySettings = { scholarly: ['openalex', 'arxiv', 'crossref', 'europepmc'], mcpUrl: /** @type {string | undefined} */ (undefined), spawn: platform.spawn, mcp: saved.mcp };
   const gateway = await createToolGateway(platform.fetch, library, gatewaySettings);
-  const providers = createProviders(platform, { dataDir, home: process.env.HOME ?? '', codex: { binaryPath: process.env.CODEX_BINARY ?? null } });
+  const providers = createProviders(platform, { dataDir, home: platform.homeDir, codex: { binaryPath: process.env.CODEX_BINARY ?? null } });
   const notes = createHttpNoteSink(platform.fetch, { baseUrl: kbBaseUrl });
   // No getRoleModel override: it now defaults (core.js) to the same settings.json, read live on every turn, so
   // providers.setRole takes effect on the very next message with no restart (criterion 10).

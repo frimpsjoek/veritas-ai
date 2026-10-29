@@ -44,7 +44,23 @@ test('fs.symlink is idempotent: a second call does not throw when the link alrea
 test('which() finds node itself on PATH', async () => {
   const platform = createNodePlatform();
   const found = await platform.which(['definitely-not-a-real-binary', 'node']);
-  assert.ok(found && found.endsWith('node'));
+  assert.ok(found && /node(\.exe)?$/i.test(found));
+});
+
+// spec 024 G2: the same platform on Windows and Linux.
+test('the platform says which system it runs on, and the home folder comes from the OS (Windows has no $HOME)', () => {
+  const platform = createNodePlatform();
+  assert.equal(platform.os, process.platform);
+  assert.equal(platform.homeDir, os.homedir());
+});
+
+test('which() on Windows tries the PATHEXT extensions (claude.cmd, node.exe) for a bare name', async () => {
+  const dir = tmpDir();
+  const platform = createNodePlatform({ system: 'win32', env: { PATH: dir, PATHEXT: '.COM;.EXE;.CMD' } });
+  await platform.fs.writeAtomic(path.join(dir, 'claude.cmd'), '@echo off');
+  assert.equal(await platform.which(['claude']), path.join(dir, 'claude.cmd'));
+  assert.equal(await platform.which(['claude.cmd']), path.join(dir, 'claude.cmd'));
+  assert.equal(await createNodePlatform({ system: 'linux', env: { PATH: dir } }).which(['claude']), null, 'not elsewhere');
 });
 
 test('which() returns null when nothing matches', async () => {
