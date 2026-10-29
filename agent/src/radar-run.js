@@ -10,6 +10,7 @@ import { mergeItems, dropKnown, pickTop, keysOf, seedBody, seedsKey, MIN_SEEDS }
 import { calibrateRadar } from './radar-seeds.js';
 import { score, rescoreWhole, seedBar } from './radar-score.js';
 import { abstractsByDoi, fillAbstracts } from './scholarly.js';
+import { JUDGE_POOL } from './radar-judge.js';
 
 /** @typedef {import("./radar-types").RadarItem} RadarItem */
 /** @typedef {import("./radar-types").RadarState} RadarState */
@@ -39,11 +40,14 @@ export const NEEDS_SERVER = 'The reading radar needs the library server, which i
  *   config: import("./radar-types").RadarConfig, since: string, now: string, fetch: typeof fetch,
  *   library: import("./tools").LibraryBackend, hub?: any, state: RadarState, signal?: AbortSignal, budget?: number,
  *   keyed?: boolean, abstractFetch?: typeof fetch, sleep?: (ms: number) => Promise<void>,
+ *   judge?: (pool: RadarItem[], profile: { topics: string[], seeds: string[], rejected: string[] }) => Promise<{ off: Set<string>, error: string | null }>,
  * }} run `keyed`: the user has saved an OpenAlex key; "Might interest you" needs one, and is left out when it is false or absent.
  *   `sleep` stands in for the waits between arXiv API requests (tests).
  *   `abstractFetch` (abstractNet): papers that came without an abstract are looked up before the final ranking; absent,
  *   only the picked rows are, in OpenAlex, after it.
- * @returns {Promise<{ picked: RadarItem[], older: RadarItem[], olderNote: string | null, discover: RadarItem[], discoverNote: string | null, announced: string[], state: RadarState, failed: { source: string, error: string }[], sourcesAnswered: number, requests: number, threshold: import("./radar-types").RadarThreshold | null }>}
+ *   `judge` (radar-judge.js): the profile check; the New rows are picked from the best-ranked candidates it lets through,
+ *   and those it rejects are remembered as seen ("off") so they don't come back. Absent, the ranking alone picks.
+ * @returns {Promise<{ picked: RadarItem[], older: RadarItem[], olderNote: string | null, discover: RadarItem[], discoverNote: string | null, announced: string[], state: RadarState, failed: { source: string, error: string }[], sourcesAnswered: number, offProfile: number, judgeProblem: string | null, requests: number, threshold: import("./radar-types").RadarThreshold | null }>}
  *   `threshold`: a calibration this run made (the caller saves it on the radar); null when it made none.
  */
 export async function collectRadar(run) {
@@ -100,7 +104,20 @@ export async function collectRadar(run) {
   }
   let ranked = await score(fresh, scoring);
   if (seeds) ranked = await decideWhole(ranked, { library, seeds, threshold, seedTitle, baseline });
-  const top = pickTop(ranked, config.size.fresh);
+  let top = pickTop(ranked, config.size.fresh);
+  /** @type {RadarItem[]} */
+  let off = [];
+  let judgeProblem = /** @type {string | null} */ (null);
+  if (run.judge && top.length) {
+    const pool = pickTop(ranked, Math.max(JUDGE_POOL, config.size.fresh));
+    const seedTitles = [...(config.seeds?.mine ?? []).map((m) => m.title), ...(config.seeds?.papers ?? []).map((k) => seedTitle(`zotero/${k}`))].filter((t) => t && !t.startsWith('zotero/'));
+    const rejected = state.examples.negative.slice(-12).map((e) => e.text.split('. ')[0].slice(0, 200));
+    const judged = await run.judge(pool, { topics: config.profile.topics.map((t) => t.text), seeds: seedTitles, rejected });
+    judgeProblem = judged.error;
+    // Only what was read is decided: a rejected paper is left out, the rest keep their rank.
+    off = pool.slice(0, JUDGE_POOL).filter((it) => judged.off.has(it.id));
+    top = pool.filter((it) => !judged.off.has(it.id)).slice(0, config.size.fresh);
+  }
 
   const missing = run.abstractFetch ? [] : top.filter((it) => !it.abstract && it.doi);
   if (missing.length) {
@@ -143,12 +160,13 @@ export async function collectRadar(run) {
     const source = active.find((s) => s.id === r.id);
     if (source?.kind === 'feed' && r.cache && !r.error) next.feedCache[source.url] = r.cache;
   }
+  for (const it of off) for (const key of keysOf(it)) next.seen[key] = { at: run.now, verdict: 'off' };
   for (const it of [...top, ...older, ...discover]) {
     for (const key of keysOf(it)) next.seen[key] = { at: run.now, verdict: 'shown' };
     // What a click on this row needs later (radar-feedback.js): the text for the examples, the people and venue to learn.
     next.shown[it.id] = { keys: keysOf(it), title: it.title, text: `${it.title}. ${it.abstract}`.slice(0, SHOWN_TEXT), authors: it.authors, venue: it.venue, sources: it.sources, ...(it.keywords?.length ? { keywords: it.keywords } : {}) };
   }
-  return { picked: top, older, olderNote, discover, discoverNote, announced: state.phrases.announce, state: next, failed, sourcesAnswered: answered, requests: fetched.requests + olderRequests + discoverRequests, threshold: calibrated };
+  return { picked: top, older, olderNote, discover, discoverNote, announced: state.phrases.announce, state: next, failed, sourcesAnswered: answered, offProfile: off.length, judgeProblem, requests: fetched.requests + olderRequests + discoverRequests, threshold: calibrated };
 }
 
 /**

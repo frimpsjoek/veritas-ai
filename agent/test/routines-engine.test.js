@@ -429,7 +429,8 @@ test('a radar routine writes one "New" papers result in a new session, with a ne
   assert.equal(run.status, 'done');
   assert.equal(run.added, 2, 'study 1 is in the library');
   assert.match(run.summary, /Radar: 2 new papers from 1 source \(feed:https:\/\/broken\.example\/feed failed: HTTP 404\)/);
-  assert.equal(t.state.inputs.length, 0, 'no model call');
+  // The rows have no abstracts, so no why lines; the one model call is the profile check, which reads titles too.
+  assert.equal(t.state.inputs.length, 1, 'only the profile check');
 
   const summary = (await ai.conversations.list()).find((c) => c.id === run.session);
   assert.equal(summary.news.papers, 2);

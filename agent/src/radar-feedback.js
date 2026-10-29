@@ -304,7 +304,8 @@ export function mergeLearned(current, saved, blocked) {
  */
 export function applyFeedback({ state, profile, key, verdict, now }) {
   const current = currentVerdict(state, key);
-  if (current == null) throw new Error('That paper is not one this radar has shown.');
+  // A paper the profile check left out was never shown, so there is nothing to rate.
+  if (current == null || current === 'off') throw new Error('That paper is not one this radar has shown.');
   /** @type {Outcome} */
   const unchanged = { state, profile, changed: false, verdict: current };
   const done = (/** @type {{ state: RadarState, profile: RadarProfile }} */ r) => /** @type {Outcome} */ ({ ...r, changed: true, verdict: currentVerdict(r.state, key) });

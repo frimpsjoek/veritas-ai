@@ -163,3 +163,27 @@ test('Worth reading stops with the limit message as its note when OpenAlex refus
   assert.equal(out.picked.length, 3);
   assert.match(out.olderNote, /^Worth reading stopped: OpenAlex's free daily limit is used up/);
 });
+
+test('the profile check drops papers outside the field, fills New from the rest, and remembers the drops as seen', async () => {
+  const fetchFn = routedFetch({ [FEED]: res(200, feedWith(5)) });
+  let sent = null;
+  const judge = async (pool, prof) => { sent = { ids: pool.map((p) => p.doi), prof }; return { off: new Set(pool.filter((p) => p.doi === '10.9999/inv.2').map((p) => p.id)), error: null }; };
+  const out = await collectRadar({ config: config({ size: { fresh: 3, older: 0 } }), since: '2026-10-01', now: '2026-10-07T07:00:00.000Z', fetch: fetchFn, library: radarLibrary(), state: emptyState(), judge });
+  assert.equal(sent.ids.length, 5, 'the whole pool is read, not just the first three');
+  assert.ok(sent.prof.topics.length > 0);
+  assert.equal(out.picked.length, 3);
+  assert.ok(!out.picked.some((p) => p.doi === '10.9999/inv.2'));
+  assert.equal(out.offProfile, 1);
+  assert.equal(out.state.seen['doi:10.9999/inv.2'].verdict, 'off');
+  const again = await collectRadar({ config: config({ size: { fresh: 3, older: 0 } }), since: '2026-10-01', now: '2026-10-08T07:00:00.000Z', fetch: fetchFn, library: radarLibrary(), state: out.state, judge });
+  assert.ok(!again.picked.some((p) => p.doi === '10.9999/inv.2'), 'a dropped paper does not come back');
+});
+
+test('a failed profile check leaves the ranking alone and says why', async () => {
+  const fetchFn = routedFetch({ [FEED]: res(200, feedWith(4)) });
+  const judge = async () => ({ off: new Set(), error: 'offline' });
+  const out = await collectRadar({ config: config({ size: { fresh: 3, older: 0 } }), since: '2026-10-01', now: '2026-10-07T07:00:00.000Z', fetch: fetchFn, library: radarLibrary(), state: emptyState(), judge });
+  assert.equal(out.picked.length, 3);
+  assert.equal(out.offProfile, 0);
+  assert.equal(out.judgeProblem, 'offline');
+});

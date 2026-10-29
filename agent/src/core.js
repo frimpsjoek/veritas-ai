@@ -18,6 +18,7 @@ import { createRoutineStore } from './routine-store.js';
 import { createRadarStore, learningOf } from './radar-state.js';
 import { applyFeedback, forgetLearned, mergeLearned } from './radar-feedback.js';
 import { whyLines } from './radar-why.js';
+import { judgeFit } from './radar-judge.js';
 import { summaryLine, digestMarkdown, digestFile, sourceLabel } from './radar-digest.js';
 import { collectRadar, abstractNet } from './radar-run.js';
 import { createProjectStore } from './project-store.js';
@@ -1161,8 +1162,12 @@ export async function createLocalRuntime(deps) {
     const since = planSince(routine, clock());
     const now = new Date(clock()).toISOString();
     let out;
+    const noTools = { scope: { kind: /** @type {const} */ ('library') }, web: /** @type {const} */ ('off'), sources: { papers: false, notes: false, scholarly: false, web: false }, audit: `radar-why:${routine.id}`, none: true };
+    // The profile check reads the best-ranked candidates and drops those outside the user's field before New is picked.
+    const judge = (/** @type {import("./radar-types").RadarItem[]} */ pool, /** @type {{ topics: string[], seeds: string[], rejected: string[] }} */ profile) =>
+      judgeFit(pool, { ...profile, turn: (prompt, schema) => runner.structured('writer', prompt, schema, { ...noTools, audit: `radar-judge:${routine.id}` }, signal) });
     try {
-      out = await collectRadar({ config, since, now, fetch: net, library: deps.library, hub: deps.gateway.mcpServers, state: await radarStore.read(routine.id), signal, keyed: Boolean((await settingsStore.get()).openalex.apiKey?.trim()), abstractFetch: abstractNet(net) });
+      out = await collectRadar({ config, since, now, fetch: net, library: deps.library, hub: deps.gateway.mcpServers, state: await radarStore.read(routine.id), signal, keyed: Boolean((await settingsStore.get()).openalex.apiKey?.trim()), abstractFetch: abstractNet(net), judge });
     } catch (e) { return { status: /** @type {const} */ ('failed'), reason: `${errorText(e).replace(/\.$/, '')}.` }; }
     // A calibration the run made is kept on the radar, read fresh: the scheduler re-reads the record after the run too.
     if (out.threshold) {
@@ -1176,7 +1181,6 @@ export async function createLocalRuntime(deps) {
     }
 
     // One model call writes the "why read this" lines; without one the rows just have none.
-    const noTools = { scope: { kind: /** @type {const} */ ('library') }, web: /** @type {const} */ ('off'), sources: { papers: false, notes: false, scholarly: false, web: false }, audit: `radar-why:${routine.id}`, none: true };
     const why = await whyLines(out.picked, {
       topics: config.profile.topics.map((t) => t.text).slice(0, 12),
       turn: (prompt, schema) => runner.structured('writer', prompt, schema, noTools, signal),
@@ -1190,7 +1194,8 @@ export async function createLocalRuntime(deps) {
     const stepId = /** @type {import("./domain").StepId} */ (nextStepId(records));
     const resultId = /** @type {import("./domain").ResultId} */ (nextResultId(records));
     const ref = { id: resultId, version: 1 };
-    const change = `Radar: ${out.picked.length} new ${out.picked.length === 1 ? 'paper' : 'papers'} from ${out.sourcesAnswered} ${out.sourcesAnswered === 1 ? 'source' : 'sources'}${failures}`;
+    const screened = out.offProfile ? `; ${out.offProfile} outside your field left out` : out.judgeProblem ? `; profile check skipped (${out.judgeProblem})` : '';
+    const change = `Radar: ${out.picked.length} new ${out.picked.length === 1 ? 'paper' : 'papers'} from ${out.sourcesAnswered} ${out.sourcesAnswered === 1 ? 'source' : 'sources'}${screened}${failures}`;
     const taken = new Set();
     const rowsOf = (/** @type {import("./radar-types").RadarItem[]} */ items) => items.map((it, i) => {
       let id = rowIdFor(it, i);

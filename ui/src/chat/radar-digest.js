@@ -47,7 +47,7 @@ export class RadarDigest {
     try {
       const ai = await this.host.ai();
       const done = await ai.radar?.verdicts?.(this.routine);
-      for (const [key, verdict] of Object.entries(done ?? {})) if (!this.verdicts.has(key) && verdict !== 'shown') this.verdicts.set(key, verdict);
+      for (const [key, verdict] of Object.entries(done ?? {})) if (!this.verdicts.has(key) && verdict !== 'shown' && verdict !== 'off') this.verdicts.set(key, verdict);
       for (const key of this.boxes.keys()) this.paint(key);
     } catch (error) { this.host.logError(error); }
   }

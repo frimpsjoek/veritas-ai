@@ -100,7 +100,8 @@ export interface SeedScore { similarity: number; negative: number; seed_max?: nu
 export interface SeedProfile { topics: { text: string; weight: number }[]; authors: { name: string; count: number }[]; journals: { name: string; count: number }[] }
 
 /** `liked`: a thumbs-up, a positive example like `later` but nothing is saved. */
-export type Verdict = "shown" | "added" | "later" | "liked" | "dismissed";
+/** `off`: the profile check judged it outside the user's field; it was never shown. */
+export type Verdict = "shown" | "added" | "later" | "liked" | "dismissed" | "off";
 export interface Example { id: PaperId; text: string; at: string }
 /** `suggestRemove`: three dismissals in a row from this source (spec 012 section 7); the setup sheet shows it quietly. */
 export interface SourceStatus { at: string; items: number; error: string | null; quietRuns: number; suggestRemove?: boolean;
@@ -125,9 +126,9 @@ export type PhraseDelta =
   | { kind: "dropped"; topic: Weighted; blocked: boolean; announced: boolean };
 /** Exactly what one verdict changed, so `undo` can put it back. */
 export interface UndoRecord {
-  verdict: Exclude<Verdict, "shown">;
+  verdict: Exclude<Verdict, "shown" | "off">;
   /** The verdict this one replaced (re-applied when this one is undone). */
-  replaced: Exclude<Verdict, "shown"> | null;
+  replaced: Exclude<Verdict, "shown" | "off"> | null;
   seen: Record<string, Verdict | null>;
   pushed: { list: "positive" | "negative"; id: PaperId } | null;
   /** Examples the cap pushed out of the front of the list that was pushed to. */
