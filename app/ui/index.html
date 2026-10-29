@@ -61,7 +61,9 @@
 
   function offer(found) {
     const first = found[0];
-    $('status').textContent = `Found an existing Veritas index (${num(first.passages)} passages from ${num(first.notes)} notes). Use it?`;
+    // the chats an import brings: its own or, when it has none, those of the other index found with the most
+    const chats = first.brings?.chats ? `, ${num(first.brings.chats)} chat${first.brings.chats === 1 ? '' : 's'}` : '';
+    $('status').textContent = `Found an existing Veritas index (${num(first.passages)} passages from ${num(first.notes)} notes${chats}). Use it?`;
     $('detail').textContent = `${first.path}. It is copied, not changed; only notes that changed since are read again.`;
     $('offer').hidden = false;
     $('use').onclick = () => boot(first.path);
