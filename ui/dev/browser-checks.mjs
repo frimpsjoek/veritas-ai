@@ -190,6 +190,69 @@ export async function runBrowserChecks(browser, port, outDir) {
     check(`${tag} "Open in your browser" goes outside and the menu closes`, (await page.evaluate(() => window.__opened))[0]?.url === 'https://example.org/voles' && (await page.locator('.sb-link-menu').count()) === 0 && (await panel()).open === false);
     await page.click(noteLink, { modifiers: ['Meta'] });
     check(`${tag} a ⌘-click on a link goes outside`, (await page.evaluate(() => window.__opened)).length === 2 && (await panel()).open === false);
+
+    // Home's radar list (2026-10-29, the user: "Back does not work at all"): a paper's title opens the panel on the
+    // paper's abstract-only page, ← on that first page closes the panel, and nothing opens it again afterwards (the
+    // "viewed" call and the count refresh that follow the click)
+    await page.evaluate(() => { location.hash = '#/home'; });
+    await page.waitForSelector('a.sbw-paper-title[href="https://doi.org/10.1/vole"]');
+    await page.click('a.sbw-paper-title[href="https://doi.org/10.1/vole"]');
+    await page.waitForSelector('.sbw-browser-article .sbw-reader-title');
+    const fromHome = await panel();
+    await page.click('.sbw-browser-tool[aria-label="Back"]');
+    await page.waitForTimeout(600);
+    const afterBack = await page.evaluate(() => ({ open: !document.querySelector('.sbw-browser').hidden, hash: location.hash, home: Boolean(document.querySelector('.sbw-home')) }));
+    check(`${tag} Home radar paper → panel → ← closes it and it stays closed on Home`, fromHome.open && fromHome.back === false && !afterBack.open && afterBack.hash === '#/home' && afterBack.home, { fromHome, afterBack });
+    // and the same paper a second time (already "viewed"), then Escape-free: ← still closes
+    await page.click('a.sbw-paper-title[href="https://doi.org/10.1/vole"]');
+    await page.waitForSelector('.sbw-browser-article .sbw-reader-title');
+    await page.click('.sbw-browser-tool[aria-label="Back"]');
+    await page.waitForTimeout(300);
+    check(`${tag} opening the same radar paper again, ← closes it again`, (await panel()).open === false);
+
+    // the landing page of a closed paper (2026-10-29): journal and date, the abstract as paragraphs under its label
+    // (sub, italic), no PDF, the publisher's page and the DOI open outside, a citation to copy; the figure only when
+    // the figure finder has one (10.1/vole has, 10.1/stoat has not)
+    await open('https://doi.org/10.1/stoat');
+    await page.waitForSelector('.sbw-browser-article .sbw-reader-foot');
+    await page.waitForTimeout(200);
+    const landing = () => page.evaluate(() => {
+      const article = document.querySelector('.sbw-browser-article');
+      return {
+        meta: article.querySelector('.sbw-reader-venue')?.textContent,
+        label: article.querySelector('.sbw-note-body .sbw-reader-label')?.textContent,
+        paragraphs: article.querySelectorAll('.sbw-note-body p').length,
+        abstractWord: (article.querySelector('.sbw-note-body').textContent.match(/Abstract/g) ?? []).length,
+        sub: article.querySelectorAll('.sbw-note-body sub').length,
+        links: [...article.querySelectorAll('.sbw-reader-links button')].map((n) => n.textContent),
+        icons: article.querySelectorAll('.sbw-reader-links .sb-p-icon').length,
+        doi: article.querySelector('.sbw-reader-doi-line a')?.getAttribute('href'),
+        access: article.querySelector('.sbw-reader-access')?.textContent,
+        figure: Boolean(article.querySelector('.sbw-reader-figure:not([hidden]) img')),
+        mode: !document.querySelector('.sbw-browser-text').hidden,
+        fonts: new Set(['.sbw-reader-title', '.sbw-reader-authors', '.sbw-note-body p', '.sbw-reader-foot'].map((sel) => getComputedStyle(article.querySelector(sel)).fontFamily)).size,
+        sideways: document.scrollingElement.scrollWidth > innerWidth,
+      };
+    });
+    const stoat = await landing();
+    check(`${tag} a closed paper's page: journal · date, paragraphs under one Abstract label, DOI and access note, one font family`, stoat.meta === 'Journal of Mustelid Studies · 28 Oct 2026' && stoat.label === 'Abstract' && stoat.paragraphs === 2 && stoat.abstractWord === 1 && stoat.doi === 'https://doi.org/10.1/stoat' && /^Only the abstract is open here\./.test(stoat.access ?? '') && stoat.fonts === 1 && !stoat.sideways, stoat);
+    check(`${tag} its buttons: Publisher's page (outside icon) and Copy citation, no PDF, no figure, no "Original page"`, JSON.stringify(stoat.links) === `["Publisher's page","Copy citation"]` && stoat.icons === 2 && !stoat.figure && !stoat.mode, stoat);
+    await page.screenshot({ path: join(outDir, `browser-landing-${width}.png`) });
+    await page.evaluate(() => { window.__opened = []; });
+    await page.click('.sbw-reader-links button:first-child');
+    await page.click('.sbw-reader-doi-line a');
+    await page.click('.sbw-reader-access a');
+    const outs = await page.evaluate(() => window.__opened);
+    check(`${tag} the publisher's page, the DOI and the access note all open doi.org outside, the panel stays`, outs.length === 3 && outs.every((o) => o.outside && o.url === 'https://doi.org/10.1/stoat') && (await panel()).open && (await panel()).address === 'Abstract only · doi.org/10.1/stoat', { outs, p: await panel() });
+    await open('https://doi.org/10.1/vole');
+    await page.waitForSelector('.sbw-browser-article .sbw-reader-figure:not([hidden]) img', { timeout: 5000 }).catch(() => {});
+    const vole = await landing();
+    check(`${tag} a paper with a graphical abstract shows it; sub and italic stay in the abstract`, vole.figure && vole.sub === 1 && vole.meta === 'Journal of Vole Ecology · 28 Oct 2026 · 12 (3), 101-118', vole);
+    // ← from a paper's page reached from another page goes back to it
+    await page.click('.sbw-browser-tool[aria-label="Back"]');
+    await page.waitForFunction(() => document.querySelector('.sbw-browser-title')?.textContent === 'Stoat coat colour across a snow gradient');
+    check(`${tag} ← from the second paper returns to the first`, (await panel()).open);
+    await page.click('.sbw-browser-tool[aria-label="Close"]');
     check(`${tag} no page errors`, errors.length === 0, errors);
     await page.close();
   }

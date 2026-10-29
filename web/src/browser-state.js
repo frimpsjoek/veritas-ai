@@ -79,32 +79,45 @@ export function sourceOf(answer) {
  *  an abstract as plain text under a small "Abstract" label, and math only where the server said the page has it
  *  (arXiv, LaTeXML, MathML), so "$5 and $10" on an ordinary page stays money. A paper (arXiv, or a DOI's abstract)
  *  adds a quiet line of id and dates, small subject chips and its links (PDF, Full text) as buttons in the header.
+ *  A DOI's abstract-only answer (source openalex, 2026-10-29) is the paper's landing page: journal and date as the
+ *  quiet line, the abstract's paragraphs (sub, sup, italic) as html, the DOI and a citation to copy; its publisher's
+ *  page opens outside (`outside`), since publishers refuse loads in the panel (Cloudflare).
  *  @param {any} answer */
 export function readerPlan(answer) {
   const paper = answer?.paper ?? {};
+  const landing = answer?.source === 'openalex';
   /** @type {{ label: string, code: string, primary: boolean }[]} */
   const subjects = (Array.isArray(paper.subjects) ? paper.subjects : [])
     .map((/** @type {any} */ s) => ({ label: String(s?.name || s?.code || ''), code: String(s?.code ?? ''), primary: s?.primary === true }))
     .filter((s) => s.label);
-  const meta = [
-    paper.arxiv ? `arXiv:${paper.arxiv}${paper.version ?? ''}` : '',
-    paper.submitted ? `Submitted ${paper.submitted}` : '',
-    paper.revised ? `revised ${paper.revised}` : '',
-  ].filter(Boolean).join(' · ');
-  /** @type {{ label: string, url: string, kind: string }[]} */
+  const numbers = [paper.volume && paper.issue ? `${paper.volume} (${paper.issue})` : paper.volume ?? '', paper.pages ?? ''].filter(Boolean).join(', ');
+  const meta = (landing
+    ? [paper.journal ?? '', paper.published ?? '', numbers]
+    : [
+      paper.arxiv ? `arXiv:${paper.arxiv}${paper.version ?? ''}` : '',
+      paper.submitted ? `Submitted ${paper.submitted}` : '',
+      paper.revised ? `revised ${paper.revised}` : '',
+    ]).filter(Boolean).map(String).join(' · ');
+  /** @type {{ label: string, url: string, kind: string, outside: boolean }[]} */
   const links = (Array.isArray(answer?.links) ? answer.links : [])
     .filter((/** @type {any} */ l) => l?.label && /^https?:\/\//i.test(String(l?.url ?? '')))
-    .map((/** @type {any} */ l) => ({ label: String(l.label), url: String(l.url), kind: String(l.kind ?? '') }));
+    .map((/** @type {any} */ l) => ({ label: String(l.label), url: String(l.url), kind: String(l.kind ?? ''), outside: l.kind === 'outside' }));
+  const doi = landing ? String(paper.doi ?? '') : '';
   return {
     subjects,
     meta,
     links,
-    paper: answer?.source === 'arxiv' || answer?.source === 'openalex',
+    paper: answer?.source === 'arxiv' || landing,
+    landing,
     articleClass: 'sbw-browser-article sbw-prose',
     title: String(answer?.title ?? ''),
     byline: String(answer?.byline ?? ''),
     abstract: String(answer?.abstract ?? ''),
+    abstractHtml: landing ? String(answer?.abstract_html ?? '') : '',
     abstractLabel: 'Abstract',
+    doi,
+    doiUrl: doi ? `https://doi.org/${doi}` : '',
+    citation: landing ? String(paper.citation ?? '') : '',
     math: answer?.math === true,
     html: String(answer?.html ?? ''),
   };

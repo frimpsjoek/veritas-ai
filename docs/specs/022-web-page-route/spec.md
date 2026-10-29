@@ -180,3 +180,62 @@ Evidence (2026-10-29):
 - Open: in-page anchors of the full text (`#bib.bib7`, `#S1`) reload the page in the panel instead of scrolling (the
   reader drops ids); `Read Later`-like lines that appear once and site-specific promos ("Click to tell Google …")
   stay; the user's own look at the panel.
+
+## 2026-10-29 (later): a closed paper's landing page, the publisher outside, ← from Home
+
+The user, with a screenshot of `doi.org/10.1021/acs.jctc.6c01423` (JCTC, closed) in the panel: header "Abstract only",
+title, authors, then the abstract as one plain block starting with a literal "Abstract", then "Only the abstract is
+open. Open the publisher's page."; "Back does not work at all"; the publisher link does not work well (ACS, Elsevier
+and Wiley answer the panel with a Cloudflare check); the page is bland.
+
+What changed:
+
+- **← from Home works (no code change needed).** The screenshot's build predates `3a41cff` (← on the first page closed
+  nothing and was greyed out until then). Reproduced on this branch in the harness for the exact flow: Home's radar
+  list → a paper's title (`host.openLink` → `browserHook`, the abstract-only answer) → ← closes the panel, the hash
+  stays `#/home`, and nothing opens it again (the "viewed" call and count refresh after the click do not repaint or
+  re-open); the same paper again → ← closes again; a second paper opened from the first → ← returns to the first. New
+  checks in `ui/dev/browser-checks.mjs`.
+- **A closed paper is a landing page** (`web_page._landing`, `crossref`, `jats_html`, `journal_of`, `published_of`,
+  `citation_of`). Asked only when there is no library or open-access PDF: OpenAlex (now also `publication_date`,
+  `biblio`, `open_access`) and the Crossref record (kept a day in `data/web-pages/crossref/`, like OpenAlex). The answer
+  keeps the reader shape and adds `abstract_html` (Crossref's JATS as `<p>` paragraphs, `<h3>` for a structured
+  abstract's section titles, lists; `sub`, `sup`, italic and bold kept; every other tag dropped, no attributes; the
+  `<jats:title>Abstract</jats:title>` and a leading capitalised "Abstract" word gone, "Abstract reasoning …" kept;
+  OpenAlex's words as one paragraph when Crossref has none) and `paper: {doi, journal, published, volume, issue,
+  pages, citation}`: journal on one line (Crossref's "Journal of Chemical Theory\nand Computation" collapsed),
+  "28 Oct 2026". `abstract` stays plain text, `html` is empty (the client draws the access note).
+- **The publisher's page opens outside.** Links carry `kind: "outside"` and point at `https://doi.org/<doi>` (not
+  OpenAlex's landing URL); the header button, the DOI line and the access note all call
+  `host.openLink(url, {outside: true})` (system browser), with Lucide's external-link line icon. A free copy OpenAlex
+  knows (`open_access.oa_url`) is a "PDF" / "Free copy" button that opens in the panel; for this DOI OpenAlex says
+  closed, so there is none. The bar's "Original page" is hidden on a landing page (the button and ↗ already go there).
+- **Panel** (`readerPlan` `landing`, `abstractHtml`, `doi`, `citation`; `browser-panel.js` `landingFoot`, `figureOf`,
+  `copyText`): the same order and font family as the arXiv view: title, authors, a quiet line "Journal · date ·
+  volume (issue), pages", buttons (Publisher's page ↗, Copy citation with a quote icon, copies through the clipboard
+  with a notice), "Abstract" label over the paragraphs, then a rule, "DOI 10.x/…" and "Only the abstract is open
+  here. Read it on the publisher's page ↗". A graphical abstract only when Home's figure finder (`/paper-figure`,
+  `paper_figures.py`: the publisher page's preview image only when that page answers, or a figure at a known address)
+  has one; the image stays hidden until it loads and goes on an error, so nothing is faked and the page stands
+  without one (this DOI has none: ACS answers 403/410).
+
+Evidence (2026-10-29):
+
+- Server tests: `tests/test_web_page.py` (closed paper → `kind: outside` at doi.org, `abstract_html`; the JCTC
+  OpenAlex + Crossref answers stored as `fixtures/web_page/jctc-6c01423.json` → journal, date, one paragraph, no
+  "jats"/"Abstract", no PDF, the citation, the publisher never asked, both answers cached; without Crossref the
+  OpenAlex words lose their "Abstract"; eight JATS cases (sub/sup/italic, structured sections, an `onclick`, "Abstract
+  reasoning", MathML text, lists, escaped `<script>`, empty); volume/pages/free PDF; Crossref fallbacks for journal and
+  date). 59 passed with `test_web_arxiv.py`.
+- Web unit: `readerPlan` landing (meta line, html abstract, DOI, citation, only the publisher outside, arXiv
+  unchanged). Harness (`SB_ONLY=browser`, system Chrome): 102 browser checks pass at 1280/700/360 px, including the
+  Home → ← flow above and the landing page (journal · date, paragraphs under one label, sub and italic kept, the three
+  outside links all `{outside: true}` to doi.org with the panel still open, no PDF, no "Original page", one computed
+  font family for title, authors, abstract and footer, the figure only for the fixture that has one, no sideways
+  scroll). Screenshots (gitignored): `ui/dev/out/browser-landing-{1280,700,360}.png`.
+- Live (this Mac, scratch data folder, real network): `web_page.page("https://doi.org/10.1021/acs.jctc.6c01423")` in
+  0.7 s → `source: openalex`, journal "Journal of Chemical Theory and Computation", "28 Oct 2026", three authors, one
+  abstract paragraph starting "We develop", links = [Publisher's page (outside)]. That answer drawn in the harness:
+  `evidence/jctc-landing-1280-light.png`, `evidence/jctc-landing-1280-dark.png`, `evidence/jctc-landing-390-light.png`.
+- Open: the user's own look in the desktop app (rebuilt from this branch); no publisher page is fetched just for its
+  og:image (it would add seconds and is refused by ACS/Elsevier/Wiley anyway).

@@ -51,7 +51,7 @@ def html_page(url, body, headers=None, status=200):
 
 def openalex_url(doi):
     return (f"https://api.openalex.org/works/doi:{doi}?select=title,display_name,authorships,abstract_inverted_index,"
-            "best_oa_location,locations,primary_location")
+            "best_oa_location,locations,primary_location,publication_date,publication_year,biblio,open_access")
 
 
 # --- G1 ordinary pages ---------------------------------------------------------------------------------------------
@@ -176,10 +176,88 @@ def test_a_closed_paper_shows_its_abstract_and_the_publisher_link(web):
     pages[openalex_url(DOI)] = Response("x", 200, {}, json.dumps(WORK_CLOSED).encode())
     answer = web_page.page(f"https://doi.org/{DOI}", get=get)
     assert answer["mode"] == "reader" and answer["source"] == "openalex"
-    # the same paper shape as an arXiv answer: the abstract under its label, the way out as a button in the header
-    assert answer["abstract"] == "Spins flip here." and "Only the abstract is open." in answer["html"]
-    assert answer["links"] == [{"label": "Publisher's page", "url": "https://pubs.acs.org/doi/10.1021/acsnano.6c11666", "kind": "page"}]
+    # the same paper shape as an arXiv answer: the abstract under its label, the way out as a header button that opens
+    # outside (publishers refuse in-app loads), at doi.org whatever OpenAlex's landing page is
+    assert answer["abstract"] == "Spins flip here." and answer["abstract_html"] == "<p>Spins flip here.</p>"
+    assert answer["html"] == ""
+    assert answer["links"] == [{"label": "Publisher's page", "url": f"https://doi.org/{DOI}", "kind": "outside"}]
     assert answer["byline"] == "A. Author, B. Author"
+    assert answer["paper"]["doi"] == DOI
+
+
+JCTC = json.loads((Path(__file__).parent / "fixtures" / "web_page" / "jctc-6c01423.json").read_text())
+JCTC_DOI = "10.1021/acs.jctc.6c01423"
+
+
+def test_a_closed_paper_is_a_landing_page_from_openalex_and_crossref(web):
+    """The user's JCTC paper (OpenAlex and Crossref answers of 2026-10-29): journal on one line and the date, authors,
+    the abstract's paragraph without its JATS "Abstract" title, the DOI, no PDF (closed), a citation to copy."""
+    pages, calls, get = web
+    pages[openalex_url(JCTC_DOI)] = Response("x", 200, {}, json.dumps(JCTC["openalex"]).encode())
+    pages[f"https://api.crossref.org/works/{JCTC_DOI}"] = Response("x", 200, {}, json.dumps(JCTC["crossref"]).encode())
+    answer = web_page.page(f"https://doi.org/{JCTC_DOI}", get=get)
+    assert answer["title"] == "Multipolar Polarizabilities in Materials: Ab Initio Calculations with Wannier Functions"
+    assert answer["byline"] == "Diem Thi-Xuan Dang, Dai-Nam Le, Lilia M. Woods"
+    paper = answer["paper"]
+    assert paper["journal"] == "Journal of Chemical Theory and Computation" and paper["published"] == "28 Oct 2026"
+    assert paper["doi"] == JCTC_DOI and "volume" not in paper and "pages" not in paper
+    text = answer["abstract_html"]
+    assert text.startswith("<p>We develop a first-principles approach") and text.count("<p>") == 1
+    assert "jats" not in text and "Abstract" not in text and "  " not in text
+    assert answer["abstract"].startswith("We develop") and "<" not in answer["abstract"]
+    assert [link["label"] for link in answer["links"]] == ["Publisher's page"]
+    assert paper["citation"] == ("Diem Thi-Xuan Dang, Dai-Nam Le, Lilia M. Woods. Multipolar Polarizabilities in "
+                                 "Materials: Ab Initio Calculations with Wannier Functions. Journal of Chemical Theory "
+                                 f"and Computation 2026. https://doi.org/{JCTC_DOI}")
+    assert not any(c.startswith("https://doi.org/") or "pubs.acs.org" in c for c in calls), "the publisher is never asked"
+    n = len(calls)
+    web_page.page(f"https://doi.org/{JCTC_DOI}", get=get)
+    assert len(calls) == n, "both answers are kept"
+
+
+def test_without_crossref_the_openalex_words_lose_their_leading_abstract(web):
+    pages, _, get = web
+    pages[openalex_url(JCTC_DOI)] = Response("x", 200, {}, json.dumps(JCTC["openalex"]).encode())
+    answer = web_page.page(f"https://doi.org/{JCTC_DOI}", get=get)  # Crossref unreachable
+    assert answer["abstract_html"].startswith("<p>We develop a first-principles") and answer["abstract"].startswith("We develop")
+    assert answer["paper"]["journal"] == "Journal of Chemical Theory and Computation"
+
+
+@pytest.mark.parametrize("jats, expected", [
+    ("<jats:title>Abstract</jats:title><jats:p>CO<jats:sub>2</jats:sub> on Cu<jats:sup>+</jats:sup> is "
+     "<jats:italic>fast</jats:italic>.</jats:p>", "<p>CO<sub>2</sub> on Cu<sup>+</sup> is <i>fast</i>.</p>"),
+    ("<jats:sec><jats:title>Background</jats:title><jats:p>One.</jats:p></jats:sec>"
+     "<jats:sec><jats:title>Results:</jats:title><jats:p>Two\n   lines &amp; more.</jats:p></jats:sec>",
+     "<h3>Background</h3><p>One.</p><h3>Results:</h3><p>Two lines &amp; more.</p>"),
+    ("Abstract We study <b onclick='x()'>bold</b> things.", "<p>We study <b>bold</b> things.</p>"),
+    ("Abstract reasoning is hard.", "<p>Abstract reasoning is hard.</p>"),
+    ("<p>First.</p><p>Second <jats:inline-formula><mml:math><mml:mi>x</mml:mi></mml:math></jats:inline-formula>.</p>",
+     "<p>First.</p><p>Second x.</p>"),
+    ("<jats:list><jats:list-item><jats:p>a</jats:p></jats:list-item><jats:list-item>b</jats:list-item></jats:list>",
+     "<ul><li>a</li><li>b</li></ul>"),
+    ("<jats:p>&lt;script&gt;alert(1)&lt;/script&gt;</jats:p>", "<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>"),
+    ("", ""),
+])
+def test_jats_abstracts_become_clean_paragraphs(jats, expected):
+    assert web_page.jats_html(jats) == expected
+
+
+def test_a_paper_with_volume_pages_and_a_free_copy():
+    work = {**WORK_CLOSED, "publication_date": "2026-03-05", "publication_year": 2026,
+            "biblio": {"volume": "12", "issue": "3", "first_page": "101", "last_page": "118"},
+            "open_access": {"is_oa": True, "oa_url": "https://repo.example/paper.pdf"},
+            "primary_location": {"source": {"display_name": "ACS Nano"}}}
+    answer = web_page._landing("u", DOI, work, None, "<p>Text.</p>")
+    assert answer["paper"]["published"] == "5 Mar 2026" and answer["paper"]["pages"] == "101-118"
+    assert answer["paper"]["citation"] == f"A. Author, B. Author. {WORK_CLOSED['title']}. ACS Nano 2026, 12 (3), 101-118. https://doi.org/{DOI}"
+    assert answer["links"][1] == {"label": "PDF", "url": "https://repo.example/paper.pdf", "kind": "pdf"}
+
+
+def test_journal_and_date_fall_back_to_crossref():
+    record = {"container-title": ["Journal of Chemical Theory\nand Computation"], "published": {"date-parts": [[2026, 10]]}}
+    assert web_page.journal_of({}, record) == "Journal of Chemical Theory and Computation"
+    assert web_page.published_of({}, record) == "Oct 2026"
+    assert web_page.published_of({"publication_year": 2025}, None) == "2025"
 
 
 def test_openalex_away_falls_back_to_the_publisher(web):
