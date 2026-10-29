@@ -100,11 +100,17 @@ export function notesFor(text, version) {
   return lines.slice(start + 1, end < 0 ? undefined : end).join('\n').trim();
 }
 
+/** Today's date where the release is cut (toISOString would give UTC's, a day ahead in the evening). */
+function today() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 /** Every file that changes for `version`: [{ path, before, after }], nothing written. A missing optional file is
  * skipped; CHANGELOG.md is created when the repo has none.
  * @param {string} root @param {string} version
  * @param {{ date?: string, changes?: string[] }} [opts] */
-export function planRelease(root, version, { date = new Date().toISOString().slice(0, 10), changes = [] } = {}) {
+export function planRelease(root, version, { date = today(), changes = [] } = {}) {
   if (!semver(version)) throw new Error(`version must look like 1.2.3, not ${version}`);
   /** @type {{ path: string, before: string, after: string }[]} */
   const edits = [];
