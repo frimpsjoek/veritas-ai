@@ -44,6 +44,68 @@ passes. Pushes, Homebrew installs and tool installs (Rust, PyInstaller) are gate
 4. `docs/guide/updating.md` + README: how each install updates (brew, app, plugins).
 - [ ] Done when a dry run of `tools/release.mjs` on a scratch branch produces the right diffs and `check.sh` is green.
 
+### TG3 evidence (2026-10-28, branch `ai/024-g4-updates`)
+
+What exists now:
+- `.github/workflows/release.yml` (tag `v*`): `node tools/release.mjs verify <v>` (every part says the tag's version),
+  `./check.sh`, then the GitHub Release with `veritas-zotero-<v>.xpi`, `update.json` and `veritas-obsidian-<v>.zip`
+  (notes = the CHANGELOG section + install/update lines); job `tap` computes the tag tarball's sha256 and commits
+  `node tools/release.mjs formula <v> <sha256>` as `Formula/veritas.rb` to `frimpsjoek/homebrew-veritas` with
+  `HOMEBREW_TAP_TOKEN`.
+- `tools/release.mjs <v> [--dry-run]`, `verify`, `notes`, `formula`; `tools/release.test.mjs`; `CHANGELOG.md` (0.53.0,
+  0.54.0 from the release notes); formula header + caveat; `docs/guide/updating.md`; README "Updating"; docs/README row.
+
+Checks run:
+- `node --test tools/*.test.mjs`: 27 tests, 27 pass (14 boundaries + 13 release: JSON/lock rewriting, formula url,
+  sha256 and revision, CHANGELOG insert and notes, optional `tauri.conf.json` and `obsidian/versions.json`, verify,
+  and the real script in a temp git repo: --dry-run writes nothing, a release commits + tags + prints the push, refuses
+  a dirty tree, an older version and an existing tag).
+- `./check.sh` in this worktree before the changes: all parts passed (server 350 passed, 3 skipped).
+- `node tools/release.mjs 0.55.0 --dry-run` in this worktree: exit 0, 15 files would change (package.json +
+  package-lock.json of agent, ui, web, obsidian, zotero; both manifests; formula url v0.54.0 → v0.55.0 and `revision 2`
+  dropped; README plugin links 0.53.0 → 0.55.0; CHANGELOG `## 0.55.0 (2026-10-28)` with the commit subjects since
+  v0.54.0); `git status` clean and no tag afterwards. No `tauri.conf.json` or `versions.json` yet, so skipped.
+- Real run on a scratch clone (`git clone` into the scratchpad, branch `scratch/release-0.55.0`, no remote, so the
+  shared repo got no tag): commit "Release 0.55.0" (15 files, +30 −9), tag v0.55.0, printed
+  `git push origin scratch/release-0.55.0 v0.55.0`; `verify 0.55.0` ok; `./check.sh` on the bumped clone:
+  all parts passed (tools 27, agent 808, ui 290, web 62, obsidian 27, zotero 12, server 350 passed + 3 skipped);
+  its `zotero/dist/update.json` says 0.55.0 and links `releases/download/v0.55.0/veritas-zotero-0.55.0.xpi`, and the
+  bumped package-lock files pass `npm ci`.
+- The release-files step run locally (v0.53.0 build): xpi, update.json, Obsidian zip with `veritas/{main.js,
+  manifest.json,styles.css}` (same layout as the v0.54.0 asset), notes.md.
+- `curl …/archive/refs/tags/v0.54.0.tar.gz | shasum -a 256` = the sha256 in the formula and the tap (b4d5518e…), so the
+  workflow's way of computing it matches what Homebrew checks.
+- Zotero: `manifest.json` `update_url` = `releases/latest/download/update.json`; `build.sh` writes `update_link` =
+  `releases/download/v<v>/veritas-zotero-<v>.xpi` from the manifest version. The workflow uploads exactly that name,
+  marks the release `--latest` and greps update.json for the link. Found: v0.54.0's update.json points at the v0.53.0
+  release (manifest was left at 0.53.0); lockstep versions + `verify` stop that drift.
+- brew upgrade path, from the formula and Homebrew 4.6.10's source (no brew run): `brew upgrade` runs `post_install`
+  for the new keg (`formula_installer.rb` finish), with network allowed for third-party taps
+  (`DEFAULT_NETWORK_ACCESS_ALLOWED = true`); `post_install` reuses `var/veritas/venv` (`uv venv --allow-existing`,
+  then `uv pip install -r` the new requirements) and reinstalls the web app into `var/veritas/web` by rename;
+  `var/veritas` is outside the keg, so data stays. `upgrade.rb` does not restart services (Homebrew's own caveat says
+  "To restart … after an upgrade: brew services restart"), and it cleans the old keg, which the running server's cwd
+  and agentd still use, so the formula caveat and the guide now say `brew services restart veritas`.
+
+Cannot be checked before a push and tag (user gates):
+- release.yml itself (no actionlint/shellcheck on this Mac; YAML parsed, steps simulated locally): it first runs on the
+  next pushed tag. The tap job needs the secret. A tag whose versions were not bumped fails at `verify`.
+- `brew upgrade veritas` live from 0.54.0_2 to the next version. Check then: `brew upgrade veritas` prints the new
+  caveat; `ls $(brew --prefix)/var/veritas` keeps data/, models/, venv/; `var/veritas/web/index.html` is new;
+  `brew services restart veritas` → `veritas status` answers; a Python patch upgrade followed by
+  `brew postinstall veritas` still starts.
+- Zotero updating in place from 0.53.0 to the next release through `update.json` (needs a published release).
+
+One-time steps for the user:
+1. Fine-grained personal access token: only `frimpsjoek/homebrew-veritas`, Contents read and write; set an expiry.
+2. In `frimpsjoek/veritas-ai` Settings > Secrets and variables > Actions: secret `HOMEBREW_TAP_TOKEN` = that token.
+3. To release: `node tools/release.mjs <v> --dry-run`, `node tools/release.mjs <v>`, then the printed
+   `git push origin main v<v>`.
+
+Coordination with TG2: `release-app.yml` should add its installers to the same tag's release (`gh release upload`); this
+workflow adds its files if that release already exists. `tools/release.mjs` bumps `app/src-tauri/tauri.conf.json` when
+present (tested with a fixture).
+
 ## TG4: deferred review minors (from the SDD ledger)
 - Keychain write passes the key on argv (`server/zotero_web.py`): use `security -i` on stdin (the file says it does; check).
 - `add_account` accepts a `user_id` already listed; Keychain failure → 500 not 400.
