@@ -1313,7 +1313,11 @@ export async function createLocalRuntime(deps) {
       const slot = dueSlot(fields.schedule, at.getTime());
       const startOfToday = new Date(at.getFullYear(), at.getMonth(), at.getDate()).getTime();
       const lastSlot = slot != null && slot < startOfToday ? new Date(slot).toISOString() : null;
-      return routineStore.write({ id: ulid(), ...fields, created: now, updated: now, lastSlot, lastDone: null, lastRun: null, notify: false });
+      const routine = await routineStore.write({ id: ulid(), ...fields, created: now, updated: now, lastSlot, lastDone: null, lastRun: null, notify: false });
+      // A new radar is due at once (routine-scheduler dueNow): tick now rather than up to a minute later. The tick keeps
+      // every guard (grace, owner, one run at a time) and logs its own failures, so nothing waits on it here.
+      if (routine.kind === 'radar') void routineScheduler.tick();
+      return routine;
     },
     update: (id, patch) => radarSerial(async () => {
       const r = await routineOrThrow(id);
