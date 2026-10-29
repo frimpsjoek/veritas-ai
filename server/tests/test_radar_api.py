@@ -303,3 +303,36 @@ def test_calibration_with_the_field_sets_baselines_and_keeps_its_closest_tenth(s
     a = result["abstract"]
     assert "field_cut" in a and a["threshold"] >= a["field_cut"]
     assert result["field"]["abstracts"] == 20
+
+
+def _big_collection(searcher, n=709):
+    """`n` papers in collection BIG (under PARENT, like a subcollection), each a little newer than the last."""
+    start = 1_000_000.0
+    for i in range(n):
+        path, meta = f"zotero/BIG{i:04d}", json.dumps({"collection_keys": ["BIG"]})
+        searcher.db.execute("INSERT INTO notes (path, title, folder, source, tags, mtime, size, frontmatter, meta) "
+                            "VALUES (?, ?, 'zotero', 'zotero', '', ?, 1, '', ?)", (path, f"Paper {i}", start + i, meta))
+        searcher.db.execute("INSERT INTO vecs (id, path, vec) VALUES (?, ?, ?)",
+                            (100 + i, path, searcher.embed([f"paper number {i} topic{i}"])[0].astype(np.float16).tobytes()))
+    searcher.db.execute("INSERT INTO collections VALUES ('BIG', 'Big', 'PARENT')")
+    searcher.db.execute("INSERT OR REPLACE INTO meta VALUES ('indexed_at', ?)", (str(time.time() + 1),))
+    searcher.db.commit()
+
+
+def test_seeds_over_the_cap_keep_the_hand_picked_ones_and_the_newest_of_the_collections(searcher):
+    _big_collection(searcher)
+    seeds = {"keys": ["AAA", "CCC"], "collections": ["PARENT"], "texts": [{"title": "My paper", "text": "neural network potentials"}]}
+    matrix, labels, total = radar_api.seed_matrix(searcher, seeds, threading.Lock())
+    assert len(labels) == radar_api.MAX_SEEDS == len(matrix) and total == 709 + 3 + 1  # BIG, AAA, BBB, CCC, the text
+    assert {"zotero/AAA", "zotero/CCC", "text:My paper"} <= set(labels), "what the user picked by hand is always kept"
+    from_collections = [label for label in labels if label.startswith("zotero/BIG")]
+    assert from_collections[0] == "zotero/BIG0708" and "zotero/BIG0000" not in labels, "newest first"
+    assert radar_api.seed_matrix(searcher, seeds, threading.Lock())[1] == labels, "the same seeds every run"
+
+
+def test_a_radar_whose_collections_hold_more_than_the_cap_still_scores(api, searcher):
+    _big_collection(searcher)
+    seeds = {"keys": ["AAA"], "collections": ["PARENT"], "texts": []}
+    status, got = api("POST", "/radar/score", {"scope": {"collections": None}, "seeds": seeds, "items": [{"id": "x", "text": "molecule"}]})
+    assert status == 200 and "seed_best" in got["scores"]["x"]
+    assert got["seeds"] == {"used": radar_api.MAX_SEEDS, "of": 709 + 2}  # BIG, AAA, BBB
