@@ -25,16 +25,24 @@ if [ -n "$VERITAS_BROWSER" ]; then
 fi
 
 step "obsidian: typecheck + tests + build"
-(cd obsidian && npm ci --silent && npx tsc -p . && npm test && node esbuild.config.mjs)
-# styles.css is generated from ui's CSS but committed (Obsidian loads it as is): the committed copy must be current.
-if git rev-parse --git-dir >/dev/null 2>&1 && ! git diff --quiet -- obsidian/styles.css; then
-  echo "check.sh: obsidian/styles.css is out of date; commit the rebuilt file" >&2
+# styles.css is generated from ui's CSS but committed (Obsidian loads it as is): build it to a temp file and
+# compare, so the check never rewrites the tracked copy.
+styles=$(mktemp)
+(cd obsidian && npm ci --silent && npx tsc -p . && npm test && STYLES_OUT="$styles" node esbuild.config.mjs)
+if ! cmp -s "$styles" obsidian/styles.css; then
+  rm -f "$styles"
+  echo "check.sh: obsidian/styles.css is out of date; rebuild it (cd obsidian && node esbuild.config.mjs) and commit it" >&2
   exit 1
 fi
+rm -f "$styles"
 
 step "zotero: build + tests + package checks"
 (cd zotero && ./build.sh && node --test test/*.test.mjs)
-(cd zotero && for f in bootstrap.js content/*.js; do node --check "$f"; done)
+# Zotero loads these with loadSubScript, as classic scripts; `node --check` would parse them as modules
+# (package.json "type": "module") and let a stray import/export through.
+(cd zotero && for f in bootstrap.js content/*.js; do
+  node -e 'new (require("vm").Script)(require("fs").readFileSync(process.argv[1], "utf8"), { filename: process.argv[1] })' "$f"
+done)
 python3 -c "import xml.dom.minidom as m; m.parse('zotero/content/preferences.xhtml')"
 (cd zotero && version=$(node -p 'require("./manifest.json").version') && node -e 'const u = require("./dist/update.json"); const v = Object.values(u.addons)[0].updates[0].version; if (v !== process.argv[1]) { console.error(`update.json says ${v}`); process.exit(1); }' "$version")
 

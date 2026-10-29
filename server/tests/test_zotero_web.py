@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import urllib.error
 from urllib.parse import parse_qs, urlparse
 
@@ -246,3 +247,19 @@ def test_add_account_refuses_a_listed_user_and_reports_keychain_failure(tmp_path
     with pytest.raises(sources.SourceError):
         sources.add_account("zotero-web", "456", key="abcDEF123456")
     assert [e.get("user_id") for e in sources.load() if "user_id" in e] == ["123"]  # nothing half-added
+
+
+def test_store_key_runs_a_real_security_with_the_command_on_stdin(tmp_path, monkeypatch):
+    """A fake `security` on PATH records what a real process would see: its argv and its stdin."""
+    fake = tmp_path / "security"
+    fake.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$0.argv"\ncat > "$0.stdin"\n'
+                    '[ -e "$0.fail" ] && { echo "denied" >&2; exit 44; }\nexit 0\n')
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+    zotero_web.store_key("123", "abcDEF123456")
+    assert (tmp_path / "security.argv").read_text().split() == ["-i"]
+    stdin = (tmp_path / "security.stdin").read_text()
+    assert stdin.startswith("add-generic-password ") and '-w "abcDEF123456"' in stdin
+    (tmp_path / "security.fail").touch()
+    with pytest.raises(zotero_web.ZoteroWebError, match="denied"):
+        zotero_web.store_key("123", "abcDEF123456")

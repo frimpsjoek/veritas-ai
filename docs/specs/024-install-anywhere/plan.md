@@ -54,7 +54,36 @@ passes. Pushes, Homebrew installs and tool installs (Rust, PyInstaller) are gate
 - `server/requirements.txt` lacks `mcp` (server.py entry point).
 - `zotero/package.json` `"type": "module"` vs CJS tooling → check the build scripts still parse.
 - Each fix: failing test first, smallest change, `./check.sh`.
-- [ ] Done when every item has a commit or a written reason to leave it.
+- [x] Done when every item has a commit or a written reason to leave it.
+
+### TG4 evidence (2026-10-28, branch ai/024-fixes)
+1. Keychain write on argv: already fixed in b5e127f (`security -i`, command on stdin, key letters and digits only).
+   Added 33cf428: a fake `security` on PATH records argv (`-i` only) and stdin (the add command with the key),
+   and its exit 44 becomes a ZoteroWebError. `security -i` returns non-zero when the inner command fails
+   (checked with a read-only `find-generic-password` on a missing item: rc 44), so failures are not swallowed.
+2. `add_account` duplicate user / Keychain failure: already fixed in b5e127f, in sources.py (no patch file needed).
+   A listed user_id is refused with 409 (the same code /sources uses for a duplicate folder), a Keychain failure
+   is a 400 with its reason; test_add_account_refuses_a_listed_user_and_reports_keychain_failure.
+3. Switched-off online default library: already fixed in b5e127f (pending_adds: the add fails with "the default
+   library <name> is switched off ..."; nothing queued locally); test_switched_off_online_default_says_so.
+4. Chat mirror listing: 2b6b01a. The store remembers each chat's mirror name; the folder is listed only on a
+   chat's first write in this process or after a rename (and on remove). Test RED (lists counted) -> GREEN.
+5. `<name>:/zotero/x.md`: already fixed in b5e127f (kb.note_path: a Zotero item key wins, else a listed folder's
+   own subfolder named zotero/ is an ordinary note path); test_listed_folder_subfolder_named_zotero_is_a_note.
+6. check.sh and obsidian/styles.css: ab10f92. esbuild.config.mjs writes to `STYLES_OUT` when set; check.sh builds
+   to a mktemp file and `cmp`s it with the tracked copy (same "out of date" error). Checked: an edit to
+   styles-panels.css is reported as drift and the tracked styles.css stays untouched.
+7. `mcp` in server/requirements.txt: already present (`mcp==2.3.0`, `mcp-types==2.3.0`, added in 8f25190).
+   Note: the shared venv (veritas/server/.venv) has no `mcp` installed, so `server.py` (the MCP entry point)
+   cannot start from it; not installed here (install is a gate).
+8. zotero/package.json "type": "module": real gap found and fixed in 12c1029. Zotero loads bootstrap.js and
+   content/*.js with loadSubScript (classic scripts), but `node --check` parsed them as modules, so a stray
+   `export` passed the check (shown with a temp copy). check.sh now parses each file with `vm.Script`; all 14
+   tracked files plus the built agent.js and sb-ui.js (iife) parse. `node -p 'require(...)'` in check.sh is
+   unaffected (eval input is CommonJS). The .mjs build scripts are unaffected.
+
+./check.sh: all parts passed. tools 15, agent 809, ui 290, web 62, obsidian 27, zotero 12,
+server 351 passed / 3 skipped.
 
 ## Merge order
 TG4 → TG1 → TG3 → TG2 (TG2 is largest and depends on TG1's platform code for the Windows/Linux builds).
