@@ -332,8 +332,10 @@ def sources_changed() -> None:
 
 def start_indexing(reread: str | None) -> None:
     """A separate process, so a long run (re-reading every image) outlives server restarts and can be stopped."""
-    # taskpolicy -b: background priority, like the indexing threads (kb.background_priority)
-    args = ["/usr/sbin/taskpolicy", "-b", sys.executable, str(kb.HOME / "kb.py"), "index"]
+    # taskpolicy -b: background priority, like the indexing threads (kb.background_priority); macOS only
+    args = [sys.executable, str(kb.HOME / "kb.py"), "index"]
+    if sys.platform == "darwin":
+        args = ["/usr/sbin/taskpolicy", "-b", *args]
     if reread == "zotero":
         args.append("--reread-zotero")
     elif reread == "media":

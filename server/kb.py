@@ -21,13 +21,17 @@ from __future__ import annotations
 
 import argparse
 import ctypes
-import fcntl
 import fnmatch
 import json
 import os
 import re
 import sqlite3
 import sys
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 import threading
 import time
 import urllib.parse
@@ -524,15 +528,38 @@ class Progress:
         self.write(force=True)
 
 
+def _try_lock(lock) -> bool:
+    """Takes the index lock without waiting; False when another holder has it. fcntl on macOS and Linux, msvcrt on
+    Windows (one byte at the start of the file); either way the lock goes when the file is closed."""
+    if os.name == "nt":
+        lock.seek(0)
+        try:
+            msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
+        return True
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return False
+    return True
+
+
+def _unlock(lock) -> None:
+    if os.name == "nt":
+        lock.seek(0)
+        msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        fcntl.flock(lock, fcntl.LOCK_UN)
+
+
 def index_running() -> bool:
     """True when some process holds the index lock."""
     LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(LOCK_FILE, "a") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
+        if not _try_lock(lock):
             return True
-        fcntl.flock(lock, fcntl.LOCK_UN)
+        _unlock(lock)
         return False
 
 
@@ -544,9 +571,7 @@ def index(full: bool = False, verbose: bool = True, reread_zotero: bool = False,
         return {"skipped": "this process runs out-of-date code; a fresh process will index"}
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(LOCK_FILE, "a") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
+        if not _try_lock(lock):
             return {"skipped": True}
         STOP.clear()
         progress = Progress()
