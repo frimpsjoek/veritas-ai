@@ -66,3 +66,18 @@ export function sourceOf(answer) {
   if (answer?.source === 'openalex') return 'Abstract only';
   return '';
 }
+
+/** What the reader view draws for a reader answer: the header and the text in the note's prose font (one family),
+ *  an abstract as plain text under a small "Abstract" label, and math only where the server said the page has it
+ *  (arXiv, LaTeXML, MathML), so "$5 and $10" on an ordinary page stays money. @param {any} answer */
+export function readerPlan(answer) {
+  return {
+    articleClass: 'sbw-browser-article sbw-prose',
+    title: String(answer?.title ?? ''),
+    byline: String(answer?.byline ?? ''),
+    abstract: String(answer?.abstract ?? ''),
+    abstractLabel: 'Abstract',
+    math: answer?.math === true,
+    html: String(answer?.html ?? ''),
+  };
+}

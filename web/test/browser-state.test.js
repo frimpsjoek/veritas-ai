@@ -84,3 +84,21 @@ test('the bar says where a paper copy came from (spec 022)', () => {
   assert.equal(sourceOf({ mode: 'frame' }), '');
   assert.equal(sourceOf(null), '');
 });
+
+test('the reader view is one font family, with the abstract under a small label and no quote', async () => {
+  const { readerPlan } = await import('../src/browser-state.js');
+  const plan = readerPlan({ mode: 'reader', url: 'https://x.org/a', title: 'Voles', byline: 'Ann Chen', html: '<p>Text.</p>' });
+  assert.match(plan.articleClass, /\bsbw-prose\b/, 'the header sits inside the prose font, not the UI font');
+  assert.equal(plan.title, 'Voles');
+  assert.equal(plan.abstract, '');
+  const paper = readerPlan({ mode: 'reader', url: 'https://doi.org/10.1/x', title: 'T', html: '', abstract: 'We show it.', source: 'openalex' });
+  assert.equal(paper.abstract, 'We show it.');
+  assert.equal(paper.abstractLabel, 'Abstract');
+});
+
+test('math is drawn only for answers the server marked (arXiv, LaTeXML, MathML), so "$5 and $10" stays money', async () => {
+  const { readerPlan } = await import('../src/browser-state.js');
+  assert.equal(readerPlan({ mode: 'reader', title: 'Shop', html: '<p>$5 and $10</p>' }).math, false);
+  assert.equal(readerPlan({ mode: 'reader', title: 'PtSe$_2$', html: '', source: 'arxiv', math: true }).math, true);
+  assert.equal(readerPlan({ mode: 'reader', title: 'x', html: '', math: 'yes' }).math, false);
+});

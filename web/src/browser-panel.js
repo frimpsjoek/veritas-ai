@@ -7,7 +7,8 @@ import { icon } from '../../ui/src/icons.js';
 import { interceptLinks, isPdfUrl } from '../../ui/src/links.js';
 import { noteFragment } from '../../ui/src/sources/view-kit.js';
 import { PdfViewer } from './pdf-viewer.js';
-import { addressOf, blockedReason, createHistory, fileNameOf, firstPrefer, pageQuery, sourceOf } from './browser-state.js';
+import { titleNodes } from '../../ui/src/chat/markdown.js';
+import { addressOf, blockedReason, createHistory, fileNameOf, firstPrefer, pageQuery, readerPlan, sourceOf } from './browser-state.js';
 
 const FRAME_SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox';
 
@@ -113,13 +114,26 @@ export function createBrowserPanel({ host, doc, win, into }) {
     modeButton.onclick = () => { if (history.current) void show({ url: history.current.url, prefer: 'reader' }, false); };
   }
 
-  /** @param {{ url: string, title: string, html: string, byline?: string }} page */
+  /** @param {{ url: string, title: string, html: string, byline?: string, abstract?: string, math?: boolean }} page */
   function readerView(page) {
-    const article = h(doc, 'article', 'sbw-browser-article');
-    article.append(h(doc, 'h1', 'sbw-reader-title', page.title));
-    if (page.byline) article.append(h(doc, 'p', 'sbw-reader-authors', page.byline));
-    const text = h(doc, 'div', 'sbw-prose sbw-note-body');
-    text.append(noteFragment(doc, page.html, host));
+    const plan = readerPlan(page);
+    // inline TeX ($…$, \(…\)) drawn as MathML, only for answers the server marked as having math
+    const words = (/** @type {string} */ value) => plan.math ? titleNodes(doc, value) : doc.createTextNode(value);
+    const article = h(doc, 'article', plan.articleClass);
+    const top = h(doc, 'header', 'sbw-reader-head');
+    const heading = h(doc, 'h1', 'sbw-reader-title');
+    heading.append(words(plan.title));
+    top.append(heading);
+    if (plan.byline) top.append(h(doc, 'p', 'sbw-reader-authors', plan.byline));
+    article.append(top);
+    const text = h(doc, 'div', 'sbw-note-body');
+    if (plan.abstract) {
+      const abstract = h(doc, 'p');
+      abstract.append(words(plan.abstract));
+      text.append(h(doc, 'h2', 'sbw-reader-label', plan.abstractLabel), abstract);
+    }
+    text.append(noteFragment(doc, plan.html, host));
+    if (plan.math) drawMath(text);
     // links in the article are relative to the page; the server already made them absolute
     interceptLinks(text, innerHost);
     article.append(text);
@@ -128,6 +142,16 @@ export function createBrowserPanel({ host, doc, win, into }) {
     modeButton.hidden = false;
     modeButton.textContent = 'Original page';
     modeButton.onclick = () => { if (history.current) void show({ url: history.current.url }, false); };
+  }
+
+  /** Draws the TeX in the reader's text nodes (not in code). @param {HTMLElement} root */
+  function drawMath(root) {
+    const walker = doc.createTreeWalker(root, 4 /* NodeFilter.SHOW_TEXT */);
+    /** @type {Text[]} */ const found = [];
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (/[$\\]/.test(node.nodeValue ?? '') && !node.parentElement?.closest('code, pre')) found.push(/** @type {Text} */ (node));
+    }
+    for (const node of found) node.replaceWith(titleNodes(doc, node.nodeValue ?? ''));
   }
 
   /** @param {string} url @param {string} title */
