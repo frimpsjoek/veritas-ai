@@ -11,6 +11,7 @@ your own computer.
 | [Chat](guide/chat.md) | asking questions, sources, citations, models |
 | [Connectors and MCP](guide/connectors.md) | literature tools (Valency Bond and others), using your library from Claude or ChatGPT |
 | [Zotero and Obsidian plugins](guide/plugins.md) | installing and using the plugins |
+| [Updating](guide/updating.md) | updating each install (Homebrew, desktop app, plugins, source) and cutting a release |
 | [Privacy](guide/privacy.md) | what stays on your computer and what goes out |
 | [Architecture](guide/architecture.md) | the parts of the repository and how they fit |
 

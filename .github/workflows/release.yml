@@ -1,0 +1,107 @@
+name: Release
+
+# A tag v<version> (made by `node tools/release.mjs <version>`, pushed by hand) publishes that version:
+#   1. checks every part says <version> and runs ./check.sh, as check.yml does;
+#   2. makes the GitHub Release with veritas-zotero-<version>.xpi, update.json (Zotero's update_url reads it from the
+#      latest release) and veritas-obsidian-<version>.zip; the notes are that version's CHANGELOG.md section;
+#   3. bumps Formula/veritas.rb in frimpsjoek/homebrew-veritas: packaging/homebrew/veritas.rb with the tag's tarball
+#      url and sha256, revision back to 0.
+# Step 3 needs the secret HOMEBREW_TAP_TOKEN: a fine-grained token with Contents read and write on
+# frimpsjoek/homebrew-veritas only (docs/guide/updating.md, "Cutting a release").
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            agent/package-lock.json
+            ui/package-lock.json
+            web/package-lock.json
+            obsidian/package-lock.json
+            zotero/package-lock.json
+            zotero/editor-src/package-lock.json
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Every part says the tag's version
+        run: node tools/release.mjs verify "${GITHUB_REF_NAME#v}"
+      - name: Server venv
+        run: python -m venv server/.venv && server/.venv/bin/pip install -r server/requirements.txt
+      - name: Check every part
+        run: ./check.sh
+      - name: Release files
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p release/veritas
+          cp "zotero/dist/second-brain-$version.xpi" "release/veritas-zotero-$version.xpi"
+          cp zotero/dist/update.json release/update.json
+          # update.json must name this release's xpi, or Zotero's updater finds nothing to download
+          grep -q "releases/download/v$version/veritas-zotero-$version.xpi" release/update.json
+          cp obsidian/main.js obsidian/manifest.json obsidian/styles.css release/veritas/
+          (cd release && zip -qr "veritas-obsidian-$version.zip" veritas)
+          {
+            node tools/release.mjs notes "$version"
+            printf '\nInstall with Homebrew (macOS and Linux):\n\n    brew install frimpsjoek/veritas/veritas\n'
+            printf '    brew services start veritas\n    veritas open\n\n'
+            printf 'Update: `brew upgrade veritas && brew services restart veritas`. Zotero updates the plugin itself;'
+            printf ' for Obsidian, unzip veritas-obsidian-%s.zip over the old copy.\n' "$version"
+          } > release/notes.md
+          ls -l release
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          files="release/veritas-zotero-$version.xpi release/update.json release/veritas-obsidian-$version.zip"
+          # release-app.yml (desktop installers) may make the same tag's release first: then only add the files
+          gh release create "$GITHUB_REF_NAME" $files --verify-tag --latest \
+              --title "Veritas AI $version" --notes-file release/notes.md ||
+            gh release upload "$GITHUB_REF_NAME" $files --clobber
+
+  tap:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: The tap token is set
+        env:
+          TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          [ -n "$TOKEN" ] || { echo "::error::Add the secret HOMEBREW_TAP_TOKEN (docs/guide/updating.md)"; exit 1; }
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: frimpsjoek/homebrew-veritas
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+      - name: Formula for this tag
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          url="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/$GITHUB_REF_NAME.tar.gz"
+          sha256=$(curl -fsSL --retry 5 --retry-all-errors "$url" | sha256sum | cut -d' ' -f1)
+          node tools/release.mjs formula "$version" "$sha256" > tap/Formula/veritas.rb
+          grep -q "refs/tags/$GITHUB_REF_NAME.tar.gz" tap/Formula/veritas.rb
+          ruby -c tap/Formula/veritas.rb
+          (cd tap && git diff --stat)
+      - name: Commit to the tap
+        run: |
+          cd tap
+          git diff --quiet && { echo "tap already at $GITHUB_REF_NAME"; exit 0; }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -qam "veritas ${GITHUB_REF_NAME#v}"
+          git push

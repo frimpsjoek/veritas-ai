@@ -97,6 +97,12 @@ Veritas server above):
 To build them yourself: `cd zotero && npm ci && ./build.sh` (writes `zotero/dist/*.xpi`), and
 `cd obsidian && npm ci && npx tsc -p . && node esbuild.config.mjs`.
 
+### Updating
+
+Homebrew: `brew upgrade veritas && brew services restart veritas` (your data stays in `$(brew --prefix)/var/veritas`).
+Zotero updates the plugin by itself; for Obsidian, unzip the new release over the old copy. Source installs, the
+desktop app and cutting a release: [docs/guide/updating.md](docs/guide/updating.md).
+
 ## Use
 
 1. **Settings > Folders:** add your Obsidian vault and any folder of notes and PDFs.
