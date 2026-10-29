@@ -68,12 +68,10 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           files="release/veritas-zotero-$version.xpi release/update.json release/veritas-obsidian-$version.zip"
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+          # release-app.yml (desktop installers) may make the same tag's release first: then only add the files
+          gh release create "$GITHUB_REF_NAME" $files --verify-tag --latest \
+              --title "Veritas AI $version" --notes-file release/notes.md ||
             gh release upload "$GITHUB_REF_NAME" $files --clobber
-          else
-            gh release create "$GITHUB_REF_NAME" $files --verify-tag --latest \
-              --title "Veritas AI $version" --notes-file release/notes.md
-          fi
 
   tap:
     needs: release
