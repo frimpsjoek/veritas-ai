@@ -45,8 +45,9 @@ or install the `.deb` with `sudo apt install ./Veritas_*_amd64.deb`.
 
 1. **An index you already have.** If this computer already has a Veritas index (a Homebrew install, or the Second
    Brain server Veritas grew from), the app says so, with its size: "Found an existing Veritas index (85,297
-   passages from 4,036 notes). Use it?" **Use it** copies it (the original is only read, never changed) and only
-   notes that changed since are read again. **Start fresh** builds a new index; **Choose a folder…** takes another
+   passages from 4,036 notes, 22 chats). Use it?" **Use it** copies it (the original is only read, never changed) and
+   only notes that changed since are read again. Your chats, radar issues and routines come with it; when that index
+   has none, they come from the other index found that has the most. **Start fresh** builds a new index; **Choose a folder…** takes another
    Veritas data folder (the one that holds `kb.sqlite`).
 2. **The search model.** Downloaded with a progress bar, unless it came with the index above.
 3. **Guided setup.** The web app's Welcome card: your library, your notes, your AI, your papers.

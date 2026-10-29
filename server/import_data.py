@@ -7,6 +7,10 @@ then only reads the notes that changed (kb.py keeps a passage's vector when only
     kb.py import-data --find      the data folders found on this computer, as JSON (most preferred first)
     kb.py import-data <folder>    copy that folder's index into this install's data folder
 
+The agent data (chats, radar issues, routines) comes with the index. A folder whose agent/ holds none (a Homebrew
+install next to the Second Brain server the user really worked in) brings the agent data of the found folder that has
+the most instead, so taking the first offer never leaves Home empty.
+
 The source may belong to a running server, so it is only ever opened read-only: kb.sqlite through SQLite's backup
 API (a consistent copy even while the other server writes), everything else by plain copy. Imports nothing of ours
 but paths, so it runs without loading the index.
@@ -23,6 +27,7 @@ from pathlib import Path
 import paths
 
 MODEL = "snowflake-arctic-embed-s"
+AGENT_SKIP = ("agentd.json", "codex-home")  # the other server's running sidecar; the Codex CLI's own home
 
 
 def known_places(home: Path | None = None) -> list[Path]:
@@ -57,7 +62,42 @@ def describe(folder: Path) -> dict | None:
         return None
     if not passages:
         return None
-    return {"path": str(folder), "passages": passages, "notes": notes, "model": _model_dir(folder) is not None}
+    return {"path": str(folder), "passages": passages, "notes": notes, "model": _model_dir(folder) is not None,
+            "agent": agent_counts(folder)}
+
+
+def _is_radar(chat: Path) -> bool:
+    """A radar issue is a conversation whose first step is a radar run (agent/src/sessions.js coverOf)."""
+    try:
+        with chat.open(encoding="utf-8", errors="replace") as lines:
+            for line in lines:
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(record, dict) and record.get("type") == "step":
+                    return (record.get("input") or {}).get("kind") == "radar"
+    except OSError:
+        pass
+    return False
+
+
+def agent_counts(folder: Path) -> dict:
+    agent = folder / "agent"
+    chats = sorted((agent / "chats").glob("*.jsonl"))
+    return {"chats": len(chats), "radar": sum(_is_radar(c) for c in chats),
+            "routines": len(list((agent / "routines").glob("*.json")))}
+
+
+def _richness(info: dict) -> int:
+    return info["agent"]["chats"] + info["agent"]["routines"]
+
+
+def agent_source(info: dict, found: list[dict]) -> dict:
+    """Whose agent data an import of `info` brings: its own, or, when it has none, the found folder with the most."""
+    others = [f for f in found if f["path"] != info["path"] and _richness(f)]
+    best = info if _richness(info) or not others else max(others, key=_richness)
+    return {"path": best["path"], **best["agent"]}
 
 
 def _model_dir(folder: Path) -> Path | None:
@@ -77,12 +117,20 @@ def find(dest: Path | None = None, home: Path | None = None) -> list[dict]:
             info = describe(place)
             if info:
                 found.append(info)
+    for info in found:
+        info["brings"] = agent_source(info, found)
     return found
 
 
-def import_data(source: Path, dest: Path | None = None, replace: bool = False) -> dict:
+def _has_agent_data(agent: Path) -> bool:
+    return agent.is_dir() and any(p.name not in AGENT_SKIP for p in agent.iterdir())
+
+
+def import_data(source: Path, dest: Path | None = None, replace: bool = False, agent_from: Path | None = None) -> dict:
     """Copies the index, keyword index, folder list, agent data and search model from `source` into `dest`
-    (this install's data folder). Refuses to overwrite an index that already has passages unless `replace`."""
+    (this install's data folder). Refuses to overwrite an index that already has passages unless `replace`.
+    `agent_from`: another data folder to take the agent data from (agent_source). Agent data already in `dest` is
+    kept unless `replace`, and even then only files of the same name are overwritten."""
     source = source.expanduser().resolve()
     dest = (dest or paths.data_dir()).resolve()
     info = describe(source)
@@ -116,11 +164,11 @@ def import_data(source: Path, dest: Path | None = None, replace: bool = False) -
     if (source / "sources.json").is_file():
         shutil.copy2(source / "sources.json", dest / "sources.json")
         copied.append("sources.json")
-    if (source / "agent").is_dir() and not (dest / "agent").exists():
+    agent = (agent_from or source).expanduser().resolve() / "agent"
+    if agent.is_dir() and (replace or not _has_agent_data(dest / "agent")):
         # chats, reviews, routines, settings. Not agentd.json (the other server's running sidecar) nor codex-home
         # (the Codex CLI's own home: sign-in, caches and temporary files, which the provider recreates).
-        shutil.copytree(source / "agent", dest / "agent", symlinks=True,
-                        ignore=shutil.ignore_patterns("agentd.json", "codex-home"))
+        shutil.copytree(agent, dest / "agent", symlinks=True, dirs_exist_ok=True, ignore=shutil.ignore_patterns(*AGENT_SKIP))
         copied.append("agent")
     model = _model_dir(source)
     target = dest / "models" / MODEL
@@ -128,7 +176,7 @@ def import_data(source: Path, dest: Path | None = None, replace: bool = False) -
         shutil.rmtree(target, ignore_errors=True)
         shutil.copytree(model, target)
         copied.append("models")
-    return {**info, "copied": copied, "into": str(dest)}
+    return {**info, "copied": copied, "into": str(dest), **({"agent_from": str(agent.parent)} if "agent" in copied else {})}
 
 
 def cli(target: str | None, find_only: bool, replace: bool) -> None:
@@ -138,7 +186,11 @@ def cli(target: str | None, find_only: bool, replace: bool) -> None:
     if not target:
         sys.exit("give the data folder to import from, or --find")
     try:
-        result = import_data(Path(target), replace=replace)
+        source, found = Path(target).expanduser().resolve(), find()
+        info = describe(source)
+        brings = agent_source(info, found) if info else None
+        agent_from = Path(brings["path"]) if brings and Path(brings["path"]).resolve() != source else None
+        result = import_data(source, replace=replace, agent_from=agent_from)
     except (ValueError, OSError, sqlite3.Error) as error:
         sys.exit(f"import-data: {error}")
     print(json.dumps(result, indent=2))

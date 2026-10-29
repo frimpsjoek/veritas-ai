@@ -45,7 +45,7 @@ GET  /folder-file?path=<index path>              an indexed PDF or image from an
 GET  /zotero/items?collections=K1,K2          indexed Zotero items in those collections and their descendants (spec 012)
 POST /radar/score {"scope","positives","negatives","items"}   similarity to the scope's centroid, and to negatives
 POST /radar/profile {"scope"}                   seed profile: top terms, authors, journals of a scope
-POST /radar/score {..., "seeds"}               with seeds (spec 021): also seed_max and seed_best (closest seed) per item
+POST /radar/score {..., "seeds"}               with seeds (spec 021): also seed_max and seed_best (closest seed) per item; at most 500 seeds, hand-picked first (reply "seeds": {used, of})
 POST /radar/fulltext {"seeds","items":[{id,arxiv}]}  new arXiv papers read whole (PDF text, cached) and compared with the seeds
 POST /radar/calibrate {"seeds","unrelated"}    thresholds for abstracts and whole papers from seed-seed and seed-unrelated similarity
 PUT  /digests/<file> {"text"}                   save Second Brain/Digests/<file>.md (atomic; 413 over 512 KB)

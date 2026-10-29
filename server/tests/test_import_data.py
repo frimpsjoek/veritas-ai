@@ -80,3 +80,72 @@ def test_find_lists_known_places_in_order_except_this_install(tmp_path, monkeypa
         make_index(folder).close()
     monkeypatch.setattr(import_data, "known_places", lambda home=None: [own, tmp_path / "absent", brew, legacy])
     assert [f["path"] for f in import_data.find(dest=own)] == [str(brew), str(legacy)]
+
+
+def add_agent_data(folder, chats=2, radar=1, routines=1):
+    """`chats` conversations, `radar` of them radar issues (their first step is a radar run), and `routines`."""
+    agent = folder / "agent"
+    (agent / "chats").mkdir(parents=True, exist_ok=True)
+    (agent / "routines").mkdir(exist_ok=True)
+    for i in range(chats):
+        kind = "radar" if i < radar else "find"
+        records = [{"type": "meta", "id": f"c{i}"}, {"type": "step", "id": "s1", "input": {"kind": kind}}]
+        (agent / "chats" / f"c{i}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records))
+    for i in range(routines):
+        (agent / "routines" / f"r{i}.json").write_text("{}")
+    (agent / "settings.json").write_text("{}")
+
+
+def test_find_reports_each_index_with_its_agent_data(tmp_path, monkeypatch):
+    brew, legacy = tmp_path / "brew", tmp_path / "legacy"
+    make_index(brew, passages=5).close()  # agent/ holds only agentd.json and codex-home
+    make_index(legacy).close()
+    add_agent_data(legacy, chats=22, radar=2, routines=2)
+    monkeypatch.setattr(import_data, "known_places", lambda home=None: [brew, legacy])
+    found = {f["path"]: f for f in import_data.find(dest=tmp_path / "own")}
+    assert found[str(brew)]["passages"] == 5 and found[str(brew)]["agent"] == {"chats": 0, "radar": 0, "routines": 0}
+    assert found[str(legacy)]["agent"] == {"chats": 22, "radar": 2, "routines": 2}
+    # what an import of each brings: the Homebrew index has no agent data, so it comes with the Second Brain's
+    assert found[str(brew)]["brings"] == {"path": str(legacy), "chats": 22, "radar": 2, "routines": 2}
+    assert found[str(legacy)]["brings"] == {"path": str(legacy), "chats": 22, "radar": 2, "routines": 2}
+
+
+def test_an_index_without_agent_data_brings_the_richest_other_agent_data(tmp_path, monkeypatch, capsys):
+    brew, legacy, small, dest = tmp_path / "brew", tmp_path / "legacy", tmp_path / "small", tmp_path / "new"
+    for folder in (brew, legacy, small):
+        make_index(folder).close()
+    add_agent_data(small, chats=1, radar=0, routines=0)
+    add_agent_data(legacy, chats=22, radar=2, routines=2)
+    monkeypatch.setattr(import_data, "known_places", lambda home=None: [brew, small, legacy])
+    monkeypatch.setattr(import_data.paths, "data_dir", lambda: dest)
+    import_data.cli(str(brew), find_only=False, replace=False)  # as the app runs it: kb.py import-data <folder>
+    result = json.loads(capsys.readouterr().out)
+    assert result["path"] == str(brew)
+    assert result["agent_from"] == str(legacy) and "agent" in result["copied"]
+    assert len(list((dest / "agent" / "chats").glob("*.jsonl"))) == 22 and len(list((dest / "agent" / "routines").iterdir())) == 2
+    assert not (dest / "agent" / "agentd.json").exists() and not (dest / "agent" / "codex-home").exists()
+
+
+def test_agent_data_already_here_is_kept_unless_replace(tmp_path, monkeypatch):
+    legacy, dest = tmp_path / "legacy", tmp_path / "new"
+    make_index(legacy).close()
+    add_agent_data(legacy, chats=3)
+    monkeypatch.setattr(import_data, "known_places", lambda home=None: [legacy])
+    add_agent_data(dest, chats=1, radar=0, routines=0)  # chats of this install, no index yet
+    result = import_data.import_data(legacy, dest)
+    assert "agent" not in result["copied"] and len(list((dest / "agent" / "chats").glob("*.jsonl"))) == 1
+    (dest / "agent" / "chats" / "mine.jsonl").write_text("{}\n")
+    result = import_data.import_data(legacy, dest, replace=True)
+    assert "agent" in result["copied"] and len(list((dest / "agent" / "chats").glob("*.jsonl"))) == 4  # c0-c2 and mine
+
+
+def test_an_empty_agent_folder_here_does_not_block_the_import(tmp_path, monkeypatch):
+    legacy, dest = tmp_path / "legacy", tmp_path / "new"
+    make_index(legacy).close()
+    add_agent_data(legacy, chats=3)
+    monkeypatch.setattr(import_data, "known_places", lambda home=None: [legacy])
+    (dest / "agent").mkdir(parents=True)
+    (dest / "agent" / "agentd.json").write_text('{"port": 2}')  # this install's own sidecar, already started
+    result = import_data.import_data(legacy, dest)
+    assert "agent" in result["copied"] and len(list((dest / "agent" / "chats").glob("*.jsonl"))) == 3
+    assert json.loads((dest / "agent" / "agentd.json").read_text()) == {"port": 2}

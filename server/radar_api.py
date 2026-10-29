@@ -120,29 +120,34 @@ _arxiv_lock = threading.Lock()
 _arxiv_last = [0.0]
 
 
-def seed_matrix(searcher, seeds: dict, lock, hidden: set[str] = frozenset()) -> tuple[np.ndarray, list[str]]:
-    """Unit vectors of the seeds and their labels ("zotero/KEY", or "text:<title>"). `seeds`: {"keys": [Zotero keys],
-    "collections": [collection keys], "texts": [{"title", "text"}]}."""
-    keys = {f"zotero/{k}" for k in seeds.get("keys") or []}
+def seed_matrix(searcher, seeds: dict, lock, hidden: set[str] = frozenset()) -> tuple[np.ndarray, list[str], int]:
+    """Unit vectors of the seeds, their labels ("zotero/KEY", or "text:<title>") and how many seeds there were before
+    the cap. `seeds`: {"keys": [Zotero keys], "collections": [collection keys], "texts": [{"title", "text"}]}.
+
+    At most MAX_SEEDS are used. The papers picked by hand (keys, texts) come first; collections fill the rest, most
+    recently changed in Zotero first: a few large collections easily hold more than the cap, and failing the whole run
+    for that left the radar never running."""
+    texts = [t for t in (seeds.get("texts") or []) if str(t.get("text", "")).strip()]
     collections = seeds.get("collections") or []
-    vectors, labels = [], []
     with lock:
         searcher._refresh()
-        if collections:
-            keys |= {p for p, _, _ in _rows(searcher.db, collections, hidden)}
-        for path in sorted(keys - set(hidden)):
-            if path in searcher.note_index:
-                vectors.append(searcher.note_matrix[searcher.note_index[path]].astype(np.float32))
-                labels.append(path)
-    texts = [t for t in (seeds.get("texts") or []) if str(t.get("text", "")).strip()]
+        known = lambda paths: [p for p in paths if p in searcher.note_index and p not in hidden]  # noqa: E731
+        picked = known(sorted({f"zotero/{k}" for k in seeds.get("keys") or []}))
+        rows = _rows(searcher.db, collections, hidden) if collections else []
+        mtime = dict(searcher.db.execute("SELECT path, mtime FROM notes WHERE source='zotero'")) if rows else {}
+        rest = known(sorted({p for p, _, _ in rows} - set(picked), key=lambda p: (-(mtime.get(p) or 0.0), p)))
+        total = len(picked) + len(rest) + len(texts)
+        picked = picked[:MAX_SEEDS]
+        texts = texts[:MAX_SEEDS - len(picked)]
+        paths = picked + rest[:MAX_SEEDS - len(picked) - len(texts)]
+        vectors = [searcher.note_matrix[searcher.note_index[p]].astype(np.float32) for p in paths]
+    labels = list(paths)
     if texts:
         embedded = _embed(searcher, [f"{t.get('title', '')}. {t['text']}"[:TEXT_CHARS] for t in texts], lock)
         vectors.extend(embedded)
         labels.extend(f"text:{t.get('title', '')}" for t in texts)
-    if len(vectors) > MAX_SEEDS:
-        raise ValueError(f"at most {MAX_SEEDS} seed papers")
     matrix = np.array([_unit(v) for v in vectors], dtype=np.float32) if vectors else np.zeros((0, kb.DIM), dtype=np.float32)
-    return matrix, labels
+    return matrix, labels, total
 
 
 def _closest(matrix: np.ndarray, labels: list[str], vector: np.ndarray, base: np.ndarray | None = None) -> tuple[float, str | None, float]:
@@ -186,7 +191,9 @@ def score(searcher, body: dict, lock, hidden: set[str] = frozenset()) -> dict:
         centroid = _unit(mean) if centroid is None else _unit(CENTROID_WEIGHT * centroid + POSITIVE_WEIGHT * mean)
     negative_vectors = _embed(searcher, negatives, lock) if negatives else None
     vectors = _embed(searcher, [str(i.get("text", ""))[:TEXT_CHARS] for i in batch], lock) if batch else np.zeros((0, kb.DIM))
-    seeds = seed_matrix(searcher, body["seeds"], lock, hidden) if body.get("seeds") else None
+    seeds, total = None, 0
+    if body.get("seeds"):
+        *seeds, total = seed_matrix(searcher, body["seeds"], lock, hidden)
     base = _baseline(body, seeds[1], "abstract") if seeds is not None else None
     scores = {}
     for item, vector in zip(batch, vectors):
@@ -196,7 +203,8 @@ def score(searcher, body: dict, lock, hidden: set[str] = frozenset()) -> dict:
         if seeds is not None:
             near, label, raw = _closest(*seeds, _unit(vector), base)
             scores[str(item["id"])].update(seed_max=near, seed_best=label, seed_raw=raw)
-    return {"scores": scores}
+    # How many seeds were compared, of how many the radar names (the rest is over MAX_SEEDS).
+    return {"scores": scores, **({"seeds": {"used": len(seeds[1]), "of": total}} if seeds is not None else {})}
 
 
 # ---------------------------------------------------------------- whole new papers from arXiv (spec 021 G3)
@@ -267,7 +275,7 @@ def fulltext(searcher, body: dict, lock, hidden: set[str] = frozenset(), cache_p
     batch = body.get("items") or []
     if len(batch) > FULLTEXT_MAX:
         raise ValueError(f"at most {FULLTEXT_MAX} papers per call")
-    seeds = seed_matrix(searcher, body.get("seeds") or {}, lock, hidden)
+    *seeds, _ = seed_matrix(searcher, body.get("seeds") or {}, lock, hidden)
     base = _baseline(body, seeds[1], "full")
     cache_path = cache_path or kb.data_dir() / "radar-fulltext.sqlite"
     scores = {}
@@ -339,7 +347,7 @@ def calibrate(searcher, body: dict, lock, hidden: set[str] = frozenset(), cache_
     Related: each library seed (abstract, and whole paper) against the other seeds; unrelated: papers from far fields.
     The threshold sits where related and unrelated separate, and never below the closest tenth of the field."""
     seeds_body = body.get("seeds") or {}
-    matrix, labels = seed_matrix(searcher, seeds_body, lock, hidden)
+    matrix, labels, total = seed_matrix(searcher, seeds_body, lock, hidden)
     if len(labels) < 3:
         raise ValueError("calibration needs at least 3 seed papers")
     cache_path = cache_path or kb.data_dir() / "radar-fulltext.sqlite"
@@ -379,7 +387,7 @@ def calibrate(searcher, body: dict, lock, hidden: set[str] = frozenset(), cache_
         if field_full:
             field_cut = float(np.quantile(adjusted(field_full, base_full), FIELD_KEEP))
             full.update(field_cut=round(field_cut, 3), threshold=round(max(full["threshold"], field_cut), 3))
-    return {"abstract": abstract, "full": full, "seeds": len(labels), "at": time.time(),
+    return {"abstract": abstract, "full": full, "seeds": len(labels), "seeds_of": total, "at": time.time(),
             "baseline": {"labels": labels, "abstract": [round(float(x), 4) for x in base_abs],
                          "full": [round(float(x), 4) for x in base_full]},
             "field": {"abstracts": len(field_abs), "whole": len(field_full)}}
