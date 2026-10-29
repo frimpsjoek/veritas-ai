@@ -15,8 +15,13 @@ node build-ui.mjs     # content/sb-ui.js, sb-ui.css, home/ from ../ui
 version=$(node -p 'require("./manifest.json").version')
 mkdir -p dist
 rm -f "dist/second-brain-$version.xpi"
-zip -qr "dist/second-brain-$version.xpi" manifest.json bootstrap.js content locale -x '*.DS_Store'
-hash=$(shasum -a 256 "dist/second-brain-$version.xpi" | cut -d' ' -f1)
+if command -v zip >/dev/null; then
+  zip -qr "dist/second-brain-$version.xpi" manifest.json bootstrap.js content locale -x '*.DS_Store'
+else  # Git Bash on Windows has no zip: Python's zipfile makes the same archive
+  for py in python3 python; do "$py" -c 'import zipfile' 2>/dev/null && break; done
+  "$py" -m zipfile -c "dist/second-brain-$version.xpi" manifest.json bootstrap.js content locale
+fi
+hash=$( (shasum -a 256 "dist/second-brain-$version.xpi" 2>/dev/null || sha256sum "dist/second-brain-$version.xpi") | cut -d' ' -f1)
 cat > dist/update.json <<JSON
 {
   "addons": {
