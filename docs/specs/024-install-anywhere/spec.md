@@ -1,6 +1,9 @@
 # Spec: install Veritas anywhere (Homebrew, then a desktop app for macOS, Windows and Linux)
 
-Status: D1 and D2 decided 2026-10-22 (user: "D1 and D2"): Homebrew first, then a Tauri desktop app. D3-D5 pending.
+Status: D1 and D2 decided 2026-10-22 (user: "D1 and D2"): Homebrew first, then a Tauri desktop app. G1 done 2026-10-23
+(v0.54.0, tap frimpsjoek/homebrew-veritas). D3-D5 decided 2026-10-28 (user: "install the unsigned copy desktop app",
+"use as many agents as you want"): D3 unsigned at first with install notes, D4 model downloaded on first start, D5 one
+session, parallel agents (plan.md). Added G4: updates stay easy (tap bumps itself on a tag; app and plugins update in place).
 Written from the user's requests of 2026-10-22: "can we turn into an application people can simply install" and
 "2 [Homebrew] and can we make it a simple app any one can install on windows mac or linux".
 
@@ -51,6 +54,14 @@ Installing today takes a terminal, Python 3.12 with uv, Node 22, a 133 MB model 
 - First start shows the guided setup (spec 023); nothing else to configure.
 - Updates: the app checks GitHub Releases (Tauri updater) and asks before installing.
 - Built by GitHub Actions on macOS, Windows and Linux runners for each tag.
+
+### G4. Updates stay easy
+
+- A release tag builds everything: the tap formula is bumped by GitHub Actions (url + sha256 in
+  `frimpsjoek/homebrew-veritas`), the Zotero `.xpi` and `update.json` are attached, the desktop installers are attached.
+- `brew upgrade veritas` keeps data (`var/veritas`) and restarts the service; the web app in the data folder is refreshed.
+- The desktop app checks GitHub Releases (Tauri updater, minisign key, unsigned binaries) and asks before installing.
+- One command cuts a release locally: bumps versions in every part, tags, pushes (push stays a gate for the user).
 
 ### G1 plan (Homebrew)
 
