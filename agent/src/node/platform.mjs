@@ -9,6 +9,7 @@ import http from 'node:http';
 import readline from 'node:readline';
 import { randomBytes } from 'node:crypto';
 import { errorMessage, errorField } from '../errors.js';
+import { resolveWindowsCommand } from './windows-command.mjs';
 
 function wrapChild(child) {
   let stderrTail = '';
@@ -42,6 +43,19 @@ function wrapChild(child) {
       if (!child.killed) child.kill();
     },
     exited,
+  };
+}
+
+/** A command that was not started (a refused Windows shim): it reads like any child that died at once. */
+function failedChild(message) {
+  return {
+    pid: undefined,
+    lines() { return { async *[Symbol.asyncIterator]() {} }; },
+    async write() {},
+    async closeInput() {},
+    stderrTail() { return `${message}\n`; },
+    async kill() {},
+    exited: Promise.resolve(127),
   };
 }
 
@@ -87,29 +101,39 @@ export function createNodePlatform({ homeDir = os.homedir(), system = process.pl
     serverPort = address.port;
   }
 
+  /** @param {string[]} candidates */
+  async function which(candidates) {
+    for (const candidate of candidates) {
+      if (!candidate) continue;
+      if (path.isAbsolute(candidate) || candidate.includes('/') || candidate.includes(path.sep)) {
+        if (await exists(candidate)) return candidate;
+        continue;
+      }
+      const named = path.extname(candidate) ? [''] : extensions;
+      for (const dir of (env.PATH ?? env.Path ?? '').split(system === 'win32' ? ';' : ':')) {
+        for (const ext of named) {
+          const full = path.join(dir, candidate + ext);
+          if (dir && await exists(full)) return full;
+        }
+      }
+    }
+    return null;
+  }
+
   return {
     async spawn(spec) {
+      if (system === 'win32') {
+        // claude.cmd, codex.cmd, npx.cmd: Node will not start these without a shell (windows-command.mjs)
+        const launch = await resolveWindowsCommand(spec, { which });
+        if ('refused' in launch) return failedChild(launch.refused);
+        const child = nodeSpawn(launch.cmd, launch.args, { cwd: spec.cwd, env: { ...process.env, ...spec.env }, shell: launch.shell });
+        return wrapChild(child);
+      }
       const child = nodeSpawn(spec.cmd, spec.args, { cwd: spec.cwd, env: { ...process.env, ...spec.env } });
       return wrapChild(child);
     },
 
-    async which(candidates) {
-      for (const candidate of candidates) {
-        if (!candidate) continue;
-        if (path.isAbsolute(candidate) || candidate.includes('/') || candidate.includes(path.sep)) {
-          if (await exists(candidate)) return candidate;
-          continue;
-        }
-        const named = path.extname(candidate) ? [''] : extensions;
-        for (const dir of (env.PATH ?? env.Path ?? '').split(system === 'win32' ? ';' : ':')) {
-          for (const ext of named) {
-            const full = path.join(dir, candidate + ext);
-            if (dir && await exists(full)) return full;
-          }
-        }
-      }
-      return null;
-    },
+    which,
 
     fetch,
 
