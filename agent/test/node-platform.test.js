@@ -237,3 +237,28 @@ test('spawn() on Windows starts an npm shim\'s script with node, and a refused o
   assert.equal(await refused.exited, 127);
   assert.match(refused.stderrTail(), /odd\.cmd/);
 });
+
+test('slowFetch waits as long as the server takes (Node\'s fetch gives up on headers after 300 s), and can be aborted', async () => {
+  const http = await import('node:http');
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      if (req.url === '/hang') return; // never answers
+      setTimeout(() => { res.writeHead(201, { 'content-type': 'application/json' }); res.end(JSON.stringify({ got: JSON.parse(body), header: req.headers['x-kb-client'] })); }, 30);
+    });
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${/** @type {any} */ (server.address()).port}`;
+  try {
+    const platform = createNodePlatform();
+    const res = await platform.slowFetch(new URL('/radar/calibrate', base), { method: 'POST', headers: { 'X-KB-Client': 'agent', 'content-type': 'application/json' }, body: JSON.stringify({ seeds: 3 }) });
+    assert.equal(res.ok, true);
+    assert.equal(res.status, 201);
+    assert.deepEqual(await res.json(), { got: { seeds: 3 }, header: 'agent' });
+    const controller = new AbortController();
+    const hung = platform.slowFetch(`${base}/hang`, { method: 'POST', body: '{}', signal: controller.signal });
+    controller.abort();
+    await assert.rejects(hung, /abort/i);
+  } finally { server.closeAllConnections?.(); server.close(); }
+});

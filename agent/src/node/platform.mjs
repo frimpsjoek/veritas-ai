@@ -137,6 +137,8 @@ export function createNodePlatform({ homeDir = os.homedir(), system = process.pl
 
     fetch,
 
+    slowFetch,
+
     fs: {
       async read(filePath) {
         try { return await fsp.readFile(filePath, 'utf8'); }
@@ -190,4 +192,31 @@ export function createNodePlatform({ homeDir = os.homedir(), system = process.pl
     homeDir,
     os: system,
   };
+}
+
+/**
+ * A fetch for one long request to the library server: Node's fetch fails with "fetch failed" when a reply's headers
+ * take over 300 s, and a radar calibration (or reading 40 papers whole) takes longer while the server reads PDFs. Only
+ * what library-http.js uses: method, headers, a string body, signal; ok, status, json(), text().
+ * @param {string | URL} url @param {{ method?: string, headers?: Record<string, string>, body?: string, signal?: AbortSignal }} [init]
+ * @returns {Promise<any>}
+ */
+export function slowFetch(url, init = {}) {
+  return new Promise((resolve, reject) => {
+    if (init.signal?.aborted) { reject(new Error('The request was aborted')); return; }
+    const req = http.request(new URL(String(url)), { method: init.method ?? 'GET', headers: init.headers ?? {} }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('error', reject);
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        const status = res.statusCode ?? 0;
+        resolve({ ok: status >= 200 && status < 300, status, text: async () => text, json: async () => JSON.parse(text) });
+      });
+    });
+    req.setTimeout(0); // no idle limit: the caller's own timer (library-http.js) decides when to give up
+    init.signal?.addEventListener('abort', () => req.destroy(new Error('The request was aborted')), { once: true });
+    req.on('error', reject);
+    req.end(init.body);
+  });
 }

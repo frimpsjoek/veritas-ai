@@ -259,6 +259,13 @@ function validThreshold(t) {
   return { abstract: t.abstract, full: t.full ?? null, ...(t.calibration ? { calibration: t.calibration } : {}) };
 }
 
+/** The same for the same seeds in any order: a calibration remembers it, so a run can tell the seeds changed since.
+ *  @param {import("./radar-types").RadarSeeds} seeds */
+export function seedsKey(seeds) {
+  const b = seedBody(seeds);
+  return JSON.stringify([[...b.keys].sort(), [...b.collections].sort(), b.texts.map((t) => t.title).sort()]);
+}
+
 /** What the server needs to know the seeds by (radar_api.seed_matrix). @param {import("./radar-types").RadarSeeds} seeds
  *  @returns {import("./radar-types").SeedBody} */
 export function seedBody(seeds) {

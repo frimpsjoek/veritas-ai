@@ -71,6 +71,82 @@ test('withIndexAbstracts replaces an outside paper\'s copied abstract with the i
   assert.equal((await withIndexAbstracts(rows, async () => { throw new Error('down'); }))[0].abstract, 'a model wrote this');
 });
 
+// ---------- free abstracts for papers that came without one (reading radar) ----------
+
+import { fillAbstracts, ABSTRACT_RETRY_DAYS } from '../src/scholarly.js';
+
+/** A fetch that answers by host; `calls` records every URL. */
+function byHost(answers) {
+  const calls = [];
+  const fn = async (url) => {
+    calls.push(String(url));
+    const answer = answers[new URL(String(url)).host];
+    return typeof answer === 'function' ? answer(String(url)) : answer ?? { ok: false, status: 404, json: async () => ({}), text: async () => '' };
+  };
+  fn.calls = calls;
+  return fn;
+}
+const noOpenAlex = json({ results: [] });
+
+test('fillAbstracts reads a JATS abstract from Crossref\'s record and does not ask Semantic Scholar', async () => {
+  const fetchFn = byHost({ 'api.openalex.org': noOpenAlex, 'api.crossref.org': json({ message: { abstract: `<jats:title>Abstract</jats:title><jats:p>${LONG}</jats:p>` } }) });
+  const cache = {};
+  const found = await fillAbstracts(fetchFn, [{ id: 'p1', doi: '10.1/A', arxiv: null }], { cache, now: 0 });
+  assert.equal(found.get('p1'), LONG);
+  assert.ok(fetchFn.calls.some((u) => u === 'https://api.crossref.org/works/10.1%2Fa'));
+  assert.equal(fetchFn.calls.some((u) => u.includes('semanticscholar')), false);
+  assert.deepEqual(cache['doi:10.1/a'], { text: LONG, at: 0 });
+});
+
+test('fillAbstracts falls back to Semantic Scholar, and remembers a paper no source has an abstract for', async () => {
+  const fetchFn = byHost({
+    'api.openalex.org': noOpenAlex, 'api.crossref.org': json({ message: {} }),
+    'api.semanticscholar.org': (url) => json({ abstract: url.includes('10.1%2Fb') ? LONG : null }),
+  });
+  const cache = {};
+  const found = await fillAbstracts(fetchFn, [{ id: 'b', doi: '10.1/b', arxiv: null }, { id: 'c', doi: '10.1/c', arxiv: null }], { cache, now: 5 });
+  assert.equal(found.get('b'), LONG);
+  assert.equal(found.has('c'), false);
+  assert.deepEqual(cache['doi:10.1/c'], { text: '', at: 5 });
+  assert.ok(fetchFn.calls.includes('https://api.semanticscholar.org/graph/v1/paper/DOI:10.1%2Fb?fields=abstract'));
+});
+
+test('fillAbstracts reads an arXiv paper\'s summary from the arXiv API', async () => {
+  const xml = `<feed><entry><id>http://arxiv.org/abs/2410.01234v1</id><summary> ${LONG} </summary></entry></feed>`;
+  const fetchFn = byHost({ 'export.arxiv.org': { ok: true, status: 200, text: async () => xml } });
+  const found = await fillAbstracts(fetchFn, [{ id: 'x', doi: null, arxiv: '2410.01234' }], { now: 0 });
+  assert.equal(found.get('x'), LONG);
+  assert.deepEqual(fetchFn.calls, ['https://export.arxiv.org/api/query?id_list=2410.01234']);
+});
+
+test('fillAbstracts asks again only after the retry days, uses what it has cached, and keeps to its budget', async () => {
+  const day = 86_400_000;
+  const cache = { 'doi:10.1/old': { text: '', at: 0 }, 'doi:10.1/kept': { text: LONG, at: 0 } };
+  const fetchFn = byHost({ 'api.openalex.org': noOpenAlex, 'api.crossref.org': json({ message: {} }), 'api.semanticscholar.org': json({ abstract: null }) });
+  const papers = [{ id: 'old', doi: '10.1/old', arxiv: null }, { id: 'kept', doi: '10.1/kept', arxiv: null }];
+  const soon = await fillAbstracts(fetchFn, papers, { cache, now: day });
+  assert.equal(soon.get('kept'), LONG);
+  assert.equal(fetchFn.calls.length, 0, 'a cached miss and a cached abstract need no request');
+  await fillAbstracts(fetchFn, papers, { cache, now: (ABSTRACT_RETRY_DAYS + 1) * day });
+  assert.ok(fetchFn.calls.some((u) => u.includes('10.1%2Fold')));
+  const many = Array.from({ length: 9 }, (_, i) => ({ id: `m${i}`, doi: `10.1/m${i}`, arxiv: null }));
+  const counted = byHost({ 'api.openalex.org': noOpenAlex, 'api.crossref.org': json({ message: {} }), 'api.semanticscholar.org': json({ abstract: null }) });
+  await fillAbstracts(counted, many, { now: 0, lookups: 3 });
+  assert.equal(counted.calls.filter((u) => u.includes('api.crossref.org')).length, 3);
+});
+
+test('fillAbstracts takes OpenAlex\'s abstracts first and never caches a refusal as a miss', async () => {
+  const fetchFn = byHost({
+    'api.openalex.org': json({ results: [{ doi: 'https://doi.org/10.1/oa', abstract_inverted_index: index }] }),
+    'api.crossref.org': { ok: false, status: 429, json: async () => ({}) }, 'api.semanticscholar.org': { ok: false, status: 429, json: async () => ({}) },
+  });
+  const cache = {};
+  const found = await fillAbstracts(fetchFn, [{ id: 'oa', doi: '10.1/oa', arxiv: null }, { id: 'busy', doi: '10.1/busy', arxiv: null }], { cache, now: 0 });
+  assert.equal(found.get('oa'), LONG);
+  assert.equal(fetchFn.calls.some((u) => u.includes('10.1%2Foa') && !u.includes('openalex')), false);
+  assert.equal('doi:10.1/busy' in cache, false);
+});
+
 // ---------- `since` (spec 011 U4) ----------
 
 function capture(body) {

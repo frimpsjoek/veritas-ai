@@ -12,6 +12,8 @@ const MAX_EXAMPLES = 200;
 /** Details and undo records are kept for the newest rows only: enough for a digest or two. */
 export const MAX_SHOWN = 300;
 const MAX_LEARNED = 200;
+/** Abstracts looked up for title-only papers (and the misses), newest kept: a paper reappears in the lookback window. */
+export const MAX_ABSTRACTS = 2000;
 /** The learning list is a short memory too: lowest counts, then oldest, go first. */
 export const MAX_CANDIDATES = 300;
 
@@ -19,7 +21,7 @@ export const MAX_CANDIDATES = 300;
 export const emptyLedger = () => ({ learning: [], blocked: [], rotation: 0, announce: [] });
 
 /** @returns {RadarState} */
-export const emptyState = () => ({ seen: {}, sourceStatus: {}, feedCache: {}, refs: {}, examples: { positive: [], negative: [] }, shown: {}, learned: [], streaks: {}, undo: {}, phrases: emptyLedger() });
+export const emptyState = () => ({ seen: {}, sourceStatus: {}, feedCache: {}, refs: {}, examples: { positive: [], negative: [] }, shown: {}, learned: [], streaks: {}, undo: {}, phrases: emptyLedger(), abstracts: {} });
 
 const obj = (/** @type {any} */ v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
 const list = (/** @type {any} */ v) => (Array.isArray(v) ? v : []);
@@ -33,7 +35,7 @@ function normaliseLedger(raw) {
 /** Tolerant read: unknown shapes become the empty value, so a half-written or older file never stops a run. @param {any} raw @returns {RadarState} */
 export function normaliseState(raw) {
   const r = obj(raw), ex = obj(r.examples);
-  return { seen: obj(r.seen), sourceStatus: obj(r.sourceStatus), feedCache: obj(r.feedCache), refs: obj(r.refs), examples: { positive: list(ex.positive), negative: list(ex.negative) }, shown: obj(r.shown), learned: list(r.learned), streaks: obj(r.streaks), undo: obj(r.undo), phrases: normaliseLedger(r.phrases) };
+  return { seen: obj(r.seen), sourceStatus: obj(r.sourceStatus), feedCache: obj(r.feedCache), refs: obj(r.refs), examples: { positive: list(ex.positive), negative: list(ex.negative) }, shown: obj(r.shown), learned: list(r.learned), streaks: obj(r.streaks), undo: obj(r.undo), phrases: normaliseLedger(r.phrases), abstracts: obj(r.abstracts), ...(typeof r.calibrateTried === 'string' ? { calibrateTried: r.calibrateTried } : {}) };
 }
 
 /** Trims the oldest seen entries, examples, row details and undo records. @param {RadarState} state @returns {RadarState} */
@@ -49,6 +51,7 @@ export function trimState(state) {
     ...state, seen, examples: { positive: state.examples.positive.slice(-MAX_EXAMPLES), negative: state.examples.negative.slice(-MAX_EXAMPLES) },
     shown: newest(state.shown), undo: newest(state.undo), learned: state.learned.slice(-MAX_LEARNED),
     phrases: { ...state.phrases, learning: trimCandidates(state.phrases.learning), blocked: state.phrases.blocked.slice(-500) },
+    abstracts: Object.fromEntries(Object.entries(state.abstracts ?? {}).sort((a, b) => b[1].at - a[1].at).slice(0, MAX_ABSTRACTS)),
   };
 }
 
