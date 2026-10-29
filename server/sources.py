@@ -219,7 +219,7 @@ def accounts() -> list[Account]:
 
 
 def add_account(kind: str, user_id: str, *, key: str | None = None, name: str | None = None) -> dict:
-    """Adds an online source; its API key (when given) goes to the Keychain, never to sources.json."""
+    """Adds an online source; its API key (when given) goes to the key store (zotero_web.py), never to sources.json."""
     if kind != "zotero-web":
         raise SourceError(f"unknown kind of online source {kind!r}")
     if not re.fullmatch(r"\d{1,12}", str(user_id)):

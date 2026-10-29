@@ -53,7 +53,7 @@ POST /index                                    re-index changed notes now
 GET  /setup/suggest                            what a new user could add: Zotero, Obsidian vaults, PDF folders (spec 023)
 GET  /sources                                  the folders the index reads, each with kind, role and count (spec 018)
 POST /sources {"path","name"?}                 add a folder (400 unreadable/too broad, 409 already listed); starts indexing
-POST /sources {"kind":"zotero-web","user_id","key"?,"name"?}  add an online Zotero library (key goes to the Keychain)
+POST /sources {"kind":"zotero-web","user_id","key"?,"name"?}  add an online Zotero library (key goes to the key store)
 PATCH /sources/<name> {"enabled"?,"skip"?}     switch a folder on or off, or set its skip patterns
 PATCH /sources/output {"name": str|null}       where notes are written: a listed notes folder, or ~/Documents/Veritas
 DELETE /sources/<name>                         take a folder off the list (its rows go on the next index run)

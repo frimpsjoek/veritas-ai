@@ -845,7 +845,7 @@ def index_zotero_web(db: sqlite3.Connection, verbose: bool, progress: Progress) 
             continue
         key = zotero_web.get_key(account.user_id)
         if not key:
-            errors.append(f"{account.name}: no Zotero API key in the Keychain")
+            errors.append(f"{account.name}: no Zotero API key saved on this computer")
             continue
         client = zotero_web.Client(account.user_id, key)
         stamp_key = f"zotero_web_version:{account.name}"
