@@ -46,4 +46,15 @@ else
   echo "check.sh: pytest not available (create server/.venv from server/requirements.txt); server tests skipped" >&2
 fi
 
+step "app: cargo check"
+# Only where the desktop app is built: it needs Rust and the sidecars (packaging/pyinstaller, packaging/sea), which
+# tauri-build looks for even to type-check.
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "check.sh: no cargo; app check skipped" >&2
+elif ! ls app/src-tauri/binaries/veritas-server-* app/src-tauri/binaries/agentd-* >/dev/null 2>&1; then
+  echo "check.sh: app sidecars not built (packaging/pyinstaller/build.sh, packaging/sea/build.mjs); app check skipped" >&2
+else
+  (cd app/src-tauri && cargo check --quiet)
+fi
+
 printf '\ncheck.sh: all parts passed\n'
