@@ -126,6 +126,7 @@ TOKEN_FILE = kb.data_dir() / "api-token"
 LOCAL_HOSTS = ("127.0.0.1", "localhost")
 CONFLICT = re.compile(r"\.conflict-macos-(\d{8}T\d{6}Z)\.md$")
 AGENT_SIDECAR: agent_api.Sidecar | None = None  # set by serve(); None means /agent/* answers 503
+LISTENER: ThreadingHTTPServer | None = None  # set by serve(); closed before a Windows self-update (replace_self)
 
 
 def token() -> str:
@@ -357,10 +358,12 @@ def stop_indexing() -> bool:
         return False
     if pid == os.getpid():
         kb.STOP.set()  # the automatic check running inside this server
-    else:
+        return True
+    kb.STOP_FILE.write_text("")  # read between batches, on every system
+    if sys.platform != "win32":  # on Windows this would be TerminateProcess: the batch would not finish
         import signal
 
-        os.kill(pid, signal.SIGTERM)
+        os.kill(pid, signal.SIGTERM)  # the fast path: the process sets STOP at once
     return True
 
 
@@ -974,7 +977,24 @@ def restart_when_code_changes() -> None:
         if any(f.exists() and f.stat().st_mtime != m for f, m in started.items()):
             time.sleep(2)  # let an editor finish writing the other files
             agent_api.shutdown(AGENT_SIDECAR)  # swapping the process image won't stop this child on its own
-            os.execv(sys.executable, [sys.executable, *sys.argv])
+            replace_self()
+
+
+def replace_self() -> None:
+    """Runs this server again from the new code. os.execv swaps the process image on macOS and Linux; on Windows it
+    starts a second process while this one lives on holding the port, so there the port is freed first, the new
+    server starts detached (it must outlive this one), and this process exits."""
+    argv = [sys.executable, *sys.argv]
+    if sys.platform != "win32":
+        os.execv(sys.executable, argv)
+        return
+    import subprocess
+
+    if LISTENER is not None:
+        LISTENER.server_close()
+    # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP, spelled out: the subprocess constants exist only on Windows
+    subprocess.Popen(argv, cwd=os.getcwd(), stdin=subprocess.DEVNULL, creationflags=0x00000008 | 0x00000200)
+    os._exit(0)
 
 
 def sidecar_kb_url(port: int) -> str:
@@ -982,7 +1002,7 @@ def sidecar_kb_url(port: int) -> str:
 
 
 def serve(port: int) -> None:
-    global AGENT_SIDECAR
+    global AGENT_SIDECAR, LISTENER
     token()  # create it on first start, so the Mac plugin can hand it to the phone
     try:
         # The sidecar reaches the library through this server, on the port it actually runs on (it used to be told
@@ -999,7 +1019,7 @@ def serve(port: int) -> None:
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     threading.Thread(target=restart_when_code_changes, daemon=True).start()
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    server = LISTENER = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     threading.Thread(target=kb.keep_fresh, kwargs={"on_check": lambda: LAST_CHECK.update(at=time.time())},
                      daemon=True).start()
     threading.Thread(target=lambda: searcher().search("warm up"), daemon=True).start()  # load model + vectors now

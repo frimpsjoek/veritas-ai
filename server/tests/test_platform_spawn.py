@@ -1,6 +1,8 @@
 """Processes and locks on Windows and Linux as well as macOS (spec 024 G2)."""
 from __future__ import annotations
 
+import json
+import signal
 import subprocess
 import sys
 
@@ -32,3 +34,64 @@ def test_indexing_process_starts_on_every_system(tmp_path, monkeypatch, system, 
     args = started["args"]
     assert (args[0] == "/usr/sbin/taskpolicy") == background
     assert args[-3:] == [sys.executable, str(kb.HOME / "kb.py"), "index"]
+
+
+@pytest.fixture()
+def indexing_elsewhere(tmp_path, monkeypatch):
+    """An indexing process (not this one) holds the lock and wrote its pid."""
+    monkeypatch.setattr(kb, "PROGRESS_FILE", tmp_path / "index-progress.json")
+    monkeypatch.setattr(kb, "STOP_FILE", tmp_path / "index-stop")
+    monkeypatch.setattr(kb, "index_running", lambda: True)
+    kb.PROGRESS_FILE.write_text(json.dumps({"pid": 4242}))
+    kills = []
+    monkeypatch.setattr(http_api.os, "kill", lambda pid, sig: kills.append((pid, sig)))
+    kb.STOP.clear()
+    return kills
+
+
+@pytest.mark.parametrize("system, signalled", [("darwin", True), ("linux", True), ("win32", False)])
+def test_stop_asks_the_indexing_process_through_a_file_and_signals_only_where_it_is_caught(
+        indexing_elsewhere, monkeypatch, system, signalled):
+    """On Windows os.kill(SIGTERM) is TerminateProcess: the run would die mid-batch. The stop file is read between
+    batches on every system; SIGTERM stays the fast path where the process can catch it."""
+    monkeypatch.setattr(http_api.sys, "platform", system)
+    assert http_api.stop_indexing()
+    assert kb.STOP_FILE.exists()
+    assert indexing_elsewhere == ([(4242, signal.SIGTERM)] if signalled else [])
+
+
+def test_indexing_stops_after_its_batch_when_the_stop_file_appears(tmp_path, monkeypatch):
+    monkeypatch.setattr(kb, "PROGRESS_FILE", tmp_path / "index-progress.json")
+    monkeypatch.setattr(kb, "STOP_FILE", tmp_path / "index-stop")
+    kb.STOP_FILE.write_text("")  # a stop meant for an earlier run
+    kb.clear_stop()
+    assert not kb.STOP_FILE.exists() and not kb.STOP.is_set()
+    progress = kb.Progress()
+    progress.stage("notes", 10)
+    progress.advance(1)
+    kb.STOP_FILE.write_text("")
+    with pytest.raises(kb.Stopped):
+        progress.advance(2)
+
+
+@pytest.mark.parametrize("system", ["darwin", "linux", "win32"])
+def test_self_update_replaces_the_server_on_every_system(monkeypatch, system):
+    """os.execv swaps the process image on macOS and Linux. On Windows it starts a second process and the old one
+    keeps the port, so there the listener closes first, the new server starts detached, and this one exits."""
+    events = []
+
+    class Listener:
+        def server_close(self):
+            events.append("close")
+
+    monkeypatch.setattr(http_api.sys, "platform", system)
+    monkeypatch.setattr(http_api, "LISTENER", Listener())
+    monkeypatch.setattr(http_api.os, "execv", lambda exe, argv: events.append(("execv", exe, argv)))
+    monkeypatch.setattr(http_api.os, "_exit", lambda code: events.append(("exit", code)))
+    monkeypatch.setattr(subprocess, "Popen", lambda args, **kw: events.append(("start", args, kw.get("creationflags"))))
+    http_api.replace_self()
+    argv = [sys.executable, *sys.argv]
+    if system == "win32":
+        assert events == ["close", ("start", argv, 0x00000008 | 0x00000200), ("exit", 0)]
+    else:
+        assert events == [("execv", sys.executable, argv)]
