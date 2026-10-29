@@ -83,6 +83,10 @@ Installing today takes a terminal, Python 3.12 with uv, Node 22, a 133 MB model 
   stores per system; a Windows run with a real Zotero library.
 - G3: each installer installed on a clean VM of its system: app opens, guided setup completes, chat answers with
   citations, the app updates from one release to the next. Size of each installer recorded here.
+  Sizes (2026-10-28, v0.54.0, local build on this Mac): `Veritas_0.54.0_aarch64.dmg` 93.8 MB (89.5 MiB); inside,
+  Veritas.app 174 MB: the server (PyInstaller) 52 MB, the agent (Node SEA) 110 MB, the shell and web app ~12 MB;
+  updater archive `Veritas.app.tar.gz` 94 MB. The search model (133 MB) is downloaded or copied on first start.
+  Intel .dmg, -setup.exe, .AppImage and .deb: sizes come from the first tagged CI run (release-app.yml).
 
 ## Decisions for the user (recommended first)
 
