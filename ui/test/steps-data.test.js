@@ -62,6 +62,15 @@ test('history lists a saved search once: as its session when its JSON names one 
   assert.deepEqual(shown.searches.map((s) => s.id), ['find-2', 'find-3']);
 });
 
+test('history leaves out reading radar runs (Home reaches them); a routine chat that is not a radar issue stays', () => {
+  const conversations = [
+    { id: 'radar', mode: 'chat', title: 'Reading radar', updated: '3', routine: 'r1', cover: { kind: 'radar' } },
+    { id: 'digest', mode: 'chat', title: 'Spindle digest', updated: '2', routine: 'r2', kind: 'report', cover: { kind: 'report' } },
+    { id: 'asked', mode: 'chat', title: 'What was my reading digest today about?', updated: '1', cover: { kind: 'chat' } },
+  ];
+  assert.deepEqual(historyEntries(conversations, []).sessions.map((s) => s.conversation.id), ['digest', 'asked']);
+});
+
 test('the empty state shows at most three session cards', () => {
   assert.equal(cardSplit([1, 2, 3, 4, 5]).length, 3);
   assert.equal(cardSplit([1]).length, 1);

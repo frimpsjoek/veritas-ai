@@ -56,6 +56,7 @@ export function createRemoteRuntime(transport) {
       },
       async rename(id, title) { await transport.request('POST', '/conversations/rename', { id, title }); },
       async markSeen(id) { await transport.request('POST', '/conversations/seen', { id }); },
+      async markViewed(id, rows) { await transport.request('POST', '/conversations/viewed', { id, rows }); },
       async remove(id) { await transport.request('DELETE', '/conversations', { id }); },
       async cancel(id) { await transport.request('POST', '/conversations/cancel', { id }); },
       cursor: (id) => /** @type {any} */ (transport.request('GET', `/conversations/cursor${qs({ id })}`)),

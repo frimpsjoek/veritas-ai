@@ -284,8 +284,14 @@ export type ConversationRecord =
   | { type: "project"; project: ProjectId | null; at: string }
   /** The user opened the chat. Routine news older than this is not news. Written by `conversations.markSeen`, only when there is some. */
   | { type: "seen"; at: string }
+  /** These rows of a routine's papers were opened (from Home's issue or the digest table): each is one less paper of
+   *  news. Written by `conversations.markViewed`, only for rows not already viewed and only while there is news. */
+  | { type: "viewed"; rows: RowId[]; at: string }
   /** A routine run put `added` papers into this session (a new version of its table, or the report a new session holds). */
   | { type: "routine_run"; routine: string; added: number; at: string;
+      /** The rows it added, when they are rows of a papers result (not a digest's report): viewing any other row (a
+       *  radar's "Worth reading") is not news read. Runs written before this field count any viewed row. */
+      rows?: RowId[];
       /** A radar run's top paper, for its Home cover: the title and "first author, venue". */
       top?: { title: string; by?: string } }
   | { type: "user"; text: string; attachments: Attachment[]; web: WebMode; sources?: Sources;

@@ -1,6 +1,6 @@
 // @ts-check
 // ui-src/src/home/home.js. Home (spec 013, moved here for spec 014 G4): a greeting, today's reading radar issue with
-// its papers in abstract form, then shelves of reports, chats and earlier issues. The web app paints it under its
+// its papers in abstract form, then shelves of reports and earlier issues. The web app paints it under its
 // router (web/pages.js); Zotero and Obsidian mount HomeView in a tab and a view. Links go through HomeLinks
 // (links.js), so the same page works with hash routes and with a plugin's own way of opening things.
 import { h } from '../dom.js';
@@ -8,7 +8,7 @@ import { nextRunText, runNowLine } from '../chat/routines-data.js';
 import { apiOf } from '../sources/view-kit.js';
 import { mountSources } from '../sources/sources-view.js';
 import { linkTo } from './links.js';
-import { RadarDigest } from '../chat/radar-digest.js';
+import { RadarDigest, markViewed } from '../chat/radar-digest.js';
 
 /** @typedef {import('./links.js').HomeTarget} HomeTarget */
 /** @typedef {import('./links.js').HomeLinks} HomeLinks */
@@ -108,18 +108,28 @@ function quietIssue(routine, sessions) {
   return { at: done, card: { to, id: `${routine.id}-${done.slice(0, 10)}`, kind: 'radar', label: KIND_LABEL.radar, title: issueDate(done), quote: failed ? 'This run did not finish.' : 'Nothing new above the bar today.', foot: next } };
 }
 
+/** Calls `onView` when the link is followed: a click, a middle click (a new tab), or Enter on a plugin's role=link span.
+ *  @param {HTMLElement} el @param {(() => void) | undefined} onView */
+function viewing(el, onView) {
+  if (!onView) return;
+  el.addEventListener('click', () => onView());
+  el.addEventListener('auxclick', (event) => { if (/** @type {MouseEvent} */ (event).button === 1) onView(); });
+  if (el.getAttribute('href') === null) el.addEventListener('keydown', (event) => { if (/** @type {KeyboardEvent} */ (event).key === 'Enter') onView(); });
+}
+
 /** A paper of today's issue in abstract form: its graphical abstract on the right when the publisher has one, then the
  *  title (to the paper), who and where, why read it, where it was found, and the full abstract behind "Read the abstract".
  *  Under it, the radar's actions (Add to Zotero, Read later, Like, Dislike), which teach the radar what to show.
  *  @param {Document} doc @param {any} row @param {HomeLinks} links @param {(route: string, params?: any) => Promise<any>} [api]
  *  @param {RadarDigest | null} [digest] the issue's radar, for the row actions
- *  @param {'summary' | 'abstract'} [show] what the line under the title is: the AI's summary, or the paper's abstract */
-function paperEntry(doc, row, links, api, digest, show = 'summary') {
+ *  @param {'summary' | 'abstract'} [show] what the line under the title is: the AI's summary, or the paper's abstract
+ *  @param {() => void} [onView] the paper was opened (its link, its figure, or its abstract): it is no longer news */
+function paperEntry(doc, row, links, api, digest, show = 'summary', onView) {
   const entry = h(doc, 'article', 'sbw-paper');
   const text = h(doc, 'div', 'sbw-paper-text');
   const url = row.doi ? `https://doi.org/${row.doi}` : row.url;
   const title = h(doc, url ? 'a' : 'span', 'sbw-paper-title', row.title);
-  if (url) linkTo(title, { to: 'url', url }, links);
+  if (url) viewing(linkTo(title, { to: 'url', url }, links), onView);
   const authors = row.authors ?? [];
   const who = authors.length > 3 ? `${authors.slice(0, 3).join(', ')} +${authors.length - 3}` : authors.join(', ');
   const meta = [who, row.venue, row.radar?.date ?? row.year].filter(Boolean).join(' · ');
@@ -138,6 +148,7 @@ function paperEntry(doc, row, links, api, digest, show = 'summary') {
     more.append(label, h(doc, 'p', 'sbw-paper-abstract', abstract));
     // Without a why line the clamped preview above is the abstract itself; opening shows it in full instead.
     more.addEventListener('toggle', () => {
+      if (more.open) onView?.();
       label.textContent = more.open ? 'Show less' : why ? 'Read the abstract' : 'Read more';
       if (!why) text.querySelector('.sbw-paper-why')?.toggleAttribute('hidden', more.open);
     });
@@ -159,7 +170,7 @@ function paperEntry(doc, row, links, api, digest, show = 'summary') {
       img.addEventListener('error', () => img.remove(), { once: true });
       img.src = found.image;
       const link = h(doc, url ? 'a' : 'span', 'sbw-paper-figure-box');
-      if (url) { linkTo(link, { to: 'url', url }, links); link.tabIndex = -1; }
+      if (url) { viewing(linkTo(link, { to: 'url', url }, links), onView); link.tabIndex = -1; }
       link.append(img);
       entry.append(link);
     }, () => {});
@@ -216,10 +227,10 @@ function runNowLink(doc, ai, routine, block, onRan) {
 /** Today: a radar issue across the full width, a photo banner over its papers in abstract form, with ‹ › to step
  *  back through earlier days. Today with nothing new yet says so; no radar at all offers to set one up.
  *  @param {Document} doc @param {any} ai @param {any} host @param {HomeLinks} links
- *  @param {{ issues: any[], routine: any | null, pick?: string, unknown?: boolean, onRan?: (block: HTMLElement) => void }} radar issues newest first; `pick` opens on that issue;
+ *  @param {{ issues: any[], routine: any | null, pick?: string, unknown?: boolean, onRan?: (block: HTMLElement) => void, onViewed?: (conversations: any[]) => void }} radar issues newest first; `pick` opens on that issue;
  *  `unknown`: the routines could not be read, so whether a radar exists is not known; `onRan(block)`: a run started or
- *  watched here was recorded */
-async function todayBlock(doc, ai, host, links, { issues, routine, pick, unknown, onRan }) {
+ *  watched here was recorded; `onViewed(conversations)`: a paper opened here lowered the news, read again */
+async function todayBlock(doc, ai, host, links, { issues, routine, pick, unknown, onRan, onViewed }) {
   const block = h(doc, 'section', 'sbw-today');
   const api = apiOf(host);
   if (!routine && !issues.length && unknown) {
@@ -282,6 +293,19 @@ async function todayBlock(doc, ai, host, links, { issues, routine, pick, unknown
 
   let painting = 0;
   /** @type {RadarDigest | null} */ let digest = null;
+  /** A paper opened here is one less paper of news on its issue: tell the engine, then read the counts again so the
+   *  banner and the waiting count follow without repainting Home. @param {any} issue @param {any} row */
+  const viewed = async (issue, row) => {
+    if (!(await markViewed(host, issue.id, row.id))) return;
+    try {
+      const conversations = await ai.conversations.list();
+      const fresh = conversations.find((/** @type {any} */ c) => c.id === issue.id);
+      if (fresh?.news) issue.news = fresh.news;
+      else delete issue.news;
+      if (issues[at] === issue) stage.firstElementChild?.classList.toggle('is-new', Boolean(issue.news));
+      onViewed?.(conversations);
+    } catch (error) { host.logError(error); }
+  };
   const paint = async () => {
     const mine = ++painting;
     const issue = at >= 0 ? issues[at] : null;
@@ -319,7 +343,7 @@ async function todayBlock(doc, ai, host, links, { issues, routine, pick, unknown
         // The same row actions as the issue's chat view, so a paper can be rated where it is read.
         const radar = body?.radar?.routine ? body.radar : null;
         digest = radar && (digest?.routine === radar.routine ? digest : new RadarDigest(host, doc, block, { routine: radar.routine, summary: radar.summary ?? '' }));
-        for (const row of rows) list.append(paperEntry(doc, row, links, api, digest, textMode));
+        for (const row of rows) list.append(paperEntry(doc, row, links, api, digest, textMode, () => { void viewed(issue, row); }));
       }
     } catch {
       if (mine === painting) list.replaceChildren(h(doc, 'p', 'sbw-hint', "Couldn't load this issue's papers."));
@@ -335,16 +359,22 @@ async function todayBlock(doc, ai, host, links, { issues, routine, pick, unknown
 const shortDay = (iso) => new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' });
 
 const PAGE = 8;
+/** A one-row shelf before it is laid out: the desktop column count (home.css .sbw-covers). */
+const ROW = 4;
 
-/** A titled shelf of covers, 8 at a time, with Previous and Next under it when there are more.
- *  @param {Document} doc @param {string} title @param {Shelved[]} items @param {HomeLinks} links */
-function shelfSection(doc, title, items, links) {
+/** A titled shelf of covers, 8 at a time, with Previous and Next under it when there are more. `oneRow` shows one row,
+ *  as many covers as its grid has columns at this width (4 on a desktop), and pages a row at a time.
+ *  @param {Document} doc @param {string} title @param {Shelved[]} items @param {HomeLinks} links @param {{ oneRow?: boolean }} [opts] */
+function shelfSection(doc, title, items, links, { oneRow = false } = {}) {
   const box = h(doc, 'section', 'sbw-shelf');
   const head = h(doc, 'div', 'sbw-shelf-head');
   head.append(h(doc, 'h2', 'sbw-shelf-title', title), h(doc, 'span', 'sbw-shelf-count', String(items.length)));
   const grid = h(doc, 'div', 'sbw-covers');
   box.append(head, grid);
-  const pages = Math.ceil(items.length / PAGE);
+  // The columns come from the stylesheet (4, 3 or 2 by width), so a row is measured once the grid is on the page.
+  const columns = () => (grid.isConnected ? doc.defaultView?.getComputedStyle(grid).gridTemplateColumns.split(' ').filter((track) => track && track !== 'none').length : 0) || ROW;
+  let size = oneRow ? columns() : PAGE;
+  let pages = Math.ceil(items.length / size);
   const pager = h(doc, 'nav', 'sbw-pager');
   pager.setAttribute('aria-label', `${title} pages`);
   const prev = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sbw-quiet sbw-pager-prev', 'Previous'));
@@ -355,15 +385,28 @@ function shelfSection(doc, title, items, links) {
   pager.append(prev, where, next);
   let page = 0;
   const show = () => {
-    grid.replaceChildren(...items.slice(page * PAGE, (page + 1) * PAGE).map((item) => cover(doc, item.card, links)));
+    grid.replaceChildren(...items.slice(page * size, (page + 1) * size).map((item) => cover(doc, item.card, links)));
     where.textContent = `${page + 1} of ${pages}`;
     prev.disabled = page === 0;
     next.disabled = page >= pages - 1;
+    if (pages > 1) box.append(pager);
+    else pager.remove();
   };
   prev.addEventListener('click', () => { page = Math.max(0, page - 1); show(); });
   next.addEventListener('click', () => { page = Math.min(pages - 1, page + 1); show(); });
   show();
-  if (pages > 1) box.append(pager);
+  const Observer = doc.defaultView?.ResizeObserver;
+  if (oneRow && Observer) {
+    // Laid out, or the width crossed a breakpoint: a row now holds a different number; keep the first cover shown in view.
+    new Observer(() => {
+      const now = columns();
+      if (now === size) return;
+      page = Math.floor((page * size) / now);
+      size = now;
+      pages = Math.ceil(items.length / size);
+      show();
+    }).observe(grid);
+  }
   return box;
 }
 
@@ -377,8 +420,8 @@ function issuesOf(conversations, routines) {
   return { radarRoutines, radars, shown, kindOf, issues };
 }
 
-/** A greeting with the count of what is waiting; today's radar issue across the full width; then research reports,
- *  chats and earlier issues, each its own shelf, newest first, 8 a page.
+/** A greeting with the count of what is waiting; today's radar issue across the full width; then research reports
+ *  (8 a page) and earlier issues (one row a page), each its own shelf, newest first.
  *  @param {HTMLElement} into @param {HomeContext} ctx */
 export async function paintHome(into, ctx) {
   const { host, doc, links } = ctx;
@@ -404,9 +447,14 @@ export async function paintHome(into, ctx) {
     return;
   }
 
-  const waiting = conversations.reduce((/** @type {number} */ sum, /** @type {any} */ c) => sum + (Number(c.news?.papers) || 0), 0);
-  if (waiting) count.textContent = `${waiting} new ${waiting === 1 ? 'paper' : 'papers'}`;
-  ctx.onWaiting?.(waiting);
+  const dateLine = count.textContent;
+  // Also after a paper is opened on Home: the count goes down one paper at a time, back to the date at none.
+  const showWaiting = (/** @type {any[]} */ list) => {
+    const waiting = list.reduce((/** @type {number} */ sum, /** @type {any} */ c) => sum + (Number(c.news?.papers) || 0), 0);
+    count.textContent = waiting ? `${waiting} new ${waiting === 1 ? 'paper' : 'papers'}` : dateLine;
+    ctx.onWaiting?.(waiting);
+  };
+  showWaiting(conversations);
   const { radarRoutines, radars, shown, kindOf, issues } = issuesOf(conversations, routines);
   const newest = (/** @type {Shelved[]} */ list) => list.sort((a, b) => (a.at < b.at ? 1 : -1));
   // A run started (or watched) from Home ends with a new issue: read again and swap only the today block, so the
@@ -415,7 +463,7 @@ export async function paintHome(into, ctx) {
     try {
       const [c, r] = await Promise.all([ai.conversations.list(), ai.routines.list()]);
       const fresh = issuesOf(c, r);
-      old.replaceWith(await todayBlock(doc, ai, host, links, { issues: fresh.issues, routine: fresh.radarRoutines[0] ?? null, onRan: refreshToday }));
+      old.replaceWith(await todayBlock(doc, ai, host, links, { issues: fresh.issues, routine: fresh.radarRoutines[0] ?? null, onRan: refreshToday, onViewed: showWaiting }));
     } catch (error) { host.logError(error); }
   };
   const today = issues[0] && sameDay(issues[0].updated, new Date().toISOString()) ? issues[0] : null;
@@ -427,9 +475,9 @@ export async function paintHome(into, ctx) {
     const slot = h(doc, 'section', 'sbw-today');
     sections.push(slot);
     void mountSources(slot, { host, doc, links }, { mode: 'intro', routines, onDone: () => { void paintHome(into, ctx); } });
-  } else sections.push(await todayBlock(doc, ai, host, links, { issues, routine: radarRoutines[0] ?? null, pick: ctx.issue, unknown: routinesFailed, onRan: refreshToday }));
+  } else sections.push(await todayBlock(doc, ai, host, links, { issues, routine: radarRoutines[0] ?? null, pick: ctx.issue, unknown: routinesFailed, onRan: refreshToday, onViewed: showWaiting }));
+  // Chats are not shelved here: the Chat page lists them.
   const reports = newest(shown.filter((/** @type {any} */ c) => kindOf(c) === 'report').map((/** @type {any} */ c) => shelved(c, radars)));
-  const chats = newest(shown.filter((/** @type {any} */ c) => ['chat', 'find'].includes(kindOf(c))).map((/** @type {any} */ c) => shelved(c, radars)));
   const earlier = newest(issues.filter((/** @type {any} */ c) => c !== today).map((/** @type {any} */ c) => shelved(c, radars)));
   for (const routine of radarRoutines) {
     const quiet = quietIssue(routine, conversations);
@@ -437,9 +485,8 @@ export async function paintHome(into, ctx) {
   }
   newest(earlier);
   if (reports.length) sections.push(shelfSection(doc, 'Research reports', reports, links));
-  if (chats.length) sections.push(shelfSection(doc, 'Chats', chats, links));
-  if (earlier.length) sections.push(shelfSection(doc, 'Earlier issues', earlier, links));
-  if (!reports.length && !chats.length) sections.push(h(doc, 'p', 'sbw-hint', 'Your conversations will appear here.'));
+  if (earlier.length) sections.push(shelfSection(doc, 'Earlier issues', earlier, links, { oneRow: true }));
+  if (!reports.length && !earlier.length) sections.push(h(doc, 'p', 'sbw-hint', 'Your research reports will appear here.'));
   content.replaceChildren(...sections);
   if (ctx.issue) page.scrollIntoView?.({ block: 'start' });
 }

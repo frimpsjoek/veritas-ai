@@ -74,7 +74,7 @@ export async function runWebChecks(browser, port, outDir) {
     const today = new Date().toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
     check(`${tag} Today leads across the full width: today's radar issue, dated, how many are new, marked new, its chat one link away (the banner itself is not a link)`, home.banner.label === "Today's reading radar" && home.banner.title === today && home.banner.line === '5 new papers' && home.banner.fresh && home.banner.href === null && home.banner.chat === '#/chat?session=c4', home.banner);
     check(`${tag} Today shows every paper in abstract form: the title to the paper, authors, venue and date, why read it`, home.papers.length === 3 && home.papers[0].title === 'Burrow microclimates in field voles' && home.papers[0].href === 'https://doi.org/10.1/vole' && home.papers[0].meta === 'A. Vole, B. Mole · Ecology · 2026-10-10' && home.papers[0].why === 'Burrows stay four degrees warmer than the surface.' && home.papers[1].why === 'Voles cache seeds under the snowpack.' && home.papers[2].why === 'Cited by 3 papers in your library' && JSON.stringify(home.heads) === '["Worth reading"]', home.papers);
-    check(`${tag} the rest is separated into Research reports, Chats and Earlier issues, each counted`, JSON.stringify(home.shelves.map((x) => [x.title, x.count])) === '[["Research reports","1"],["Chats","10"],["Earlier issues","1"]]', home.shelves);
+    check(`${tag} the rest is separated into Research reports and Earlier issues, each counted; no Chats shelf (the Chat page lists them)`, JSON.stringify(home.shelves.map((x) => [x.title, x.count])) === '[["Research reports","1"],["Earlier issues","1"]]', home.shelves);
     await page.waitForSelector('.sbw-paper.has-figure');
     const figures = await page.evaluate(async () => {
       const papers = [...document.querySelectorAll('.sbw-paper')];
@@ -115,20 +115,11 @@ export async function runWebChecks(browser, port, outDir) {
     await go(page, '#/home');
     await page.waitForSelector('.sbw-paper');
     check(`${tag} a research report gets its own cover in its own shelf`, JSON.stringify(home.shelves[0].covers) === '["What Voles Eat: A Review"]', home.shelves[0]);
-    check(`${tag} Chats shows 8 a page, newest first, with "1 of 2"`, home.shelves[1].covers.length === 8 && JSON.stringify(home.shelves[1].covers.slice(0, 3)) === '["Foraging in voles","Voles weekly","Doorknob ergonomics"]' && home.shelves[1].pager === '1 of 2', home.shelves[1]);
-    const paged = await page.evaluate(async () => {
-      const shelf = [...document.querySelectorAll('.sbw-shelf')].find((x) => x.querySelector('.sbw-shelf-title')?.textContent === 'Chats');
-      const prev = shelf.querySelector('.sbw-pager-prev');
-      const next = shelf.querySelector('.sbw-pager-next');
-      const before = { prev: prev.disabled, next: next.disabled };
-      next.click();
-      await new Promise((r) => setTimeout(r, 30));
-      const after = { covers: [...shelf.querySelectorAll('.sbw-cover-title')].map((c) => c.textContent), where: shelf.querySelector('.sbw-pager-where').textContent, prev: prev.disabled, next: next.disabled };
-      prev.click();
-      return { before, after };
-    });
-    check(`${tag} Next shows the second page and Previous comes back`, paged.before.prev && !paged.before.next && paged.after.where === '2 of 2' && JSON.stringify(paged.after.covers) === '["Old vole question 6","Old vole question 7"]' && !paged.after.prev && paged.after.next, paged);
+    check(`${tag} Earlier issues is one row: a single issue has no pager`, home.shelves[1].covers.length === 1 && home.shelves[1].pager === null, home.shelves[1]);
     check(`${tag} the new papers waiting are counted beside the greeting and on the Home rail item`, home.count === '8 new papers' && home.badge === '8', home);
+    // "Read the abstract" above opened today's first paper: one paper less waiting, here and on the rail, after a repaint too
+    const viewed = await page.evaluate(() => ({ count: document.querySelector('.sbw-home-date')?.textContent, badge: document.querySelector('.sbw-nav-item[data-view="home"] .sbw-nav-badge')?.textContent }));
+    check(`${tag} a paper opened on Home counts as read: the waiting count and the rail badge drop by one`, viewed.count === '7 new papers' && viewed.badge === '7', viewed);
 
     // Folio look: Fraunces headings, an even grid of photo covers, near-square corners, white text, a wide banner photo
     const look = await page.evaluate(async () => {
@@ -144,8 +135,7 @@ export async function runWebChecks(browser, port, outDir) {
         colors: [...new Set(covers.map((c) => getComputedStyle(c).color))],
         widths: new Set(covers.map((c) => Math.round(rect(c).width))).size,
         reportPhoto: /cover-(sky|earth|wide)-\d\d\.webp/.exec(getComputedStyle(report).backgroundImage)?.[1] ?? null,
-        chatPhotos: [...document.querySelectorAll('.sbw-cover.is-chat, .sbw-cover.is-find')].map((c) => getComputedStyle(c).backgroundImage),
-        chatText: getComputedStyle(document.querySelector('.sbw-cover.is-chat .sbw-cover-title')).color,
+        chats: document.querySelectorAll('.sbw-cover.is-chat, .sbw-cover.is-find').length,
         clamped: [...document.querySelectorAll('.sbw-cover-title, .sbw-paper-title')].filter((t) => t.scrollHeight > t.clientHeight + 1).length,
         bannerPhoto: /cover-(wide)-\d\d\.webp/.exec(getComputedStyle(banner).backgroundImage)?.[1] ?? null,
         bannerFull: Math.abs(rect(banner).width - rect(document.querySelector('.sbw-home-body')).width) <= 1,
@@ -163,7 +153,7 @@ export async function runWebChecks(browser, port, outDir) {
       width: Math.round(document.querySelector('.sbw-today').getBoundingClientRect().width),
     }));
     check(`${tag} two columns only when the issue is at least 960 px wide, and no column switch on Home (it is in Settings)`, columns.switch === 0 && columns.cols === (columns.width >= 960 ? 2 : 1), columns);
-    check(`${tag} the banner spans the page with a wide photo; the report has a research photo and a hairline frame; chats are text cards with no photo`, look.bannerFull && look.bannerPhoto === 'wide' && look.reportPhoto === 'earth' && look.frame === '1px' && look.chatPhotos.every((p) => p === 'none') && look.chatText !== 'rgb(255, 255, 255)', look);
+    check(`${tag} the banner spans the page with a wide photo; the report has a research photo and a hairline frame; no chat covers on Home`, look.bannerFull && look.bannerPhoto === 'wide' && look.reportPhoto === 'earth' && look.frame === '1px' && look.chats === 0, look);
     check(`${tag} the page title and the banner share a left edge`, Math.abs(look.lefts[0] - look.lefts[1]) <= 1, look.lefts);
     const loaded = await page.evaluate(async () => {
       const url = /url\("?([^")]+)"?\)/.exec(getComputedStyle(document.querySelector('.sbw-today-banner')).backgroundImage)?.[1];
@@ -188,11 +178,12 @@ export async function runWebChecks(browser, port, outDir) {
     });
     check(`${tag} the theme switch flips light and dark and relabels itself`, flip.visible && flip.after.theme !== flip.back && ['light', 'dark'].includes(flip.after.theme) && flip.before.bg !== flip.after.bg && flip.before.label !== flip.after.label, flip);
 
-    // a conversation opens in the chat
-    await page.locator('.sbw-cover', { hasText: 'Foraging in voles' }).click();
+    // a conversation opens in the chat (Home has no Chats shelf: a chat's link goes straight there)
+    await go(page, '#/chat?session=c1');
     await page.waitForSelector('.sb-ai-answer .sb-ai-md');
-    const opened = await page.evaluate(() => ({ hash: location.hash, text: document.querySelector('.sb-ai-thread')?.textContent ?? '' }));
-    check(`${tag} a Home conversation opens the chat on that session`, opened.hash === '#/chat?session=c1' && opened.text.includes('Seeds and roots.'), opened);
+    const opened = await page.evaluate(() => ({ hash: location.hash, text: document.querySelector('.sb-ai-thread')?.textContent ?? '', history: [...document.querySelectorAll('.sb-ai-conv-title')].map((t) => t.textContent) }));
+    check(`${tag} a chat link opens the chat on that session`, opened.hash === '#/chat?session=c1' && opened.text.includes('Seeds and roots.'), opened);
+    check(`${tag} the chat history leaves out the reading radar's issues (Home reaches them)`, opened.history.includes('Foraging in voles') && !opened.history.includes('Reading radar'), opened.history);
 
     // a turn through the fake engine
     if (width >= 700) {
@@ -771,7 +762,7 @@ export async function runWebChecks(browser, port, outDir) {
     await goto();
     await page.waitForSelector('.sbw-cover');
     const tag = `${width}px real host`;
-    check(`${tag} Home reads conversations through /agent`, (await page.locator('.sbw-cover .sbw-cover-title').allTextContents()).includes('Foraging in voles'));
+    check(`${tag} Home reads conversations through /agent`, (await page.locator('.sbw-cover .sbw-cover-title').allTextContents()).includes('What Voles Eat'));
     check(`${tag} no sideways page scroll`, await noSideways(page));
     if (width === 1280) {
       // a turn: POST /agent/conversations/send, then the answer arrives over the long-poll /agent/events?after=
@@ -975,6 +966,8 @@ function scriptedServer() {
     convs: [
       { id: 'c1', mode: 'chat', title: 'Foraging in voles', updated: hoursAgo(2), artifacts: 0, kind: 'chat' },
       { id: 'c2', mode: 'chat', title: 'Doorknob ergonomics', updated: hoursAgo(30), artifacts: 0, kind: 'chat' },
+      // Home shelves reports, not chats: this one shows it read the conversations
+      { id: 'c3', mode: 'chat', title: 'New chat', updated: hoursAgo(40), artifacts: 1, kind: 'report', cover: { kind: 'report', title: 'What Voles Eat', by: '4 papers' } },
     ],
     log: /** @type {{ seq: number, type: string, [k: string]: any }[]} */ ([]),
     attach(page) {

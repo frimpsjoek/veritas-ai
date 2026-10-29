@@ -72,8 +72,8 @@ export function conversationStore(fs, dir, opts = {}) {
     const rename = [...records].reverse().find((r) => r.type === 'rename');
     const moved = [...records].reverse().find((r) => r.type === 'project');
     const project = moved ? moved.project ?? null : meta?.project;
-    // Opening a chat (a `seen` record) is not activity: it must not move the chat up the history.
-    const last = [...records].reverse().find((r) => r.type !== 'seen');
+    // Opening a chat or viewing its papers (`seen`, `viewed`) is not activity: it must not move the chat up the history.
+    const last = [...records].reverse().find((r) => r.type !== 'seen' && r.type !== 'viewed');
     const news = newsOf(records);
     const extras = summaryExtras(records);
     const cover = coverOf(records);
