@@ -1,13 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ICONS } from '../src/icons.js';
-import { ROWS, SECTIONS, WALL_CLOCK_DEFAULT_MINUTES, patchFor, readRow, sidebarSections, visibleSections, writeRow } from '../src/settings/settings-schema.js';
+import { ROWS, SECTIONS, WALL_CLOCK_DEFAULT_MINUTES, ocrLine, patchFor, readRow, sidebarSections, visibleSections, writeRow } from '../src/settings/settings-schema.js';
 import { DEFAULT_RESEARCH, DEFAULT_LOCAL, DEFAULT_TURN_WALL_CLOCK_MS, defaultSettings } from '../../agent/src/settings.js';
 
 const ids = (groups) => groups.flatMap((g) => g.rows.map((r) => r.id));
 
 test('sections come in the approved order and each has an icon that exists', () => {
-  assert.deepEqual(SECTIONS.map((s) => s.label), ['General', 'Models', 'On this Mac', 'Research', 'Finding papers', 'Reading radar', 'Routines', 'Sources and tools', 'Folders', 'Search index', 'Server and phone', 'About']);
+  assert.deepEqual(SECTIONS.map((s) => s.label), ['General', 'Models', 'On this computer', 'Research', 'Finding papers', 'Reading radar', 'Routines', 'Sources and tools', 'Folders', 'Search index', 'Server and phone', 'About']);
   for (const s of SECTIONS) assert.match(ICONS[s.icon] ?? '', /^M/, `icon ${s.icon}`);
   for (const r of ROWS) assert.ok(SECTIONS.some((s) => s.id === r.section), `${r.id} names a real section`);
   assert.equal(new Set(ROWS.map((r) => r.id)).size, ROWS.length, 'row ids are unique');
@@ -52,8 +52,8 @@ test('advanced rows stay hidden until the section switch is on', () => {
   assert.ok(closed[0].hiddenAdvanced >= 10, 'the switch says how many are waiting');
   const open = ids(visibleSections({ host: 'web', section: 'research', advanced: { research: true } }));
   assert.ok(open.includes('research.concurrency') && open.includes('research.minutes.writer') && open.includes('research.toolCalls'));
-  // the switch is per section: opening Research does not open On this Mac
-  assert.deepEqual(ids(visibleSections({ host: 'web', section: 'mac', advanced: { research: true } })), ['mac.scanDirs', 'mac.idleMinutes', 'mac.allowReports']);
+  // the switch is per section: opening Research does not open On this computer
+  assert.deepEqual(ids(visibleSections({ host: 'web', section: 'mac', advanced: { research: true } })), ['mac.scanDirs', 'mac.idleMinutes', 'mac.allowReports', 'mac.ocr']);
   assert.ok(ids(visibleSections({ host: 'web', section: 'mac', advanced: { mac: true } })).includes('mac.python'));
   assert.ok(ids(visibleSections({ host: 'web', section: 'mac', advanced: { mac: true } })).includes('mac.external'));
 });
@@ -126,4 +126,14 @@ test('the Open links choice is written under the key links.js reads', async () =
   store.set(...write.prefs);
   assert.equal(linkMode(prefs), 'outside');
   assert.equal(readRow(row, { prefs, settings: {} }), 'outside');
+});
+
+// spec 024 G2: Veritas runs on Windows and Linux too, so the section is "On this computer" and says how scans are read.
+test('On this computer says which OCR engine reads scans and images', () => {
+  const row = ROWS.find((r) => r.id === 'mac.ocr');
+  assert.ok(row && row.section === 'mac' && row.kind === 'custom' && row.hosts.includes('web'));
+  assert.match(ocrLine('vision'), /Apple Vision/);
+  assert.match(ocrLine('tesseract'), /Tesseract/);
+  assert.match(ocrLine(null), /text layer/);
+  assert.match(ocrLine(null), /Tesseract/, 'and says what to install');
 });

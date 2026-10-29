@@ -1,7 +1,7 @@
 """HTTP API over the index, for the Obsidian plugin on the Mac and on the phone.
 
 GET  /ping                                     is the server up (no database work)
-GET  /status                                   index counts
+GET  /status                                   index counts, and which OCR engine reads scans and images
 GET  /links?path=...   GET /recent?days=&folder=&limit=
 GET  /search?q=...&limit=&source=&exclude_source=&folder=&tag=&collections=K1,K2&year_from=&year_to=
                                                 same search the agents use; `collections` takes Zotero collection
@@ -264,7 +264,8 @@ def index_status() -> dict:
     if not running and progress.get("running"):  # the process died without finishing
         progress.update(running=False, stage="idle", label="Interrupted")
     return {**_coverage["stats"], "coverage": _coverage["rows"], "indexing": progress, "running": running,
-            "next_check_at": LAST_CHECK["at"] + kb.FRESH_EVERY if LAST_CHECK["at"] else None}
+            "next_check_at": LAST_CHECK["at"] + kb.FRESH_EVERY if LAST_CHECK["at"] else None,
+            "ocr": kb.media.ocr_engine()}  # "vision", "tesseract" or None: Settings > On this computer says which
 
 
 LAST_CHECK = {"at": 0.0}
