@@ -118,11 +118,32 @@ ARXIV_SPACING = 3.0        # seconds between requests to arxiv.org (its terms of
 PDF_MAX_BYTES = 40_000_000
 _arxiv_lock = threading.Lock()
 _arxiv_last = [0.0]
+# Zotero items in a radar's collections that are not papers: a supplement or a thesis front page saved as an item of its
+# own, a web page or program named in a word or two, an attachment named after its file, a bare link. Their vectors
+# are the whole text, and a thesis covers a field while a supplement is methods and captions, so they were the closest
+# seed of papers they have nothing to do with. An item with a DOI is a paper whatever its title.
+PLACEHOLDER = re.compile(
+    r"^\s*(\d+\s+)?(supplementary|supporting)\s+(information|materials?|data|text)\b"
+    r"|\b(dissertation|thesis)\s+submitted\b|\bin\s+partial\s+(satisfaction|fulfil+ment)\s+of\s+the\s+requirements\b"
+    r"|^\s*(untitled|no title|snapshot|full text|attachment)\b"
+    r"|\.(pdf|nb|docx?|pptx?|html?|txt|tex|ipynb|zip)\s*$"
+    r"|^\s*\[?\s*https?://|^\S+/\S+$", re.I)
+SEED_MIN_WORDS = 3  # in one library, 22% of the items titled in one or two words had a DOI, against 80% of the rest
+
+
+def placeholder_title(title: str, doi: str = "") -> bool:
+    """True when a library item's title says it is not a paper (see PLACEHOLDER); such items are not used as seeds."""
+    if str(doi or "").strip():
+        return False
+    title = re.sub(r"<[^>]+>", "", str(title or ""))  # Zotero titles can hold markup (<i>GW</i>)
+    return len(re.findall(r"[^\W\d_]{2,}", title)) < SEED_MIN_WORDS or bool(PLACEHOLDER.search(title))
 
 
 def seed_matrix(searcher, seeds: dict, lock, hidden: set[str] = frozenset()) -> tuple[np.ndarray, list[str], int]:
     """Unit vectors of the seeds, their labels ("zotero/KEY", or "text:<title>") and how many seeds there were before
     the cap. `seeds`: {"keys": [Zotero keys], "collections": [collection keys], "texts": [{"title", "text"}]}.
+    Items of the collections whose title says they are not papers (placeholder_title) are left out; papers picked by
+    hand never are.
 
     At most MAX_SEEDS are used. The papers picked by hand (keys, texts) come first; collections fill the rest, most
     recently changed in Zotero first: a few large collections easily hold more than the cap, and failing the whole run
@@ -133,7 +154,7 @@ def seed_matrix(searcher, seeds: dict, lock, hidden: set[str] = frozenset()) -> 
         searcher._refresh()
         known = lambda paths: [p for p in paths if p in searcher.note_index and p not in hidden]  # noqa: E731
         picked = known(sorted({f"zotero/{k}" for k in seeds.get("keys") or []}))
-        rows = _rows(searcher.db, collections, hidden) if collections else []
+        rows = [r for r in _rows(searcher.db, collections, hidden) if not placeholder_title(r[1], r[2].get("doi", ""))] if collections else []
         mtime = dict(searcher.db.execute("SELECT path, mtime FROM notes WHERE source='zotero'")) if rows else {}
         rest = known(sorted({p for p, _, _ in rows} - set(picked), key=lambda p: (-(mtime.get(p) or 0.0), p)))
         total = len(picked) + len(rest) + len(texts)

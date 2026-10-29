@@ -311,7 +311,7 @@ def _big_collection(searcher, n=709):
     for i in range(n):
         path, meta = f"zotero/BIG{i:04d}", json.dumps({"collection_keys": ["BIG"]})
         searcher.db.execute("INSERT INTO notes (path, title, folder, source, tags, mtime, size, frontmatter, meta) "
-                            "VALUES (?, ?, 'zotero', 'zotero', '', ?, 1, '', ?)", (path, f"Paper {i}", start + i, meta))
+                            "VALUES (?, ?, 'zotero', 'zotero', '', ?, 1, '', ?)", (path, f"Invented paper number {i}", start + i, meta))
         searcher.db.execute("INSERT INTO vecs (id, path, vec) VALUES (?, ?, ?)",
                             (100 + i, path, searcher.embed([f"paper number {i} topic{i}"])[0].astype(np.float16).tobytes()))
     searcher.db.execute("INSERT INTO collections VALUES ('BIG', 'Big', 'PARENT')")
@@ -336,3 +336,40 @@ def test_a_radar_whose_collections_hold_more_than_the_cap_still_scores(api, sear
     status, got = api("POST", "/radar/score", {"scope": {"collections": None}, "seeds": seeds, "items": [{"id": "x", "text": "molecule"}]})
     assert status == 200 and "seed_best" in got["scores"]["x"]
     assert got["seeds"] == {"used": radar_api.MAX_SEEDS, "of": 709 + 2}  # BIG, AAA, BBB
+
+
+def _add_item(searcher, key, title, collection, doi="", vid=None):
+    meta = json.dumps({"collection_keys": [collection], **({"doi": doi} if doi else {})})
+    searcher.db.execute("INSERT INTO notes (path, title, folder, source, tags, mtime, size, frontmatter, meta) "
+                        "VALUES (?, ?, 'zotero', 'zotero', '', ?, 1, '', ?)", (f"zotero/{key}", title, time.time(), meta))
+    searcher.db.execute("INSERT INTO vecs (id, path, vec) VALUES (?, ?, ?)",
+                        (vid, f"zotero/{key}", searcher.embed([f"{title} words"])[0].astype(np.float16).tobytes()))
+
+
+@pytest.mark.parametrize("title", [
+    "Supplementary information for:", "1 Supplementary Information: invented force fields 2 and more", "Supporting Material",
+    "A dissertation submitted in partial satisfaction of the requirements for the degree of doctor of philosophy",
+    "Untitled", "Inventedsite", "Invented & Co", "invented_slides_final.pdf", "notebook.nb", "owner/invented-repo",
+    "[ http://invented.example ]", "apps.invented.example/account/view?ref=1"])
+def test_placeholder_titles_are_recognised(title):
+    assert radar_api.placeholder_title(title)
+
+
+@pytest.mark.parametrize("title, doi", [
+    ("Neural network force fields", ""), ("Invented operator representations", ""), ("Excitons", "10.1/short"),
+    ("Thesis-free <i>GW</i> calculations for invented solids", "")])
+def test_paper_titles_are_kept(title, doi):
+    assert not radar_api.placeholder_title(title, doi)
+
+
+def test_seeds_from_collections_leave_out_items_that_are_not_papers(searcher):
+    for n, title in enumerate(["Supplementary information for:", "A dissertation submitted in partial satisfaction of the requirements",
+                               "owner/invented-repo"]):
+        _add_item(searcher, f"JUNK{n}", title, "OTHER", vid=900 + n)
+    _add_item(searcher, "SHORT", "Excitons", "OTHER", doi="10.1/short", vid=950)
+    searcher.db.execute("INSERT OR REPLACE INTO meta VALUES ('indexed_at', ?)", (str(time.time() + 1),))
+    searcher.db.commit()
+    _, labels, total = radar_api.seed_matrix(searcher, {"collections": ["OTHER"]}, threading.Lock())
+    assert set(labels) == {"zotero/CCC", "zotero/SHORT"} and total == 2
+    _, picked, _ = radar_api.seed_matrix(searcher, {"keys": ["JUNK0"], "collections": ["OTHER"]}, threading.Lock())
+    assert "zotero/JUNK0" in picked, "a paper picked by hand is kept whatever its title"
