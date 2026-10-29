@@ -7,7 +7,6 @@ import { collectRadar, SEED_WINDOW_DAYS } from '../src/radar-run.js';
 import { politeFetch } from '../src/radar-sources.js';
 import { arxivQuery, arxivCategoryFeed } from '../src/scholarly.js';
 import { myPapers, calibrateRadar } from '../src/radar-seeds.js';
-import { seedLine } from '../src/radar-why.js';
 import { emptyState } from '../src/radar-state.js';
 import { feedXml, res, routedFetch, radarLibrary, profile } from './support/radar-fakes.mjs';
 
@@ -204,11 +203,6 @@ test('calibration reads the arXiv API when the daily RSS listings are empty (wee
   assert.ok(urls.some((u) => u.includes('search_query=cat:cond-mat.mtrl-sci')));
 });
 
-test('the why line names the closest seed', () => {
-  assert.equal(seedLine('Band gaps of frameworks', 0.8412, true), 'Close to “Band gaps of frameworks” (0.84, whole paper).');
-  assert.equal(seedLine('x'.repeat(120), 0.8, false).length < 110, true);
-});
-
 test('namesakes: the one with works in the library wins; with none, the one whose work reads closest to it', async () => {
   const people = [{ id: 'https://openalex.org/A1', display_name: 'Sam Vole', works_count: 30 }, { id: 'https://openalex.org/A2', display_name: 'Sam Vole', works_count: 8 }];
   const works = { A1: [{ id: 'W1', doi: 'https://doi.org/10.1/econ', display_name: 'Exchange rates in markets', type: 'article', abstract_inverted_index: { markets: [0] } }],
@@ -229,10 +223,10 @@ test('namesakes: the one with works in the library wins; with none, the one whos
   assert.equal((await myPapers({ fetch, library: /** @type {any} */ (close), name: 'Sam Vole' })).chosen, 'A2');
 });
 
-test('the why line is the AI summary; the seed is named only when the model wrote nothing', async () => {
+test('the why line is the AI summary alone; the seed is never named', async () => {
   const { whyLines } = await import('../src/radar-why.js');
   const item = (id, title) => /** @type {any} */ ({ id, title, abstract: 'a', authors: [], venue: '', why: { similarity: 0.84, seed: { label: 'zotero/K1', title: 'Band gaps of frameworks', whole: true } } });
   const out = await whyLines([item('a', 'One'), item('b', 'Two')], { topics: [], turn: async () => ({ lines: [{ n: 1, line: 'It measures band gaps in two new frameworks.' }] }) });
   assert.equal(out.lines.get('a'), 'It measures band gaps in two new frameworks.', 'no "Close to" in front of the summary');
-  assert.match(out.lines.get('b') ?? '', /^Close to/, 'a row without a summary still says why it is there');
+  assert.equal(out.lines.get('b'), undefined, 'a row without a summary gets no line, not "Close to"');
 });

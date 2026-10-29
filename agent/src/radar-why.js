@@ -50,17 +50,10 @@ export async function whyLines(items, ctx) {
     const said = lines.get(it.id);
     lines.set(it.id, `${learnedLine(learned)}${said ? ` ${said}` : ''}`);
   }
-  // A seed radar's line is the AI summary alone (the user's choice, 2026-10-21); which seed a paper is close to stays in
-  // why.seed. Only a row the model wrote nothing for falls back to naming that seed.
-  for (const it of items) {
-    const seed = it.why?.seed;
-    if (seed && !lines.get(it.id)) lines.set(it.id, seedLine(seed.title, it.why?.similarity ?? 0, seed.whole));
-  }
+  // A seed radar's line is the AI summary alone; which seed a paper is close to stays in why.seed and is never shown
+  // (the user's choice, 2026-10-21 and 2026-10-29: "Close to “seed” (0.86)" says nothing a reader cares about).
   return { lines, error };
 }
-
-/** "Close to “Title” (0.84, whole paper)." @param {string} title @param {number} similarity @param {boolean} whole */
-export const seedLine = (title, similarity, whole) => `Close to \u201C${title.length > 90 ? `${title.slice(0, 89).trimEnd()}\u2026` : title}\u201D (${similarity.toFixed(2)}${whole ? ', whole paper' : ''}).`;
 
 /** The fixed sentence for a row that matched a learned topic. @param {string} topic */
 export const learnedLine = (topic) => `Matches \u201C${topic}\u201D, learned from your ratings.`;

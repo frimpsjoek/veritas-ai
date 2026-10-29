@@ -137,8 +137,8 @@ function paperEntry(doc, row, links, api, digest, show = 'summary', onView) {
   if (meta) text.append(h(doc, 'p', 'sbw-paper-meta', meta));
   const abstract = String(row.abstract ?? '').trim();
   // The AI summary unless the person chose abstracts; a paper with no abstract keeps its summary either way.
-  // Issues written before 2026-10-21 put "Close to “seed” (0.84, whole paper)." in front of the summary; only the summary shows.
-  const line = String(row.radar?.why_line ?? row.radar?.reason ?? '').replace(/^Close to \u201C[^\u201D]*\u201D \([^)]*\)\.\s+(?=\S)/, '') || null;
+  // Issues written before 2026-10-29 may hold "Close to “seed” (0.84, whole paper).", alone or before the summary; it never shows.
+  const line = String(row.radar?.why_line ?? row.radar?.reason ?? '').replace(/^Close to \u201C[^\u201D]*\u201D \([^)]*\)\.\s*/, '') || null;
   const why = show === 'abstract' && abstract ? null : line;
   if (why) text.append(h(doc, 'p', 'sbw-paper-why', why));
   else if (abstract) text.append(h(doc, 'p', 'sbw-paper-why', abstract));
