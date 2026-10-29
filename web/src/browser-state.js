@@ -19,6 +19,14 @@ export function createHistory() {
   };
 }
 
+/** What ← does: the page before in the panel, or, on the first page, close the panel (focus goes back to the link
+ *  it was opened from), so ← always does something. A framed site's own history is not reachable from here.
+ *  @param {ReturnType<typeof createHistory>} history @returns {{ show: Entry } | { close: true }} */
+export function stepBack(history) {
+  const entry = history.back();
+  return entry ? { show: entry } : { close: true };
+}
+
 /** What to ask /web/page for. A framed http page inside an https app is blocked by the browser (mixed content), so it
  *  gets the reader view straight away. @param {string} url @param {string} appProtocol e.g. "https:" @returns {'reader' | undefined} */
 export function firstPrefer(url, appProtocol) {
@@ -65,4 +73,57 @@ export function sourceOf(answer) {
   }
   if (answer?.source === 'openalex') return 'Abstract only';
   return '';
+}
+
+/** What the reader view draws for a reader answer: the header and the text in the note's prose font (one family),
+ *  an abstract as plain text under a small "Abstract" label, and math only where the server said the page has it
+ *  (arXiv, LaTeXML, MathML), so "$5 and $10" on an ordinary page stays money. A paper (arXiv, or a DOI's abstract)
+ *  adds a quiet line of id and dates, small subject chips and its links (PDF, Full text) as buttons in the header.
+ *  @param {any} answer */
+export function readerPlan(answer) {
+  const paper = answer?.paper ?? {};
+  /** @type {{ label: string, code: string, primary: boolean }[]} */
+  const subjects = (Array.isArray(paper.subjects) ? paper.subjects : [])
+    .map((/** @type {any} */ s) => ({ label: String(s?.name || s?.code || ''), code: String(s?.code ?? ''), primary: s?.primary === true }))
+    .filter((s) => s.label);
+  const meta = [
+    paper.arxiv ? `arXiv:${paper.arxiv}${paper.version ?? ''}` : '',
+    paper.submitted ? `Submitted ${paper.submitted}` : '',
+    paper.revised ? `revised ${paper.revised}` : '',
+  ].filter(Boolean).join(' · ');
+  /** @type {{ label: string, url: string, kind: string }[]} */
+  const links = (Array.isArray(answer?.links) ? answer.links : [])
+    .filter((/** @type {any} */ l) => l?.label && /^https?:\/\//i.test(String(l?.url ?? '')))
+    .map((/** @type {any} */ l) => ({ label: String(l.label), url: String(l.url), kind: String(l.kind ?? '') }));
+  return {
+    subjects,
+    meta,
+    links,
+    paper: answer?.source === 'arxiv' || answer?.source === 'openalex',
+    articleClass: 'sbw-browser-article sbw-prose',
+    title: String(answer?.title ?? ''),
+    byline: String(answer?.byline ?? ''),
+    abstract: String(answer?.abstract ?? ''),
+    abstractLabel: 'Abstract',
+    math: answer?.math === true,
+    html: String(answer?.html ?? ''),
+  };
+}
+
+// Inline TeX in an answer the server marked as math: \(…\), \[…\], $$…$$ and $…$. Unlike titleNodes (chat/markdown.js),
+// a $ may follow a letter, since arXiv writes "PtSe$_2$"; the money rules stay (no space inside the dollars, no digit
+// after the closing one), so "$5 and $10" is still text.
+const TEX = /\\\((.+?)\\\)|\\\[(.+?)\\\]|\$\$(.+?)\$\$|(?<![\\$])\$(?=[^\s$])((?:[^$\n]|\\\$)*?[^\s$\\])\$(?![\d$])/g;
+
+/** A text split into plain runs and TeX. @param {string} text @returns {({ text: string } | { tex: string })[]} */
+export function mathParts(text) {
+  /** @type {({ text: string } | { tex: string })[]} */ const out = [];
+  let at = 0;
+  for (const m of String(text).matchAll(TEX)) {
+    if ((m.index ?? 0) > at) out.push({ text: text.slice(at, m.index) });
+    out.push({ tex: (m[1] ?? m[2] ?? m[3] ?? m[4]).trim() });
+    at = (m.index ?? 0) + m[0].length;
+  }
+  if (at < text.length || !out.length) out.push({ text: text.slice(at) });
+  return out;
 }

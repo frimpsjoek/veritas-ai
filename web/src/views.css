@@ -236,6 +236,20 @@ p.sbw-prose { margin: 0 0 var(--sbw-s3); max-width: var(--measure); }
 .sbw-browser-article { box-sizing: border-box; max-width: 680px; margin-inline: auto; padding: var(--sbw-s4) var(--sbw-s4) var(--sbw-s5, 48px); }
 .sbw-browser-article img { max-width: 100%; height: auto; }
 .sbw-browser-article .sbw-note-body a { overflow-wrap: anywhere; }
+/* One family for the whole reader (2026-10-29): the title and byline in the note's prose font, the title larger; the
+   body's headings too. The abstract is body text under a small label, never a narrow grey quote. */
+.sbw-browser-article .sbw-reader-head { margin-bottom: var(--sbw-s4); }
+.sbw-browser-article .sbw-reader-title { font-size: 28px; font-weight: 500; line-height: 1.2; letter-spacing: -0.01em; }
+.sbw-browser-article .sbw-reader-authors { font-size: 16px; line-height: 1.45; color: var(--sb-ui-muted); }
+.sbw-browser-article .sbw-note-body :is(h1, h2, h3, h4, h5, h6) { font-family: inherit; }
+.sbw-browser-article .sbw-note-body h2.sbw-reader-label { margin: var(--sbw-s4) 0 var(--sbw-s1); font-size: var(--sbw-t-small); font-weight: 600; letter-spacing: 0.02em; color: var(--sb-ui-muted); }
+.sbw-browser-article .sbw-note-body > h2.sbw-reader-label:first-child { margin-top: 0; }
+.sbw-browser-article .sbw-reader-venue { margin: var(--sbw-s1) 0 0; }
+.sbw-reader-chips { display: flex; flex-wrap: wrap; gap: var(--sbw-s1); margin: var(--sbw-s2) 0 0; }
+.sbw-reader-chip { padding: 1px 8px; border-radius: 999px; background: var(--sb-ui-bg-side); color: var(--sb-ui-muted); font-family: var(--sb-ui-font); font-size: 12px; line-height: 1.6; }
+.sbw-reader-chip.is-primary { color: var(--sb-ui-text); }
+.sbw-reader-links { display: flex; flex-wrap: wrap; gap: var(--sbw-s1); margin: var(--sbw-s2) 0 0 calc(-1 * var(--sbw-s2)); }
+.sbw-reader-links .sbw-quiet { margin: 0; font-family: var(--sb-ui-font); font-size: var(--sbw-t-small); }
 .sbw-browser-status { padding: var(--sbw-s4); }
 .sbw-browser-card { box-sizing: border-box; max-width: 420px; margin: 18vh auto 0; padding: var(--sbw-s4); text-align: center; }
 .sbw-browser-card-title { margin: 0 0 var(--sbw-s2); font-size: 18px; font-weight: 600; }

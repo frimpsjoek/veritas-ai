@@ -75,6 +75,17 @@ export async function runBrowserChecks(browser, port, outDir) {
     await page.click('.sbw-browser-tool[aria-label="Back"]');
     await page.waitForFunction(() => document.querySelector('.sbw-browser-title')?.textContent === 'Voles in the reader');
     await page.screenshot({ path: join(outDir, `browser-reader-${width}.png`) });
+    // on the first page ← closes the panel instead of sitting greyed out
+    await page.click('.sbw-browser-tool[aria-label="Close"]');
+    await open('https://reader.example/first');
+    await page.waitForSelector('.sbw-browser-article');
+    const firstBack = (await panel()).back;
+    await page.click('.sbw-browser-tool[aria-label="Back"]');
+    check(`${tag} ← on the first page closes the panel`, firstBack === false && (await panel()).open === false, { firstBack });
+    await open('https://frame.example/page');
+    await page.waitForSelector('.sbw-browser-frame');
+    await page.click('.sbw-browser-text');
+    await page.waitForSelector('.sbw-browser-article');
 
     // a PDF link goes to the PDF reader, with no /web/page round trip
     const before = calls.filter((c) => c.includes('/web/page')).length;
@@ -105,6 +116,37 @@ export async function runBrowserChecks(browser, port, outDir) {
     const bar = await page.evaluate(() => { const b = document.querySelector('.sbw-browser .sbw-hl-bar'); return !!b && !b.hidden; });
     check(`${tag} selecting text in a web PDF offers no highlight bar`, !bar);
     await page.evaluate(() => getSelection().removeAllRanges());
+
+    // an arXiv paper (2026-10-29): the title once, one font family, the abstract under a small label with its TeX
+    // drawn, subject chips and the PDF / Full text buttons in the header; an ordinary page's "$5 and $10" stays text
+    await open('https://arxiv.org/abs/2607.25690');
+    await page.waitForSelector('.sbw-browser-article .sbw-reader-label');
+    const paper = await page.evaluate(() => {
+      const article = document.querySelector('.sbw-browser-article');
+      const family = (sel) => { const n = article.querySelector(sel); return n ? getComputedStyle(n).fontFamily : null; };
+      return {
+        titles: (article.textContent.match(/First-Principles Wannier Representation/g) ?? []).length,
+        titleFont: family('.sbw-reader-title'), bodyFont: family('.sbw-note-body p'), bylineFont: family('.sbw-reader-authors'),
+        label: article.querySelector('.sbw-note-body .sbw-reader-label')?.textContent,
+        quotes: article.querySelectorAll('blockquote').length,
+        math: article.querySelectorAll('.sbw-note-body .sb-math math').length,
+        chips: [...article.querySelectorAll('.sbw-reader-chip')].map((n) => n.textContent),
+        links: [...article.querySelectorAll('.sbw-reader-links button')].map((n) => n.textContent),
+        meta: article.querySelector('.sbw-reader-venue')?.textContent,
+        sideways: document.scrollingElement.scrollWidth > innerWidth,
+      };
+    });
+    check(`${tag} an arXiv paper shows its title once, in the same font family as its text`, paper.titles === 1 && paper.titleFont === paper.bodyFont && paper.bylineFont === paper.bodyFont, paper);
+    check(`${tag} the abstract is body text under a small label, its TeX drawn`, paper.label === 'Abstract' && paper.quotes === 0 && paper.math === 1, paper);
+    check(`${tag} subjects are chips and PDF / Full text are header buttons`, JSON.stringify(paper.chips) === '["Mesoscale and Nanoscale Physics","Materials Science"]' && JSON.stringify(paper.links) === '["PDF","Full text"]' && paper.meta === 'arXiv:2607.25690v2 · Submitted 28 Jul 2026 · revised 25 Oct 2026' && !paper.sideways, paper);
+    await page.screenshot({ path: join(outDir, `browser-arxiv-${width}.png`) });
+    await page.click('.sbw-reader-links button:last-child');
+    await page.waitForFunction(() => document.querySelector('.sbw-browser-title')?.textContent === 'The other article');
+    check(`${tag} "Full text" opens in the panel`, (await panel()).open);
+    await open('https://shop.example/tickets');
+    await page.waitForFunction(() => document.querySelector('.sbw-browser-title')?.textContent === 'Tickets');
+    const shop = await page.evaluate(() => ({ math: document.querySelectorAll('.sbw-browser-article .sb-math').length, text: document.querySelector('.sbw-browser-article .sbw-note-body')?.textContent ?? '' }));
+    check(`${tag} prices on an ordinary page stay text`, shop.math === 0 && shop.text.includes('$5 and $10'), shop);
 
     // the bar: ↗ outside, reload asks again, close and Escape
     await open('https://frame.example/page');
@@ -142,7 +184,7 @@ export async function runBrowserChecks(browser, port, outDir) {
     await page.click('.sbw-browser-tool[aria-label="Close"]');
     await page.click(noteLink, { button: 'right' });
     const menu = await page.evaluate(() => [...document.querySelectorAll('.sb-link-menu .sb-art-item-label')].map((n) => n.textContent));
-    check(`${tag} right-click on a link offers both places`, JSON.stringify(menu) === '["Open in Second Brain","Open in your browser"]', menu);
+    check(`${tag} right-click on a link offers both places`, JSON.stringify(menu) === '["Open in Veritas","Open in your browser"]', menu);
     await page.evaluate(() => { window.__opened = []; });
     await page.click('.sb-link-menu .sb-art-item:last-child');
     check(`${tag} "Open in your browser" goes outside and the menu closes`, (await page.evaluate(() => window.__opened))[0]?.url === 'https://example.org/voles' && (await page.locator('.sb-link-menu').count()) === 0 && (await panel()).open === false);

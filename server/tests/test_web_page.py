@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import sqlite3
 
 import pytest
@@ -175,7 +176,9 @@ def test_a_closed_paper_shows_its_abstract_and_the_publisher_link(web):
     pages[openalex_url(DOI)] = Response("x", 200, {}, json.dumps(WORK_CLOSED).encode())
     answer = web_page.page(f"https://doi.org/{DOI}", get=get)
     assert answer["mode"] == "reader" and answer["source"] == "openalex"
-    assert "Spins flip here." in answer["html"] and 'href="https://pubs.acs.org/doi/10.1021/acsnano.6c11666"' in answer["html"]
+    # the same paper shape as an arXiv answer: the abstract under its label, the way out as a button in the header
+    assert answer["abstract"] == "Spins flip here." and "Only the abstract is open." in answer["html"]
+    assert answer["links"] == [{"label": "Publisher's page", "url": "https://pubs.acs.org/doi/10.1021/acsnano.6c11666", "kind": "page"}]
     assert answer["byline"] == "A. Author, B. Author"
 
 
@@ -241,3 +244,94 @@ def test_pdf_file_for_a_doi_in_the_library_is_the_library_file(web, monkeypatch,
     monkeypatch.setattr(web_page, "library_pdf", lambda doi: ("ATTA1234", "t"))
     monkeypatch.setattr(pdf_route, "resolve", lambda key: mine)
     assert web_page.pdf_file(f"https://doi.org/{DOI}", get=get) == mine and not calls
+
+
+# --- a cleaner reader view (2026-10-29) ----------------------------------------------------------------------------
+
+ARXIV_ABS = (Path(__file__).parent / "fixtures" / "web_page" / "arxiv-abs-2607.25690.html").read_bytes()
+CHROME = ["Condensed Matter &gt; Mesoscale", "View a PDF of the paper", "View PDF", "HTML (experimental)",
+          "Submission history", "Full-text links", "Current browse context", "References &amp; Citations",
+          "Loading...", "Toggle", "(What is", "Bookmark", "Cite as", "Change to browse by",
+          "Which authors of this paper", "Disable MathJax", "F\\'elisaz", "Title:", "Authors:", "Abstract:"]
+
+
+def test_a_page_without_an_article_loses_its_chrome_and_keeps_its_text():
+    """The real arXiv abstract page (fetched once, 2026-10-28): no <article> or <main>, so the whole body is read and
+    the menus, toggles, link lists and labels around the abstract have to go structurally."""
+    read = web_page.reader("https://arxiv.org/abs/2607.25690", ARXIV_ABS, "text/html; charset=utf-8")
+    body = read["html"]
+    for phrase in CHROME:
+        assert phrase not in body, phrase
+    assert read["title"] == "First-Principles Wannier Representation of Proximity Effects"
+    assert "First-Principles Wannier Representation" not in body, "the title shows once, in the header"
+    assert read["byline"] == "Yaroslav Zhumagulov, Johan Félisaz, Stepan S. Tsirkin, Denis Kochan, Oleg V. Yazyev"
+    assert "Proximity effects in layered heterostructures" in body and "correlated-phase calculations." in body
+    assert '<h2 class="sbw-reader-label">Abstract</h2><p>Proximity effects' in body, "a small label, not a blockquote"
+    assert "<blockquote>" not in body
+    assert "Mesoscale and Nanoscale Physics (cond-mat.mes-hall)" in body, "the subjects row is content"
+
+
+BLOG = """<header><a href="/">Home</a> <a href="/about">About</a></header>
+<article><h1>Voles of the northern meadows</h1>
+<p>By Ana Field</p>
+<p>Field voles dig shallow runways under the grass, and in a wet spring those runways flood within hours.</p>
+<p>See <a href="/maps">the maps</a>.</p>
+<ul><li><a href="/a">One study</a></li><li><a href="/b">Another study</a></li></ul>
+<p>Toggle the layers on the map to compare the two winters; the difference is clearest along the river.</p>
+<p>Loading the burrows by hand took us three seasons, and the counts below are the result of that work.</p>
+</article>"""
+
+
+def test_an_article_keeps_every_paragraph():
+    read = web_page.reader("https://blog.example/voles", f"<html><head><title>Voles of the northern meadows</title></head><body>{BLOG}</body></html>".encode())
+    body = read["html"]
+    for kept in ["By Ana Field", "Field voles dig", '<a href="https://blog.example/maps">the maps</a>', "One study",
+                 "Another study", "Toggle the layers", "Loading the burrows"]:
+        assert kept in body, kept
+    assert "Voles of the northern meadows" not in body, "the heading repeating the title goes"
+
+
+def test_a_page_without_an_article_keeps_its_paragraphs_and_drops_link_lists():
+    page = ("<div class=menu><a href=/a>Alpha</a> | <a href=/b>Beta</a> | <a href=/c>Gamma</a></div>"
+            "<div class=post><h2>Winter counts</h2><div>Read Later</div>"
+            "<div>Field voles dig shallow runways under the grass, and in a wet spring those runways flood.</div>"
+            "<p>See <a href='/maps'>the maps</a> for where we counted, and the table for how many we found.</p>"
+            "<p>Toggle the layers on the map to compare the two winters; the river shows it most clearly.</p>"
+            "<p>" + "We counted every burrow along the transects twice, once in each winter. " * 3 + "</p><div>Read Later</div></div>"
+            "<div><ul><li><a href=/x>Privacy</a></li><li><a href=/y>Terms</a></li><li><a href=/z>Contact</a></li></ul></div>")
+    read = web_page.reader("https://blog.example/c", f"<html><body>{page}</body></html>".encode())
+    body = read["html"]
+    for kept in ["Winter counts", "Field voles dig", "the maps", "Toggle the layers", "We counted every burrow"]:
+        assert kept in body, kept
+    for gone in ["Alpha", "Privacy", "Terms", "Read Later"]:  # a short line repeated is a button's label
+        assert gone not in body, gone
+    assert "<p>Field voles dig" in body, "loose text in a div becomes its own paragraph"
+
+
+def test_money_is_not_math_but_mathml_is():
+    prices = "<article><p>" + "Tickets cost $5 and $10 at the door, and the late show is cheaper on weekdays. " * 4 + "</p></article>"
+    read = web_page.reader("https://shop.example/", f"<html><body>{prices}</body></html>".encode())
+    assert "$5 and $10" in read["html"] and not read.get("math")
+    formula = ('<article><p>' + "The energy of the state follows from the equation below, as derived above. " * 3 +
+               '<math alttext="E=mc^{2}" display="inline"><mi>E</mi><annotation encoding="application/x-tex">E=mc^{2}'
+               '</annotation></math> holds.</p></article>')
+    read = web_page.reader("https://physics.example/", f"<html><body>{formula}</body></html>".encode())
+    assert "$E=mc^{2}$ holds." in read["html"] and read["math"] is True
+
+
+def test_a_byline_of_last_first_names_reads_first_last():
+    def byline(*authors):
+        metas = "".join(f'<meta name="citation_author" content="{a}">' for a in authors)
+        return web_page.reader("https://x.example/", f"<html><head>{metas}</head><body><article>{ARTICLE}</article></body></html>".encode())["byline"]
+    assert byline("Curie, Marie", "Bohr, Niels") == "Marie Curie, Niels Bohr"
+    assert byline("Marie Curie", "Bohr, Niels") == "Marie Curie, Bohr, Niels", "flipped only when every name has one comma"
+    assert byline(*[f"Last{i}, First{i}" for i in range(8)]) == ", ".join(f"First{i} Last{i}" for i in range(6)) + " et al."
+
+
+def test_a_title_with_the_site_name_still_counts_as_repeated():
+    """Quanta (2026-10-29): <title> "Story | Quanta Magazine", and the story's name twice at the top of its text."""
+    head = '<title>How Spiders Spin Silk | Field Notes</title><meta property="og:site_name" content="Field Notes">'
+    page = f"<html><head>{head}</head><body><main><p>How Spiders Spin Silk</p><h1>How Spiders Spin Silk</h1>{ARTICLE}</main></body></html>"
+    read = web_page.reader("https://notes.example/silk", page.encode())
+    assert read["title"] == "How Spiders Spin Silk", "the site's name is not part of the title"
+    assert "How Spiders Spin Silk" not in read["html"]

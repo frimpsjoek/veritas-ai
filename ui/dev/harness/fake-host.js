@@ -290,7 +290,8 @@ export const LOCAL_MODELS = [
  * leaves the host without `saveFile` (the Download fallbacks), whose calls are otherwise recorded in `_saved`.
  * @returns {import("../../src/host").UiHost & { _saved: { name: string, text: string, mime: string }[], _setWhere(next: "server" | "local" | "offline"): void,
  *           _setContext(items: import("../../src/host").ContextItem[]): void,
- *           ready: Promise<void>, json(): Promise<any>, setContext(items: import("../../src/host").ContextItem[]): void, setOpenRef(): void, setBrowser(fn: ((url: string) => void) | null): void }}
+ *           ready: Promise<void>, json(): Promise<any>, setContext(items: import("../../src/host").ContextItem[]): void, setOpenRef(): void, setBrowser(fn: ((url: string) => void) | null): void,
+ *           server: { url: string, sameOrigin: boolean }, assets: { sameOrigin: boolean, url(path: string): Promise<string>, bytes(path: string): Promise<ArrayBuffer>, frame(route: string, query: Record<string, string>): Promise<string>, revokeAll(): void } }}
  */
 export function createFakeHost(opts = {}) {
   const prefsData = {};
@@ -372,6 +373,10 @@ export function createFakeHost(opts = {}) {
     setOpenRef() {},
     logError() {},
     mount(root) { document.body.appendChild(root); },
+    // the web host's server and its same-origin assets (src/web/assets.js): the harness serves everything itself
+    server: { url: globalThis.location?.origin ?? '', sameOrigin: true },
+    assets: { sameOrigin: true, async url(path) { return path; }, async bytes(path) { return (await fetch(path)).arrayBuffer(); },
+      async frame(route, query) { return `${route}?${new URLSearchParams(query)}`; }, revokeAll() {} },
 
     // ---------- unit C1 additions (host.d.ts)
     async confirm() { return true; },
