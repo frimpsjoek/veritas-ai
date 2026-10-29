@@ -107,6 +107,21 @@ test('size.fresh caps the digest, best score first', async () => {
   assert.deepEqual(out.picked.map((p) => p.doi), ['10.9999/inv.5', '10.9999/inv.4']);
 });
 
+test('a run looks up the abstracts of title-only papers before it ranks them, and remembers the misses', async () => {
+  const fetchFn = routedFetch({ [FEED]: res(200, feedWith(2)) });
+  const words = 'Thalamic spindle bursts were recorded in invented sleepers over many nights and compared across ages and recording montages.';
+  const abstractFetch = routedFetch({ 'https://api.crossref.org/works/10.9999%2Finv.1': res(200, JSON.stringify({ message: { abstract: `<jats:p>${words}</jats:p>` } })) });
+  const library = radarLibrary({ sim: (t) => (t.includes('Thalamic') ? 0.9 : 0.75) });
+  const out = await collectRadar({ config: config(), since: '2026-10-01', now: '2026-10-07T07:00:00.000Z', fetch: fetchFn, library, state: emptyState(), abstractFetch });
+  assert.equal(out.picked[0].doi, '10.9999/inv.1');
+  assert.equal(out.picked[0].abstract, words);
+  assert.ok(library.calls.score.at(-1).items.some((i) => i.text.includes('Thalamic')), 'the final ranking read the abstract');
+  assert.deepEqual(out.state.abstracts['doi:10.9999/inv.2'], { text: '', at: Date.parse('2026-10-07T07:00:00.000Z') });
+  const again = await collectRadar({ config: config(), since: '2026-10-01', now: '2026-10-08T07:00:00.000Z', fetch: fetchFn, library: radarLibrary(), state: { ...emptyState(), abstracts: out.state.abstracts }, abstractFetch });
+  assert.equal(again.picked.find((p) => p.doi === '10.9999/inv.1')?.abstract, words, 'a found abstract is reused');
+  assert.equal(abstractFetch.calls.filter((c) => c.url.includes('inv.2')).length, 3, 'a remembered miss is not asked again (OpenAlex, Crossref and Semantic Scholar once)');
+});
+
 test('a backend without the radar methods fails with a plain message', async () => {
   const bare = { async search() { return []; }, async read() { return null; }, async related() { return []; }, async resolve() { return new Map(); } };
   await assert.rejects(run(config(), routedFetch({}), bare), /library server/);

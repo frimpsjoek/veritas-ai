@@ -3,12 +3,12 @@
 // is known, score, pick the top rows, and work out the next RadarState. It writes nothing: core.js writes the session
 // first and the state after it, so a crash between the two shows a paper twice rather than never.
 
-import { fetchAll, politeFetch, REQUEST_BUDGET } from './radar-sources.js';
+import { fetchAll, politeFetch, REQUEST_BUDGET, HOST_GAPS } from './radar-sources.js';
 import { worthReading } from './radar-older.js';
 import { mightInterest } from './radar-discover.js';
 import { mergeItems, dropKnown, pickTop, keysOf, seedBody } from './radar.js';
 import { score, rescoreWhole } from './radar-score.js';
-import { abstractsByDoi } from './scholarly.js';
+import { abstractsByDoi, fillAbstracts } from './scholarly.js';
 
 /** @typedef {import("./radar-types").RadarItem} RadarItem */
 /** @typedef {import("./radar-types").RadarState} RadarState */
@@ -23,14 +23,22 @@ export const ABSTRACT_MARGIN = 0.03;
 /** Until a radar is calibrated, the 2026-10-11 floor stands in. */
 const DEFAULT_CUT = 0.7;
 const HISTORY_DAYS = 7;
+/** Title-only papers whose abstract is looked up one by one per run (Crossref, Semantic Scholar, arXiv), best first. */
+export const ABSTRACT_LOOKUPS = 20;
+
+/** The fetch for those lookups: at most one request a second to each of the two keyless APIs (two per paper at most).
+ *  @param {typeof fetch} fetchFn */
+export const abstractNet = (fetchFn) => politeFetch(fetchFn, 2 * ABSTRACT_LOOKUPS + 2, { gaps: { ...HOST_GAPS, 'api.crossref.org': 1000, 'api.semanticscholar.org': 1000 } }).fetch;
 export const NEEDS_SERVER = 'The reading radar needs the library server, which is not available here.';
 
 /**
  * @param {{
  *   config: import("./radar-types").RadarConfig, since: string, now: string, fetch: typeof fetch,
  *   library: import("./tools").LibraryBackend, hub?: any, state: RadarState, signal?: AbortSignal, budget?: number,
- *   keyed?: boolean,
+ *   keyed?: boolean, abstractFetch?: typeof fetch,
  * }} run `keyed`: the user has saved an OpenAlex key; "Might interest you" needs one, and is left out when it is false or absent.
+ *   `abstractFetch` (abstractNet): papers that came without an abstract are looked up before the final ranking; absent,
+ *   only the picked rows are, in OpenAlex, after it.
  * @returns {Promise<{ picked: RadarItem[], older: RadarItem[], olderNote: string | null, discover: RadarItem[], discoverNote: string | null, announced: string[], state: RadarState, failed: { source: string, error: string }[], sourcesAnswered: number, requests: number }>}
  */
 export async function collectRadar(run) {
@@ -67,11 +75,21 @@ export async function collectRadar(run) {
   const threshold = config.threshold ?? null;
   const cut = seeds ? (threshold ? threshold.abstract - ABSTRACT_MARGIN : DEFAULT_CUT) : undefined;
   const baseline = threshold?.calibration?.baseline ?? null;
-  let ranked = await score(fresh, { backend: library, collections, profile: config.profile, state, watched, seeds, cut, seedTitle, baseline });
+  const scoring = { backend: library, collections, profile: config.profile, state, watched, seeds, cut, seedTitle, baseline };
+  const abstracts = { ...state.abstracts };
+  if (run.abstractFetch) {
+    // A title shares one noun phrase with a seed and scores as if it were the seed's topic. A first pass orders the
+    // title-only papers so the lookups go to those most likely to be shown; the final pass reads what was found.
+    const first = await score(fresh, { ...scoring, cut: -Infinity });
+    const bare = first.filter((it) => !it.abstract && (it.doi || it.arxiv)).slice(0, ABSTRACT_LOOKUPS);
+    const found = bare.length ? await fillAbstracts(run.abstractFetch, bare, { cache: abstracts, now: Date.parse(run.now), lookups: ABSTRACT_LOOKUPS }) : new Map();
+    for (const it of fresh) it.abstract = found.get(it.id) ?? it.abstract;
+  }
+  let ranked = await score(fresh, scoring);
   if (seeds) ranked = await decideWhole(ranked, { library, seeds, threshold, seedTitle, baseline });
   const top = pickTop(ranked, config.size.fresh);
 
-  const missing = top.filter((it) => !it.abstract && it.doi);
+  const missing = run.abstractFetch ? [] : top.filter((it) => !it.abstract && it.doi);
   if (missing.length) {
     const found = await abstractsByDoi(run.fetch, missing.map((it) => /** @type {string} */ (it.doi)));
     for (const it of missing) it.abstract = found.get(/** @type {string} */ (it.doi)) ?? it.abstract;
@@ -100,7 +118,7 @@ export async function collectRadar(run) {
   } else if (wantsDiscover && run.keyed === false) discoverNote = 'Might interest you skipped (no OpenAlex key)';
 
   /** @type {RadarState} */
-  const next = { ...state, refs, phrases: { ...state.phrases, rotation: state.phrases.rotation + 1, announce: [] }, seen: { ...state.seen }, sourceStatus: { ...state.sourceStatus }, feedCache: { ...state.feedCache }, shown: { ...state.shown } };
+  const next = { ...state, refs, abstracts, phrases: { ...state.phrases, rotation: state.phrases.rotation + 1, announce: [] }, seen: { ...state.seen }, sourceStatus: { ...state.sourceStatus }, feedCache: { ...state.feedCache }, shown: { ...state.shown } };
   // Per source, how many items it gave and how many made the digest, over the last week (spec 021 G2b).
   const keptBy = new Map();
   for (const it of top) for (const id of it.sources) keptBy.set(id, (keptBy.get(id) ?? 0) + 1);

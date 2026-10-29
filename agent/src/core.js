@@ -19,7 +19,7 @@ import { createRadarStore, learningOf } from './radar-state.js';
 import { applyFeedback, forgetLearned, mergeLearned } from './radar-feedback.js';
 import { whyLines } from './radar-why.js';
 import { summaryLine, digestMarkdown, digestFile, sourceLabel } from './radar-digest.js';
-import { collectRadar } from './radar-run.js';
+import { collectRadar, abstractNet } from './radar-run.js';
 import { createProjectStore } from './project-store.js';
 import { validateDraft, dueSlot, nextRun as nextRunAt, planSince, newRows, changeLine as routineChangeLine, quotaAllows } from './routines.js';
 import { CANDIDATES_SCHEMA, candidatesPrompt, REPORT_CAPS } from './prompts.js';
@@ -1162,7 +1162,7 @@ export async function createLocalRuntime(deps) {
     const now = new Date(clock()).toISOString();
     let out;
     try {
-      out = await collectRadar({ config, since, now, fetch: net, library: deps.library, hub: deps.gateway.mcpServers, state: await radarStore.read(routine.id), signal, keyed: Boolean((await settingsStore.get()).openalex.apiKey?.trim()) });
+      out = await collectRadar({ config, since, now, fetch: net, library: deps.library, hub: deps.gateway.mcpServers, state: await radarStore.read(routine.id), signal, keyed: Boolean((await settingsStore.get()).openalex.apiKey?.trim()), abstractFetch: abstractNet(net) });
     } catch (e) { return { status: /** @type {const} */ ('failed'), reason: `${errorText(e).replace(/\.$/, '')}.` }; }
     const failures = out.failed.length ? ` (${out.failed.map((f) => `${f.source} failed: ${f.error}`).join('; ')})` : '';
     if (!out.picked.length) {

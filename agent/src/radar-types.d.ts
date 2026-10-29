@@ -150,6 +150,8 @@ export interface RadarState {
   undo: Record<PaperId, UndoRecord>;
   /** Spec 017; absent in state files written before it, read as empty. */
   phrases: PhraseLedger;
+  /** Abstracts looked up for papers that came without one, by "doi:<doi>" or "arxiv:<id>"; text '' is a miss (asked again after 30 days). Absent in older files. */
+  abstracts?: Record<string, { text: string; at: number }>;
 }
 
 /** A journal OpenAlex knows, as the setup sheet offers it. */
