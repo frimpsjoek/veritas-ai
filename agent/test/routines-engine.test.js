@@ -775,7 +775,10 @@ test('R4 spec check 7: after 10 Not relevant clicks on one topic the next run ra
   t.clock.t += 60_000;
   await ai.routines.runNow(r.id);
   const run2 = await finish(ai, r.id, run1.at);
-  const rows2 = (await ai.sessions.read(run2.session, (await ai.sessions.view(run2.session)).results[0].ref)).rows.slice(0, 10);
+  // The same day, so the second run adds to the first issue: what it ranked are the rows it added.
+  assert.equal(run2.session, run1.session, 'one issue a day');
+  const body2 = await ai.sessions.read(run2.session, (await ai.sessions.view(run2.session)).results[0].ref);
+  const rows2 = body2.rows.filter((x) => body2.addedRows.includes(x.id)).slice(0, 10);
   assert.equal(rows2.filter((x) => topicOf(x) === 'hippocampal').length, 0, 'none of the dismissed topic in the top 10 (it was 10 of 20 before)');
   assert.equal(rows2.length, 10);
   assert.equal(JSON.parse(t.fs.files.get(`/data/radar/${r.id}/state.json`)).sourceStatus['feed:https://j.example/feed'].suggestRemove, true, 'ten dismissals in a row also suggest dropping that feed');
@@ -807,6 +810,49 @@ test('Redo today rebuilds the latest radar issue over the same window: rated pap
   const state = JSON.parse(t.fs.files.get(`/data/radar/${r.id}/state.json`));
   assert.equal(state.seen['doi:10.9999/inv.2'].verdict, 'later');
   await local.dispose();
+});
+
+test('one issue a day: a later run the same day adds to today\'s issue, the next day starts a new one, and Redo forgets both runs', async () => {
+  const paper = (n) => ({ title: `Spindle study number ${n} of sleep`, link: `https://j.example/a/${n}`, doi: `10.9999/inv.${n}`, summary: `Spindles rose in study ${n}.` });
+  let xml = feedXml([2, 3].map(paper));
+  const t = setup({ library: radarLibrary({ known }), fetch: routedFetch({ [RADAR_FEED]: () => res(200, xml) }) });
+  const ai = await t.make();
+  const r = await ai.routines.create(radarDraft());
+  const first = await finish(ai, r.id);
+  assert.equal(first.added, 2);
+
+  xml = feedXml([2, 3, 4].map(paper));
+  t.clock.t += 60_000;
+  await ai.routines.runNow(r.id);
+  const second = await finish(ai, r.id, first.at);
+  assert.equal(second.added, 1);
+  assert.equal(second.session, first.session, 'the same issue');
+  const issues = (await ai.conversations.list()).filter((c) => c.routine === r.id);
+  assert.equal(issues.length, 1);
+  assert.equal(issues[0].news.papers, 3, 'the badge counts both runs');
+  assert.equal(issues[0].cover.count, '3 new papers');
+  const view = await ai.sessions.view(first.session);
+  const news = view.results.find((x) => x.title === 'New');
+  assert.equal(news.versions, 2);
+  const body = await ai.sessions.read(first.session, news.ref);
+  assert.deepEqual(body.rows.map((x) => x.doi), ['10.9999/inv.2', '10.9999/inv.3', '10.9999/inv.4'], 'the first run\'s papers first');
+  assert.deepEqual(body.addedRows, ['doi:10.9999/inv.4']);
+
+  t.clock.t += 60_000;
+  assert.deepEqual(await ai.routines.redo(r.id), { started: true });
+  const redone = await finish(ai, r.id, second.at);
+  assert.equal(redone.added, 3, 'both runs\' papers are read again');
+  assert.notEqual(redone.session, first.session);
+
+  // The next day (its 23:59 slot fires on the way, so whichever run gets there first) starts an issue of its own.
+  xml = feedXml([2, 3, 4, 5].map(paper));
+  t.clock.t += 86_400_000;
+  await ai.routines.runNow(r.id);
+  const listed = await until(async () => { const l = (await ai.conversations.list()).filter((c) => c.routine === r.id); return l.length === 2 ? l : null; }, 'the next day\'s issue');
+  assert.equal(listed[1].id, redone.session, 'yesterday\'s issue stays as it was');
+  const next = await ai.sessions.read(listed[0].id, (await ai.sessions.view(listed[0].id)).results[0].ref);
+  assert.deepEqual(next.rows.map((x) => x.doi), ['10.9999/inv.5'], 'a new day, a new issue');
+  await ai.dispose();
 });
 
 test('Redo today is refused for a radar with no issue yet and for a routine that is not a radar', async () => {

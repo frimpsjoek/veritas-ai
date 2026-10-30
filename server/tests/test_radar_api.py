@@ -309,7 +309,7 @@ def _big_collection(searcher, n=709):
     """`n` papers in collection BIG (under PARENT, like a subcollection), each a little newer than the last."""
     start = 1_000_000.0
     for i in range(n):
-        path, meta = f"zotero/BIG{i:04d}", json.dumps({"collection_keys": ["BIG"]})
+        path, meta = f"zotero/BIG{i:04d}", json.dumps({"collection_keys": ["BIG"], "doi": f"10.1/big{i}"})
         searcher.db.execute("INSERT INTO notes (path, title, folder, source, tags, mtime, size, frontmatter, meta) "
                             "VALUES (?, ?, 'zotero', 'zotero', '', ?, 1, '', ?)", (path, f"Invented paper number {i}", start + i, meta))
         searcher.db.execute("INSERT INTO vecs (id, path, vec) VALUES (?, ?, ?)",
@@ -350,7 +350,7 @@ def _add_item(searcher, key, title, collection, doi="", vid=None):
     "Supplementary information for:", "1 Supplementary Information: invented force fields 2 and more", "Supporting Material",
     "A dissertation submitted in partial satisfaction of the requirements for the degree of doctor of philosophy",
     "Untitled", "Inventedsite", "Invented & Co", "invented_slides_final.pdf", "notebook.nb", "owner/invented-repo",
-    "[ http://invented.example ]", "apps.invented.example/account/view?ref=1"])
+    "[ http://invented.example ]", "apps.invented.example/account/view?ref=1", "The invented-harmonic approximation:"])
 def test_placeholder_titles_are_recognised(title):
     assert radar_api.placeholder_title(title)
 
@@ -367,9 +367,12 @@ def test_seeds_from_collections_leave_out_items_that_are_not_papers(searcher):
                                "owner/invented-repo"]):
         _add_item(searcher, f"JUNK{n}", title, "OTHER", vid=900 + n)
     _add_item(searcher, "SHORT", "Excitons", "OTHER", doi="10.1/short", vid=950)
+    _add_item(searcher, "THIN", "Invented lecture notes", "OTHER", vid=951)  # no DOI, no abstract, three words
+    _add_item(searcher, "FULL", "Invented lecture notes on phonons", "OTHER", vid=952)
+    searcher.db.execute("INSERT INTO chunks (id, path, ord, heading, text) VALUES (952, 'zotero/FULL', 0, 'Abstract', 'phonons in invented solids')")
     searcher.db.execute("INSERT OR REPLACE INTO meta VALUES ('indexed_at', ?)", (str(time.time() + 1),))
     searcher.db.commit()
     _, labels, total = radar_api.seed_matrix(searcher, {"collections": ["OTHER"]}, threading.Lock())
-    assert set(labels) == {"zotero/CCC", "zotero/SHORT"} and total == 2
+    assert set(labels) == {"zotero/CCC", "zotero/SHORT", "zotero/FULL"} and total == 3, "a thin item without DOI or abstract is left out"
     _, picked, _ = radar_api.seed_matrix(searcher, {"keys": ["JUNK0"], "collections": ["OTHER"]}, threading.Lock())
     assert "zotero/JUNK0" in picked, "a paper picked by hand is kept whatever its title"
