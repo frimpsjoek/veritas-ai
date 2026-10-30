@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { normalise, mergeItems, dropKnown, pickTop, keysOf, validateRadar, MCP_PRESETS } from '../src/radar.js';
-import { collectRadar } from '../src/radar-run.js';
+import { collectRadar, readableItems } from '../src/radar-run.js';
 import { emptyState } from '../src/radar-state.js';
 import { feedXml, res, routedFetch, radarLibrary, profile } from './support/radar-fakes.mjs';
 
@@ -162,6 +162,22 @@ test('Worth reading stops with the limit message as its note when OpenAlex refus
   const out = await run(config({ size: { fresh: 8, older: 3 } }), wrapped, library);
   assert.equal(out.picked.length, 3);
   assert.match(out.olderNote, /^Worth reading stopped: OpenAlex's free daily limit is used up/);
+});
+
+test('books, chapters and abstract-less database finds are left out; followed feeds and authors keep theirs', () => {
+  const item = (id, sources, over = {}) => normalise(raw({ doi: `10.9999/${id}`, title: `Invented paper ${id} on spindles`, ...over }), sources[0]);
+  const withSources = (it, sources) => ({ ...it, sources });
+  const active = /** @type {any} */ ([{ id: 'author:A7', on: true, kind: 'author' }, { id: 'feed:j', on: true, kind: 'feed' }]);
+  const items = [
+    withSources(item('chapter', ['database:crossref'], { kind: 'book-chapter', abstract: 'Nucleation theory.' }), ['database:crossref']),
+    withSources(item('bare', ['database:crossref']), ['database:crossref']),
+    withSources(item('read', ['database:crossref'], { abstract: 'Spindles rose.' }), ['database:crossref']),
+    withSources(item('feed', ['feed:j']), ['feed:j']),
+    withSources(item('mine', ['author:A7'], { kind: 'book-chapter' }), ['author:A7', 'database:crossref']),
+  ];
+  const kept = (/** @type {boolean} */ looked) => readableItems(items, active, looked).map((it) => it.doi?.split('/')[1]);
+  assert.deepEqual(kept(true), ['read', 'feed', 'mine']);
+  assert.deepEqual(kept(false), ['bare', 'read', 'feed', 'mine'], 'without a lookup a missing abstract may still come later');
 });
 
 test('the profile check drops papers outside the field, fills New from the rest, and remembers the drops as seen', async () => {

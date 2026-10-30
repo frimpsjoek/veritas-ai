@@ -27,6 +27,8 @@ const DEFAULT_CUT = 0.7;
 const HISTORY_DAYS = 7;
 /** A run that tried to calibrate and failed tries again after this long. */
 const CALIBRATE_RETRY_MS = 86_400_000;
+/** Record kinds read on their title alone, left out unless a followed author wrote them. */
+const BOOK_KINDS = new Set(['book-chapter', 'book']);
 /** Title-only papers whose abstract is looked up one by one per run (Crossref, Semantic Scholar, arXiv), best first. */
 export const ABSTRACT_LOOKUPS = 20;
 
@@ -102,7 +104,8 @@ export async function collectRadar(run) {
     const found = bare.length ? await fillAbstracts(run.abstractFetch, bare, { cache: abstracts, now: Date.parse(run.now), lookups: ABSTRACT_LOOKUPS }) : new Map();
     for (const it of fresh) it.abstract = found.get(it.id) ?? it.abstract;
   }
-  let ranked = await score(fresh, scoring);
+  const readable = readableItems(fresh, active, Boolean(run.abstractFetch));
+  let ranked = await score(readable, scoring);
   if (seeds) ranked = await decideWhole(ranked, { library, seeds, threshold, seedTitle, baseline });
   let top = pickTop(ranked, config.size.fresh);
   /** @type {RadarItem[]} */
@@ -167,6 +170,21 @@ export async function collectRadar(run) {
     next.shown[it.id] = { keys: keysOf(it), title: it.title, text: `${it.title}. ${it.abstract}`.slice(0, SHOWN_TEXT), authors: it.authors, venue: it.venue, sources: it.sources, ...(it.keywords?.length ? { keywords: it.keywords } : {}) };
   }
   return { picked: top, older, olderNote, discover, discoverNote, announced: state.phrases.announce, state: next, failed, sourcesAnswered: answered, offProfile: off.length, judgeProblem, requests: fetched.requests + olderRequests + discoverRequests, threshold: calibrated };
+}
+
+/**
+ * The candidates worth ranking. A book or book chapter, and a paper only a database search found that still has no
+ * abstract once abstracts were looked up (`looked`), is judged on its title alone, and a title shares a word with some
+ * seed often enough to pass (2026-10-29: a nucleation chapter from Crossref at 0.86). They are left out. A journal or
+ * feed the user follows keeps its papers without abstracts (many publisher feeds send none), and an author they follow
+ * keeps everything.
+ * @param {RadarItem[]} items @param {import("./radar-types").RadarSource[]} active @param {boolean} looked
+ */
+export function readableItems(items, active, looked) {
+  const followed = new Set(active.flatMap((s) => (s.kind === 'author' ? [s.id] : [])));
+  const searchedOnly = (/** @type {RadarItem} */ it) => it.sources.every((id) => id.startsWith('database:'));
+  return items.filter((it) => it.sources.some((id) => followed.has(id))
+    || (!BOOK_KINDS.has(it.kind ?? '') && !(looked && searchedOnly(it) && !it.abstract)));
 }
 
 /**

@@ -127,8 +127,10 @@ PLACEHOLDER = re.compile(
     r"|\b(dissertation|thesis)\s+submitted\b|\bin\s+partial\s+(satisfaction|fulfil+ment)\s+of\s+the\s+requirements\b"
     r"|^\s*(untitled|no title|snapshot|full text|attachment)\b"
     r"|\.(pdf|nb|docx?|pptx?|html?|txt|tex|ipynb|zip)\s*$"
-    r"|^\s*\[?\s*https?://|^\S+/\S+$", re.I)
+    r"|^\s*\[?\s*https?://|^\S+/\S+$"
+    r"|:\s*$", re.I)  # a title cut at its colon is a heading or a half-read PDF ("The quasi-harmonic approximation:")
 SEED_MIN_WORDS = 3  # in one library, 22% of the items titled in one or two words had a DOI, against 80% of the rest
+SEED_THIN_WORDS = 6  # below this, an item with neither DOI nor abstract is too thin to stand for the user's work
 
 
 def placeholder_title(title: str, doi: str = "") -> bool:
@@ -139,11 +141,24 @@ def placeholder_title(title: str, doi: str = "") -> bool:
     return len(re.findall(r"[^\W\d_]{2,}", title)) < SEED_MIN_WORDS or bool(PLACEHOLDER.search(title))
 
 
+def _drop_thin(db, rows: list[tuple[str, str, dict]]) -> list[tuple[str, str, dict]]:
+    """Leaves out collection items with no DOI, no abstract and a short title: a three-word title alone ranks any
+    paper that shares a word with it as close to the user's work (2026-10-29: a nucleation book chapter came in as
+    0.86 to "The quasi-harmonic approximation:")."""
+    thin = [p for p, title, info in rows if not str(info.get("doi") or "").strip()
+            and len(re.findall(r"[^\W\d_]{2,}", re.sub(r"<[^>]+>", "", title))) < SEED_THIN_WORDS]
+    if not thin:
+        return rows
+    known = abstracts(db, thin)
+    drop = {p for p in thin if not known.get(p, "").strip()}
+    return [r for r in rows if r[0] not in drop]
+
+
 def seed_matrix(searcher, seeds: dict, lock, hidden: set[str] = frozenset()) -> tuple[np.ndarray, list[str], int]:
     """Unit vectors of the seeds, their labels ("zotero/KEY", or "text:<title>") and how many seeds there were before
     the cap. `seeds`: {"keys": [Zotero keys], "collections": [collection keys], "texts": [{"title", "text"}]}.
-    Items of the collections whose title says they are not papers (placeholder_title) are left out; papers picked by
-    hand never are.
+    Items of the collections whose title says they are not papers (placeholder_title), and thin ones (_drop_thin), are
+    left out; papers picked by hand never are.
 
     At most MAX_SEEDS are used. The papers picked by hand (keys, texts) come first; collections fill the rest, most
     recently changed in Zotero first: a few large collections easily hold more than the cap, and failing the whole run
@@ -155,6 +170,7 @@ def seed_matrix(searcher, seeds: dict, lock, hidden: set[str] = frozenset()) -> 
         known = lambda paths: [p for p in paths if p in searcher.note_index and p not in hidden]  # noqa: E731
         picked = known(sorted({f"zotero/{k}" for k in seeds.get("keys") or []}))
         rows = [r for r in _rows(searcher.db, collections, hidden) if not placeholder_title(r[1], r[2].get("doi", ""))] if collections else []
+        rows = _drop_thin(searcher.db, rows)
         mtime = dict(searcher.db.execute("SELECT path, mtime FROM notes WHERE source='zotero'")) if rows else {}
         rest = known(sorted({p for p, _, _ in rows} - set(picked), key=lambda p: (-(mtime.get(p) or 0.0), p)))
         total = len(picked) + len(rest) + len(texts)

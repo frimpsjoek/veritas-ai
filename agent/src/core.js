@@ -1161,6 +1161,29 @@ export async function createLocalRuntime(deps) {
     return routine.redo ? { ...state, feedCache: {} } : state;
   }
 
+  /** The calendar day of an ISO time on this computer's clock: "2026-10-29". @param {string} iso */
+  const localDay = (iso) => { const d = new Date(iso); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+
+  /** This radar's newest issue (a redone one is listed nowhere), or null. A chat about an issue carries the routine
+   *  too, so an issue is a session whose steps include a radar run. @param {string} routineId */
+  async function latestIssue(routineId) {
+    for (const c of await store.list()) {
+      if (c.routine !== routineId) continue;
+      const records = await store.load(c.id);
+      if (records.some((r) => r.type === 'step' && /** @type {any} */ (r).input?.kind === 'radar')) return { id: c.id, records };
+    }
+    return null;
+  }
+
+  /** This radar's issue begun today, when there is one; a redo starts a new issue instead.
+   *  @param {import("./domain").Routine} routine @param {string} now */
+  async function todaysIssue(routine, now) {
+    if (routine.redo) return null;
+    const issue = await latestIssue(routine.id);
+    const meta = /** @type {any} */ (issue?.records.find((r) => r.type === 'meta'));
+    return issue && meta?.created && localDay(meta.created) === localDay(now) ? issue.id : null;
+  }
+
   /** After a redo: the old issue is hidden behind the new one (kept on disk, out of every list), and the routine
    *  forgets the redo. A redo that found nothing keeps the old issue.
    *  @param {import("./domain").Routine} routine @param {string | null} replacedBy @param {string} now */
@@ -1177,16 +1200,20 @@ export async function createLocalRuntime(deps) {
   async function redoRadar(id) {
     const routine = await routineStore.read(id);
     if (!routine || routine.kind !== 'radar') return { started: false, reason: 'Only a reading radar can redo its issue.' };
-    const session = routine.lastRun?.session;
-    const records = session ? await store.load(session) : [];
+    // The newest issue, not the last run's: a run that found nothing has no session of its own.
+    const issue = await latestIssue(id);
+    const session = issue?.id;
+    const records = issue?.records ?? [];
     const meta = records.find((r) => r.type === 'meta');
-    const step = /** @type {any} */ (records.find((r) => r.type === 'step' && /** @type {any} */ (r).input?.kind === 'radar'));
+    const steps = /** @type {any[]} */ (records.filter((r) => r.type === 'step' && /** @type {any} */ (r).input?.kind === 'radar'));
+    const step = steps[0];
     if (!session || !meta || !step?.input?.since) return { started: false, reason: 'There is no issue to redo yet.' };
     if (routineScheduler.runningId()) return { started: false, reason: 'Another routine is running.' };
-    const at = /** @type {any} */ (meta).created;
+    // Every run that added to the issue marked its papers seen at its own time (one issue a day can hold several).
+    const runs = new Set([/** @type {any} */ (meta).created, ...steps.map((s) => s.at)]);
     await radarSerial(async () => {
       const state = await radarStore.read(id);
-      const seen = Object.fromEntries(Object.entries(state.seen).filter(([, v]) => !(v.at === at && (v.verdict === 'shown' || v.verdict === 'off'))));
+      const seen = Object.fromEntries(Object.entries(state.seen).filter(([, v]) => !(runs.has(v.at) && (v.verdict === 'shown' || v.verdict === 'off'))));
       await radarStore.write(id, { ...state, seen });
     });
     await routineStore.write({ ...routine, redo: { since: step.input.since, replaces: session } });
@@ -1230,16 +1257,23 @@ export async function createLocalRuntime(deps) {
     });
     const digest = summaryLine({ news: out.picked.length, older: out.older.length, discover: out.discover.length, learned: out.announced, skipped: out.discoverNote, answered: out.sourcesAnswered, failed: out.failed }, config);
 
-    const sessionId = /** @type {import("./domain").ConversationId} */ (ulid());
-    const project = routine.project && (await projectStore.read(routine.project)) ? routine.project : undefined;
-    await store.append(sessionId, { type: 'meta', id: sessionId, mode: 'chat', title: routine.name, created: now, routine: routine.id, ...(project ? { project } : {}) });
+    // One issue a day (2026-10-29): a later run the same day (Run now, a catch-up) adds its papers to today's issue
+    // as new versions of its results, rather than starting an issue of its own that hides the first behind it.
+    const today = await todaysIssue(routine, now);
+    const sessionId = today ?? /** @type {import("./domain").ConversationId} */ (ulid());
+    if (!today) {
+      const project = routine.project && (await projectStore.read(routine.project)) ? routine.project : undefined;
+      await store.append(sessionId, { type: 'meta', id: sessionId, mode: 'chat', title: routine.name, created: now, routine: routine.id, ...(project ? { project } : {}) });
+    }
     const records = await store.load(sessionId);
     const stepId = /** @type {import("./domain").StepId} */ (nextStepId(records));
-    const resultId = /** @type {import("./domain").ResultId} */ (nextResultId(records));
-    const ref = { id: resultId, version: 1 };
+    const before = new Map(manifest(records).results.filter((r) => r.kind === 'papers').map((r) => [r.title, r]));
+    /** @type {Map<string, import("./domain").PaperRow[]>} */
+    const earlier = new Map();
+    for (const [title, r] of before) earlier.set(title, /** @type {any} */ (await store.readResult(sessionId, r.ref.id, r.ref.version))?.rows ?? []);
     const screened = out.offProfile ? `; ${out.offProfile} outside your field left out` : out.judgeProblem ? `; profile check skipped (${out.judgeProblem})` : '';
     const change = `Radar: ${out.picked.length} new ${out.picked.length === 1 ? 'paper' : 'papers'} from ${out.sourcesAnswered} ${out.sourcesAnswered === 1 ? 'source' : 'sources'}${screened}${failures}`;
-    const taken = new Set();
+    const taken = new Set([...earlier.values()].flat().map((r) => r.id));
     const rowsOf = (/** @type {import("./radar-types").RadarItem[]} */ items) => items.map((it, i) => {
       let id = rowIdFor(it, i);
       for (let n = 2; taken.has(id); n++) id = /** @type {any} */ (`${rowIdFor(it, i)}~${n}`);
@@ -1251,39 +1285,37 @@ export async function createLocalRuntime(deps) {
         radar: { key: it.id, score: it.score ?? 0, why: /** @type {any} */ (it.why), links: it.links, sources: it.sources, date: it.date, ...(it.reason ? { reason: it.reason } : {}), ...(why.lines.get(it.id) ? { why_line: why.lines.get(it.id) } : {}) },
       });
     });
-    const rows = rowsOf(out.picked);
-    /** @type {import("./domain").PapersResult} */
-    const body = { kind: 'papers', ref, title: 'New', created: now, madeBy: stepId, from: [], change, query: null, rows, columns: [], cells: {}, screening: null, summary: null, addedRows: rows.map((r) => r.id), radar: { routine: routine.id, summary: digest } };
-    /** @type {import("./domain").ResultSummary} */
-    const summary = { ref, kind: 'papers', title: 'New', versions: 1, rows: rows.length, columns: [], updated: now };
-    await store.append(sessionId, { type: 'step', id: stepId, input: { kind: 'radar', routine: routine.id, since }, reads: [], at: now });
-    await store.writeResult(sessionId, ref.id, 1, body);
-    await store.append(sessionId, { type: 'result', summary, at: now });
-    const writes = [ref];
-    if (out.older.length) {
-      const olderRef = { id: /** @type {import("./domain").ResultId} */ (nextResultId(await store.load(sessionId))), version: 1 };
-      const olderRows = rowsOf(out.older);
-      const olderChange = `Worth reading: ${out.older.length} older ${out.older.length === 1 ? 'paper' : 'papers'} your library keeps citing${out.olderNote ? ` (${out.olderNote})` : ''}`;
+    /** @type {import("./domain").ResultRef[]} */
+    const writes = [];
+    /** Writes one group: a new result, or the next version of today's, its earlier rows first and this run's added.
+     *  @param {string} title @param {import("./domain").PaperRow[]} added @param {string} groupChange @returns {Promise<import("./domain").PaperRow[]>} */
+    const writeGroup = async (title, added, groupChange) => {
+      const prior = before.get(title);
+      const rows = [...(earlier.get(title) ?? []), ...added];
+      const ref = prior ? { id: prior.ref.id, version: prior.versions + 1 } : { id: /** @type {import("./domain").ResultId} */ (nextResultId(await store.load(sessionId))), version: 1 };
       /** @type {import("./domain").PapersResult} */
-      const olderBody = { kind: 'papers', ref: olderRef, title: 'Worth reading', created: now, madeBy: stepId, from: [], change: olderChange, query: null, rows: olderRows, columns: [], cells: {}, screening: null, summary: null, addedRows: olderRows.map((r) => r.id), radar: { routine: routine.id, summary: digest } };
-      await store.writeResult(sessionId, olderRef.id, 1, olderBody);
-      await store.append(sessionId, { type: 'result', summary: { ref: olderRef, kind: 'papers', title: 'Worth reading', versions: 1, rows: olderRows.length, columns: [], updated: now }, at: now });
-      writes.push(olderRef);
-    }
-    if (out.discover.length) {
-      const ref = { id: /** @type {import("./domain").ResultId} */ (nextResultId(await store.load(sessionId))), version: 1 };
-      const found = rowsOf(out.discover);
-      const change = `Might interest you: ${out.discover.length} ${out.discover.length === 1 ? 'paper' : 'papers'} no source you follow published${out.discoverNote ? ` (${out.discoverNote})` : ''}`;
-      /** @type {import("./domain").PapersResult} */
-      const foundBody = { kind: 'papers', ref, title: 'Might interest you', created: now, madeBy: stepId, from: [], change, query: null, rows: found, columns: [], cells: {}, screening: null, summary: null, addedRows: found.map((r) => r.id), radar: { routine: routine.id, summary: digest } };
-      await store.writeResult(sessionId, ref.id, 1, foundBody);
-      await store.append(sessionId, { type: 'result', summary: { ref, kind: 'papers', title: 'Might interest you', versions: 1, rows: found.length, columns: [], updated: now }, at: now });
+      const body = { kind: 'papers', ref, title, created: now, madeBy: stepId, from: [], change: groupChange, query: null, rows, columns: [], cells: {}, screening: null, summary: null, addedRows: added.map((r) => r.id), radar: { routine: routine.id, summary: digest } };
+      await store.writeResult(sessionId, ref.id, ref.version, body);
+      await store.append(sessionId, { type: 'result', summary: { ref, kind: 'papers', title, versions: ref.version, rows: rows.length, columns: [], updated: now }, at: now });
       writes.push(ref);
-    }
+      return rows;
+    };
+    await store.append(sessionId, { type: 'step', id: stepId, input: { kind: 'radar', routine: routine.id, since }, reads: [], at: now });
+    const rows = rowsOf(out.picked);
+    const issueRows = await writeGroup('New', rows, change);
+    const olderRows = rowsOf(out.older);
+    const issueOlder = out.older.length
+      ? await writeGroup('Worth reading', olderRows, `Worth reading: ${out.older.length} older ${out.older.length === 1 ? 'paper' : 'papers'} your library keeps citing${out.olderNote ? ` (${out.olderNote})` : ''}`)
+      : earlier.get('Worth reading') ?? [];
+    const found = rowsOf(out.discover);
+    const issueFound = out.discover.length
+      ? await writeGroup('Might interest you', found, `Might interest you: ${out.discover.length} ${out.discover.length === 1 ? 'paper' : 'papers'} no source you follow published${out.discoverNote ? ` (${out.discoverNote})` : ''}`)
+      : earlier.get('Might interest you') ?? [];
     /** @type {import("./domain").ActivityLine} */
     const line = { id: stepId, icon: 'scholarly', title: `Radar found ${rows.length} new ${rows.length === 1 ? 'paper' : 'papers'}${out.older.length ? ` and ${out.older.length} worth reading` : ''}${out.discover.length ? `${out.older.length ? ', ' : ' and '}${out.discover.length} that might interest you` : ''}`, detail: out.failed.length ? `${out.failed.length} source${out.failed.length === 1 ? '' : 's'} failed` : null, state: 'done', items: [], reasoning: null };
     await store.append(sessionId, { type: 'step_end', id: stepId, status: 'done', writes, line, at: now });
-    const lead = out.picked[0];
+    // The cover quotes the issue's best paper, whichever run found it.
+    const lead = [...issueRows].sort((a, b) => (b.radar?.score ?? 0) - (a.radar?.score ?? 0))[0];
     const by = [lead.authors?.[0], lead.venue].filter(Boolean).join(', ');
     await store.append(sessionId, { type: 'routine_run', routine: routine.id, added: rows.length, rows: rows.map((r) => r.id), top: { title: lead.title, ...(by ? { by } : {}) }, at: now });
     await settleRadarState(routine.id, out.state, out.announced);
@@ -1294,7 +1326,10 @@ export async function createLocalRuntime(deps) {
       try {
         const day = new Date(clock());
         const date = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
-        await deps.library.writeDigest(digestFile(date, routine.name), digestMarkdown({ name: routine.name, date, summary: digest, news: out.picked, older: out.older, discover: out.discover, lines: why.lines }));
+        // The note is the whole day's issue, so a second run rewrites it with the first run's papers kept.
+        const items = (/** @type {import("./domain").PaperRow[]} */ list) => list.map((r) => /** @type {import("./radar-types").RadarItem} */ (/** @type {any} */ ({ id: r.radar?.key ?? r.id, title: r.title, authors: r.authors, venue: r.venue, date: r.radar?.date ?? null, year: r.year, doi: r.doi, url: r.url, abstract: r.abstract, reason: r.radar?.reason })));
+        const lines = new Map([...issueRows, ...issueOlder, ...issueFound].flatMap((r) => (r.radar?.why_line ? [[r.radar?.key ?? r.id, r.radar.why_line]] : [])));
+        await deps.library.writeDigest(digestFile(date, routine.name), digestMarkdown({ name: routine.name, date, summary: digest, news: items(issueRows), older: items(issueOlder), discover: items(issueFound), lines: /** @type {Map<string, string>} */ (lines) }));
       } catch (e) { noteProblem = `The vault note was not written (${errorText(e).replace(/\.$/, '')}).`; }
     }
     return { status: /** @type {const} */ ('done'), added: rows.length, session: sessionId, writes, summary: [change, out.older.length ? `${out.older.length} worth reading` : '', out.discover.length ? `${out.discover.length} might interest you` : ''].filter(Boolean).join(', '), ...(noteProblem ? { reason: noteProblem } : {}) };
