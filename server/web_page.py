@@ -199,15 +199,35 @@ def byline_of(work: dict) -> str:
 VERSIONS = {"submittedVersion": "submitted", "acceptedVersion": "accepted", "publishedVersion": "published"}
 
 
-def oa_pdf(work: dict) -> dict | None:
-    """The best open-access PDF: OpenAlex's best location first, then any other with a pdf_url."""
+def oa_pdfs(work: dict) -> list[dict]:
+    """The open-access PDFs OpenAlex lists: its best location first, then any other with a pdf_url."""
     places = [work.get("best_oa_location")] + list(work.get("locations") or [])
+    found = {}
     for place in places:
         if place and place.get("is_oa") and place.get("pdf_url"):
             source = (place.get("source") or {}).get("display_name") or urllib.parse.urlparse(place["pdf_url"]).hostname
-            return {"url": place["pdf_url"], "version": VERSIONS.get(place.get("version") or "", "published"),
-                    "where": source}
-    return None
+            found.setdefault(place["pdf_url"], {"url": place["pdf_url"], "version": VERSIONS.get(place.get("version") or "", "published"),
+                                                "where": source})
+    return list(found.values())
+
+
+def oa_pdf(work: dict) -> dict | None:
+    """The best open-access PDF as listed, unchecked."""
+    return next(iter(oa_pdfs(work)), None)
+
+
+def _serves_pdf(url: str, get) -> bool:
+    """Whether a listed PDF is one. OpenAlex's pdf_url is at times a repository's web page, or a site that refuses us
+    (pymatgen's eScholarship copy, 2026-11-03); the reader would open PDF.js on it and fail. A link that says what it
+    is, and arXiv's, are taken at their word; a look at the first bytes of the others keeps the open quick."""
+    parts = urllib.parse.urlparse(url)
+    if parts.path.lower().endswith(".pdf") or (parts.hostname or "").endswith("arxiv.org"):
+        return True
+    try:
+        answer = get(url, 8192)
+    except (OSError, Refused):
+        return False
+    return answer.status < 400 and _is_pdf(answer)
 
 
 def crossref(doi: str, get=fetch) -> dict | None:
@@ -385,7 +405,7 @@ def _paper(url: str, doi: str, get) -> dict | None:
     if not work:
         return None
     title = work.get("title") or work.get("display_name") or doi
-    pdf = oa_pdf(work)
+    pdf = next((p for p in oa_pdfs(work) if _serves_pdf(p["url"], get)), None)
     if pdf:
         return {"mode": "pdf", "url": pdf["url"], "title": title, "source": "open access", "version": pdf["version"],
                 "where": pdf["where"]}

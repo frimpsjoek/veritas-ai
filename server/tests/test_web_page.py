@@ -413,3 +413,29 @@ def test_a_title_with_the_site_name_still_counts_as_repeated():
     read = web_page.reader("https://notes.example/silk", page.encode())
     assert read["title"] == "How Spiders Spin Silk", "the site's name is not part of the title"
     assert "How Spiders Spin Silk" not in read["html"]
+
+
+FAKE_PDF_URL = "https://repository.example/item/1"
+REAL_PDF_URL = "https://repository.example/download/2"
+
+
+def _copies(*urls):
+    locations = [{"is_oa": True, "pdf_url": u, "version": "submittedVersion", "source": {"display_name": "A repository"}} for u in urls]
+    return {"title": "A paper", "abstract_inverted_index": {"We": [0], "show": [1], "it": [2]}, "locations": locations}
+
+
+def test_a_listed_pdf_that_is_a_web_page_falls_back_to_the_abstract(web):
+    pages, _calls, get = web
+    pages[openalex_url(DOI)] = Response("x", 200, {}, json.dumps(_copies(FAKE_PDF_URL)).encode())
+    pages[FAKE_PDF_URL] = Response(FAKE_PDF_URL, 200, {"content-type": "text/html"}, b"<html>landing page</html>")
+    answer = web_page.page(f"https://doi.org/{DOI}", get=get)
+    assert answer["mode"] == "reader" and answer["source"] == "openalex" and "We show it" in answer["abstract"]
+
+
+def test_a_blocked_copy_gives_way_to_the_next_one_that_is_a_pdf(web):
+    pages, _calls, get = web
+    pages[openalex_url(DOI)] = Response("x", 200, {}, json.dumps(_copies(FAKE_PDF_URL, REAL_PDF_URL)).encode())
+    pages[FAKE_PDF_URL] = Response(FAKE_PDF_URL, 403, {"content-type": "text/html"}, b"Forbidden")
+    pages[REAL_PDF_URL] = Response(REAL_PDF_URL, 200, {"content-type": "application/pdf"}, b"%PDF-1.7 ...")
+    answer = web_page.page(f"https://doi.org/{DOI}", get=get)
+    assert answer["mode"] == "pdf" and answer["url"] == REAL_PDF_URL
