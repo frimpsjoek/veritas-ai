@@ -10,7 +10,7 @@ import { mergeItems, dropKnown, pickTop, keysOf, seedBody, seedsKey, MIN_SEEDS }
 import { calibrateRadar } from './radar-seeds.js';
 import { score, rescoreWhole, seedBar } from './radar-score.js';
 import { abstractsByDoi, fillAbstracts } from './scholarly.js';
-import { JUDGE_POOL } from './radar-judge.js';
+import { judgePool } from './radar-judge.js';
 
 /** @typedef {import("./radar-types").RadarItem} RadarItem */
 /** @typedef {import("./radar-types").RadarState} RadarState */
@@ -112,13 +112,13 @@ export async function collectRadar(run) {
   let off = [];
   let judgeProblem = /** @type {string | null} */ (null);
   if (run.judge && top.length) {
-    const pool = pickTop(ranked, Math.max(JUDGE_POOL, config.size.fresh));
+    const pool = pickTop(ranked, judgePool(config.size.fresh));
     const seedTitles = [...(config.seeds?.mine ?? []).map((m) => m.title), ...(config.seeds?.papers ?? []).map((k) => seedTitle(`zotero/${k}`))].filter((t) => t && !t.startsWith('zotero/'));
     const rejected = state.examples.negative.slice(-12).map((e) => e.text.split('. ')[0].slice(0, 200));
     const judged = await run.judge(pool, { topics: config.profile.topics.map((t) => t.text), seeds: seedTitles, rejected });
     judgeProblem = judged.error;
     // Only what was read is decided: a rejected paper is left out, the rest keep their rank.
-    off = pool.slice(0, JUDGE_POOL).filter((it) => judged.off.has(it.id));
+    off = pool.filter((it) => judged.off.has(it.id));
     top = pool.filter((it) => !judged.off.has(it.id)).slice(0, config.size.fresh);
   }
 

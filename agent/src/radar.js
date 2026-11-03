@@ -220,7 +220,7 @@ export function validateRadar(radar) {
   const ids = new Set();
   for (const s of sources) { if (ids.has(s.id)) throw new Error('The same source is listed twice.'); ids.add(s.id); }
   const size = radar.size ?? {};
-  const fresh = size.fresh ?? 8, older = size.older ?? 1, discover = size.discover ?? 3;
+  const fresh = size.fresh ?? 30, older = size.older ?? 3, discover = size.discover ?? 3;
   if (!Number.isInteger(fresh) || fresh < 1 || fresh > 50) throw new Error('A radar shows between 1 and 50 new papers.');
   if (!Number.isInteger(older) || older < 0 || older > 20) throw new Error('A radar shows between 0 and 20 older papers.');
   if (!Number.isInteger(discover) || discover < 0 || discover > 10) throw new Error('A radar shows between 0 and 10 papers that might interest you.');

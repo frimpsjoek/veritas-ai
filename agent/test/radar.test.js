@@ -62,7 +62,7 @@ test('pickTop is deterministic: score, then newer date, then id', () => {
 
 test('validateRadar fills defaults and refuses a broken source at the boundary', () => {
   const ok = validateRadar({ sources: [{ kind: 'database', db: 'arxiv' }, { kind: 'feed', url: 'https://j.example/rss' }], profile: { topics: [{ text: 'spindles' }] } });
-  assert.deepEqual(ok.size, { fresh: 8, older: 1, discover: 3 });
+  assert.deepEqual(ok.size, { fresh: 30, older: 3, discover: 3 });
   assert.equal(ok.note, true);
   assert.equal(ok.sources[0].id, 'database:arxiv');
   assert.equal(ok.sources[0].on, true);

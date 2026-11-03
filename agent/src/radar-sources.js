@@ -4,6 +4,7 @@
 
 import { fetchFeed, findDoi, findArxiv } from './feeds.js';
 import { searchSource, openAlexWorks, arxivCategoryFeed } from './scholarly.js';
+import { arxivAuthors } from './paper-names.js';
 import { normalise, isNonPaper } from './radar.js';
 import { LEARNED_FLOOR } from './radar-phrases.js';
 
@@ -238,7 +239,7 @@ async function seededArxiv(fetchFn, plan, since, caches) {
   for (const category of plan.categories) {
     const got = await fetchFeed(fetchFn, arxivCategoryFeed(category), caches?.[arxivCategoryFeed(category)] ?? null);
     if (got.error) { errors.push(`${category}: ${got.error}`); continue; }
-    raws.push(...got.items.filter((i) => !i.date || i.date >= since).map((i) => ({ title: i.title, doi: i.doi, arxiv: i.arxiv, authors: i.authors, abstract: i.summary, date: i.date, url: i.link, venue: 'arXiv', kind: 'preprint' })));
+    raws.push(...got.items.filter((i) => !i.date || i.date >= since).map((i) => ({ title: i.title, doi: i.doi, arxiv: i.arxiv, authors: arxivAuthors(i.authors), abstract: i.summary, date: i.date, url: i.link, venue: 'arXiv', kind: 'preprint' })));
   }
   for (const phrase of plan.phrases.slice(0, SEED_PHRASES)) {
     try { raws.push(...(await searchSource(fetchFn, 'arxiv', phrase, PER_QUERY, since))); } catch (e) { errors.push(message(e)); }

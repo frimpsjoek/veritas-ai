@@ -50,6 +50,9 @@ button.sbw-quiet { border: 0; background: none; font: inherit; color: var(--sb-u
 .sbw-today-banner .sbw-cover-title { font-size: clamp(28px, 3.4vw, 40px); }
 .sbw-today-banner .sbw-cover-line { font-size: 16px; }
 .sbw-papers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sbw-s5) var(--sbw-s6); }
+.sbw-papers-group { display: contents; }
+.sbw-papers-more { grid-column: 1 / -1; justify-self: center; margin: 0; }
+.sbw-papers-more[hidden] { display: none; }
 .sbw-papers-head { grid-column: 1 / -1; margin: var(--sbw-s2) 0 0; padding-top: var(--sbw-s4); border-top: 1px solid var(--sb-ui-line); font-family: var(--sbw-serif); font-size: 20px; font-weight: 400; }
 .sbw-paper { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sbw-s4); min-width: 0; padding-top: var(--sbw-s4); border-top: 1px solid var(--sb-ui-line); }
 .sbw-paper.has-figure { grid-template-columns: minmax(0, 1fr) 144px; }

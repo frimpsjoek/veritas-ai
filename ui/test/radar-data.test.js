@@ -12,18 +12,18 @@ const topic = (text, origin = 'user') => ({ text, weight: 1, origin });
 const person = (name, openalexId = null, origin = 'user', match = null) => ({ name, openalexId, weight: 1, origin, match });
 const ready = () => { const f = newForm(); f.profile.topics.push(topic('phonon transport')); return f; };
 
-test('a new radar is named, daily at 07:00, with arXiv, chemRxiv and OpenAlex on and 8 new + 1 older', () => {
+test('a new radar is named, daily at 07:00, with arXiv, chemRxiv and OpenAlex on and 30 new + 3 older', () => {
   const f = newForm();
   assert.equal(f.name, 'Reading radar');
   assert.equal(scheduleText(draftFromForm(f).schedule), 'Every day at 07:00');
   assert.deepEqual(Object.entries(f.databases).filter(([, on]) => on).map(([id]) => id), ['arxiv', 'chemrxiv', 'openalex']);
   assert.equal(DATABASES.length, 7);
-  assert.deepEqual(f.size, { fresh: 8, older: 1, discover: 3 });
+  assert.deepEqual(f.size, { fresh: 30, older: 3, discover: 3 });
   assert.equal(f.sizeTouched, false);
   assert.deepEqual(f.scope, { kind: 'library' });
 });
 
-test('the weekly size is 15 + 5 for a radar that runs once a week or less, 8 + 1 otherwise', () => {
+test('the weekly size is 15 + 5 for a radar that runs once a week or less, 30 + 3 otherwise', () => {
   const days = (d) => ({ days: d, times: { kind: 'at', times: ['07:00'] } });
   assert.deepEqual(SIZE_DEFAULTS.weekly, { fresh: 15, older: 5, discover: 3 });
   assert.equal(sizeDefaults(days({ kind: 'some', weekdays: [1] })), SIZE_DEFAULTS.weekly);
@@ -50,7 +50,7 @@ test('what stops a save is said in plain words, one thing at a time', () => {
   assert.equal(radarProblem(f), 'Show between 1 and 50 new papers.');
   f.size = { fresh: 8, older: 21, discover: 3 };
   assert.equal(radarProblem(f), 'Show between 0 and 20 older papers.');
-  f.size = { fresh: 8, older: 1, discover: 3 };
+  f.size = { fresh: 30, older: 3, discover: 3 };
   f.when.times = [];
   assert.ok(radarProblem(f), 'a schedule with no time is refused with the engine\'s words');
 });
@@ -70,7 +70,7 @@ test('the draft passes the engine\'s own validation, with authors and journals f
     'database:arxiv', 'database:chemrxiv', 'database:openalex', 'feed:https://good.example/feed', 'journal:S5', 'author:A1', 'journal:S7',
   ]);
   assert.equal(out.radar.profile.authors[0].match, 'Giulia Galli, U Chicago, 781 works', 'the match label is kept for the next edit');
-  assert.deepEqual(out.radar.size, { fresh: 8, older: 1, discover: 3 });
+  assert.deepEqual(out.radar.size, { fresh: 30, older: 3, discover: 3 });
 });
 
 test('editing a radar gives back the same sources, without listing a followed journal twice', () => {

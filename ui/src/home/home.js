@@ -9,6 +9,7 @@ import { apiOf } from '../sources/view-kit.js';
 import { mountSources } from '../sources/sources-view.js';
 import { linkTo } from './links.js';
 import { RadarDigest, markViewed } from '../chat/radar-digest.js';
+import { arxivAuthors, plainName } from '../../../agent/src/paper-names.js';
 
 /** @typedef {import('./links.js').HomeTarget} HomeTarget */
 /** @typedef {import('./links.js').HomeLinks} HomeLinks */
@@ -130,7 +131,8 @@ function paperEntry(doc, row, links, api, digest, show = 'summary', onView) {
   const url = row.doi ? `https://doi.org/${row.doi}` : row.url;
   const title = h(doc, url ? 'a' : 'span', 'sbw-paper-title', row.title);
   if (url) viewing(linkTo(title, { to: 'url', url }, links), onView);
-  const authors = row.authors ?? [];
+  // Issues written before 2026-11-02 hold arXiv's authors as one string of TeX.
+  const authors = row.venue === 'arXiv' ? arxivAuthors(row.authors) : (row.authors ?? []).map(plainName);
   const who = authors.length > 3 ? `${authors.slice(0, 3).join(', ')} +${authors.length - 3}` : authors.join(', ');
   const meta = [who, row.venue, row.radar?.date ?? row.year].filter(Boolean).join(' · ');
   text.append(title);
@@ -177,6 +179,12 @@ function paperEntry(doc, row, links, api, digest, show = 'summary', onView) {
   }
   return entry;
 }
+
+/** A long issue comes in steps, so rating papers stays a choice. */
+const PAPER_STEP = 8;
+
+/** "Show 8 more (22 left)" @param {number} left */
+export const moreLabel = (left) => `Show ${Math.min(left, PAPER_STEP)} more${left > PAPER_STEP ? ` (${left} left)` : ''}`;
 
 /** How often Home looks at a running radar, and how long before it stops looking and offers Run now again. */
 const RUN_POLL_MS = 5000;
@@ -296,6 +304,7 @@ async function todayBlock(doc, ai, host, links, { issues, routine, pick, unknown
   block.append(stage, bar, list);
 
   let painting = 0;
+  /** @type {Map<string, number>} */ const revealed = new Map(); // how many papers of each group are showing, kept across repaints
   /** @type {RadarDigest | null} */ let digest = null;
   /** A paper opened here is one less paper of news on its issue: tell the engine, then read the counts again so the
    *  banner and the waiting count follow without repainting Home. @param {any} issue @param {any} row */
@@ -347,7 +356,21 @@ async function todayBlock(doc, ai, host, links, { issues, routine, pick, unknown
         // The same row actions as the issue's chat view, so a paper can be rated where it is read.
         const radar = body?.radar?.routine ? body.radar : null;
         digest = radar && (digest?.routine === radar.routine ? digest : new RadarDigest(host, doc, block, { routine: radar.routine, summary: radar.summary ?? '' }));
-        for (const row of rows) list.append(paperEntry(doc, row, links, api, digest, textMode, () => { void viewed(issue, row); }));
+        const key = `${issue.id}/${result.ref?.id ?? result.title}`;
+        const more = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sbw-quiet sbw-papers-more'));
+        more.type = 'button';
+        // One box per group (display: contents, so its papers stay in the page's grid), so a later group stays below.
+        const group = h(doc, 'div', 'sbw-papers-group');
+        list.append(group);
+        const reveal = (/** @type {number} */ from) => {
+          const upTo = Math.max(revealed.get(key) ?? PAPER_STEP, from + (from ? PAPER_STEP : 0));
+          revealed.set(key, upTo);
+          group.append(...rows.slice(from, upTo).map((/** @type {any} */ row) => paperEntry(doc, row, links, api, digest, textMode, () => { void viewed(issue, row); })), more);
+          more.hidden = upTo >= rows.length;
+          more.textContent = upTo < rows.length ? moreLabel(rows.length - upTo) : '';
+          more.onclick = () => reveal(upTo);
+        };
+        reveal(0);
       }
     } catch {
       if (mine === painting) list.replaceChildren(h(doc, 'p', 'sbw-hint', "Couldn't load this issue's papers."));

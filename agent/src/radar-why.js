@@ -5,8 +5,8 @@
 
 /** @typedef {import("./radar-types").RadarItem} RadarItem */
 
-/** Spec success check 2: at most 20 short lines per run. */
-export const MAX_WHY_ROWS = 20;
+/** Every New row gets its line: a radar shows at most 50 (radar.js). */
+export const MAX_WHY_ROWS = 50;
 const MAX_ABSTRACT = 1200;
 const MAX_LINE = 220;
 export const NO_ABSTRACT = 'No abstract to go on';

@@ -35,7 +35,7 @@ export const DATABASES = /** @type {const} */ ([
 const DEFAULT_ON = ['arxiv', 'chemrxiv', 'openalex'];
 
 /** Spec 012 decision: 8 new + 1 older for a daily radar, 15 + 5 for a weekly one. */
-export const SIZE_DEFAULTS = Object.freeze({ daily: Object.freeze({ fresh: 8, older: 1, discover: 3 }), weekly: Object.freeze({ fresh: 15, older: 5, discover: 3 }) });
+export const SIZE_DEFAULTS = Object.freeze({ daily: Object.freeze({ fresh: 30, older: 3, discover: 3 }), weekly: Object.freeze({ fresh: 15, older: 5, discover: 3 }) });
 
 /** The Routines starter card that opens the setup sheet. Only a host on the library server shows it: the radar scores on its embeddings. */
 export const RADAR_CARD = Object.freeze({ id: 'reading-radar', title: 'Reading radar', blurb: 'Each morning, new papers in your field and older ones worth reading, picked from your library.' });
@@ -77,7 +77,7 @@ export function formFromRoutine(routine) {
   form.name = routine.name ?? form.name;
   form.profile = { topics: (profile.topics ?? []).map((/** @type {Weighted} */ t) => ({ ...t })), authors: followed(profile.authors), journals: followed(profile.journals) };
   form.when = whenFromSchedule(routine.schedule);
-  form.size = { fresh: radar.size?.fresh ?? 8, older: radar.size?.older ?? 1, discover: radar.size?.discover ?? 3 };
+  form.size = { fresh: radar.size?.fresh ?? 30, older: radar.size?.older ?? 3, discover: radar.size?.discover ?? 3 };
   form.sizeTouched = true;
   form.note = radar.note !== false;
   form.seeds = radar.seeds ? structuredClone(radar.seeds) : null;

@@ -7,13 +7,13 @@ import { summaryLine, digestFile, digestMarkdown } from '../src/radar-digest.js'
 const item = (n, over = {}) => ({ id: `doi:10.1/${n}`, doi: `10.1/${n}`, arxiv: null, title: `Invented paper ${n}`, authors: [], venue: '', date: null, year: 2026, abstract: `Abstract ${n}.`, url: null, links: [], sources: [], ...over });
 const config = { sources: [{ id: 'database:chemrxiv', on: true, kind: 'database', db: 'chemrxiv' }, { id: 'feed:https://a.example/rss', on: true, kind: 'feed', url: 'https://a.example/rss', title: 'Nature Invented' }] };
 
-test('at most 20 rows are sent, abstracts only; lines map back by number; junk entries are ignored', async () => {
-  const items = Array.from({ length: 30 }, (_, i) => item(i + 1));
+test('at most 50 rows are sent, abstracts only; lines map back by number; junk entries are ignored', async () => {
+  const items = Array.from({ length: 60 }, (_, i) => item(i + 1));
   let prompt = '';
-  const { lines, error } = await whyLines(items, { topics: ['voles'], turn: async (p) => { prompt = p; return { lines: [{ n: 1, line: '  First   line. ' }, { n: 21, line: 'beyond the cap' }, { n: 2, line: '' }, { n: 'x', line: 'no number' }, { n: 3, line: 'x'.repeat(500) }] }; } });
+  const { lines, error } = await whyLines(items, { topics: ['voles'], turn: async (p) => { prompt = p; return { lines: [{ n: 1, line: '  First   line. ' }, { n: 51, line: 'beyond the cap' }, { n: 2, line: '' }, { n: 'x', line: 'no number' }, { n: 3, line: 'x'.repeat(500) }] }; } });
   assert.equal(error, null);
   assert.equal((prompt.match(/### Paper/g) ?? []).length, MAX_WHY_ROWS);
-  assert.doesNotMatch(prompt, /Invented paper 21\b/);
+  assert.doesNotMatch(prompt, /Invented paper 51\b/);
   assert.equal(lines.get('doi:10.1/1'), 'First line.');
   assert.equal(lines.has('doi:10.1/2'), false);
   assert.equal(lines.get('doi:10.1/3').length, 220);

@@ -8,6 +8,8 @@
 
 /** Candidates read per run, best first; the New rows are then picked from those that pass. */
 export const JUDGE_POOL = 40;
+/** On 2026-11-02 the check rejected 29 of its 40, so a long issue needs about three candidates per row. */
+export const judgePool = (/** @type {number} */ fresh) => Math.max(JUDGE_POOL, fresh * 3);
 const MAX_ABSTRACT = 700;
 const MAX_TITLES = 12;
 
@@ -44,7 +46,7 @@ export function judgePrompt(rows, profile) {
  * @returns {Promise<{ off: Set<string>, error: string | null }>} ids judged off the profile; none when the call failed
  */
 export async function judgeFit(pool, ctx) {
-  const rows = pool.slice(0, JUDGE_POOL);
+  const rows = pool;
   if (!rows.length) return { off: new Set(), error: null };
   try {
     const out = /** @type {any} */ (await ctx.turn(judgePrompt(rows, ctx), JUDGE_SCHEMA));

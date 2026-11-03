@@ -114,3 +114,10 @@ test('Earlier issues shows one row with Previous and Next a row at a time; Home 
   // Research reports keeps its pages of 8: one report, no pager
   assert.equal(shelves[0].find('sbw-pager').length, 0);
 });
+
+test('a long issue offers its next papers, and says how many are left', async () => {
+  const { moreLabel } = await import('../src/home/home.js');
+  assert.equal(moreLabel(22), 'Show 8 more (22 left)');
+  assert.equal(moreLabel(8), 'Show 8 more');
+  assert.equal(moreLabel(3), 'Show 3 more');
+});
