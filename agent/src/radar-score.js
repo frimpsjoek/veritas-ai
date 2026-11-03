@@ -57,9 +57,11 @@ export const venueKey = (/** @type {string} */ v) => fold(v).replace(/[^a-z0-9]+
  *   cut?: number,
  *   seedTitle?: (label: string) => string,
  *   baseline?: import("./radar-types").SeedBaseline | null,
+ *   rankBar?: number | null,
  * }} ctx `watched` adds names from author and journal sources the user switched on to the profile's own lists.
  *   `seeds` (spec 021): similarity is to the closest seed, not the library average; `cut` replaces the floor
  *   (the abstract pass of a seed radar keeps a little below its threshold; the full-text pass decides).
+ *   `rankBar`: a calibrated radar's abstract threshold; such a radar ranks on how far a paper is past it.
  * @returns {Promise<RadarItem[]>} the items at or above the floor, best first, each with `score` and `why`
  */
 export async function score(items, ctx) {
@@ -100,7 +102,7 @@ export async function score(items, ctx) {
     const hits = topics.filter((t) => t.words.filter((w) => bag.has(w)).length / t.words.length >= WEIGHTS.topicWords);
     const matched = hits.slice(0, WEIGHTS.topicCap);
     const learnedHit = hits.find((t) => t.learned);
-    // Seed radar: rank and show the plain similarity to the closest seed; keep or drop on its margin over that seed's baseline.
+    // Seed radar: show the plain similarity to the closest seed; keep or drop on its margin over that seed's baseline.
     const seed = ctx.seeds && s.seed_best ? { label: s.seed_best, title: ctx.seedTitle?.(s.seed_best) ?? s.seed_best, whole: false, margin: round(s.seed_max ?? 0) } : null;
     const why = {
       similarity: round(ctx.seeds ? s.seed_raw ?? s.seed_max ?? 0 : s.similarity),
@@ -112,7 +114,7 @@ export async function score(items, ctx) {
       ...(learnedHit ? { learned: learnedHit.text } : {}),
       ...(String(it.abstract ?? '').trim() ? {} : { titleOnly: -WEIGHTS.titleOnly }),
     };
-    return { ...it, why, score: round(why.similarity + why.author + why.journal + why.topic + why.negative + (why.titleOnly ?? 0)) };
+    return { ...it, why, score: round(fit(why.similarity, seed?.margin, ctx.rankBar) + why.author + why.journal + why.topic + why.negative + (why.titleOnly ?? 0)) };
   });
   const cut = ctx.cut ?? WEIGHTS.floor;
   // A seed radar's threshold is calibrated on similarity alone (spec 021 G4); the bonuses only rank.
@@ -122,15 +124,22 @@ export async function score(items, ctx) {
 
 const round = (/** @type {number} */ n) => Math.round(n * 1000) / 1000;
 
+/** What ranks a paper. Plain similarity favours whatever is close to the whole field, and a whole paper scores higher than
+ *  an abstract whatever it is about (2026-11-02: 13 of 15 rows matched one broad seed, all 15 read whole). A calibrated
+ *  radar ranks on how far the margin is past the threshold for that kind of text, which compares both fairly.
+ *  @param {number} similarity @param {number | undefined} margin @param {number | null | undefined} bar */
+const fit = (similarity, margin, bar) => (bar != null && margin != null ? margin - bar : similarity);
+
 /** What a seed radar's cut compares: the margin over the closest seed's baseline, less the title-only discount.
  *  @param {RadarItem} it */
 export const seedBar = (it) => (it.why?.seed?.margin ?? it.why?.similarity ?? 0) + (it.why?.titleOnly ?? 0);
 
 /** The score again after the paper was read whole (spec 021 G3): the whole-paper similarity replaces the
- *  abstract's, the bonuses stay. @param {RadarItem} it @param {number} similarity @param {{ label: string, title: string, margin?: number }} seed */
-export function rescoreWhole(it, similarity, seed) {  // seed: { label, title, margin? }
+ *  abstract's, the bonuses stay. `bar`: a calibrated radar's whole-paper threshold.
+ *  @param {RadarItem} it @param {number} similarity @param {{ label: string, title: string, margin?: number }} seed @param {number | null} [bar] */
+export function rescoreWhole(it, similarity, seed, bar = null) {  // seed: { label, title, margin? }
   // Read whole, the paper is no longer judged on its title.
   const { titleOnly: _read, ...rest } = /** @type {import("./radar-types").RadarWhy} */ (it.why);
   const why = /** @type {import("./radar-types").RadarWhy} */ ({ ...rest, similarity: round(similarity), seed: { ...seed, whole: true } });
-  return { ...it, why, score: round(why.similarity + why.author + why.journal + why.topic + why.negative) };
+  return { ...it, why, score: round(fit(why.similarity, seed.margin, bar) + why.author + why.journal + why.topic + why.negative) };
 }

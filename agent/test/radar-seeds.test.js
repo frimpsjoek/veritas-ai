@@ -81,11 +81,39 @@ test('a seed run reads its categories from arXiv RSS, reads candidates whole, an
   const titles = out.picked.map((p) => p.title);
   assert.deepEqual(titles, ['Close in abstract and whole', 'Unreadable PDF, close abstract']);
   assert.deepEqual(out.picked[0].why?.seed, { label: 'zotero/K1', title: 'Band gaps of frameworks', whole: true, margin: 0.86 });
-  assert.equal(out.picked[0].why?.similarity, 0.96, 'the plain similarity is shown and ranks; the margin decided');
+  assert.equal(out.picked[0].why?.similarity, 0.96, 'the plain similarity is shown; the margin decided');
   assert.equal(out.picked[1].why?.seed?.whole, false, 'a PDF that could not be read is judged on its abstract');
   assert.deepEqual(lib.calls.fulltext[0].items.map((i) => i.arxiv).sort(), ['2610.00001', '2610.00002', '2610.00003'], 'only candidates past the abstract cut are read whole');
   const status = out.state.sourceStatus['database:arxiv'];
   assert.deepEqual(status.history?.map((h) => [h.items, h.kept]), [[4, 2]], 'the arXiv source says how many it gave and how many were kept');
+});
+
+test('a calibrated radar ranks on how far past its bar a paper is, not on plain similarity or on being read whole', async () => {
+  const feedUrl = 'https://journal.example/rss';
+  const feed = feedXml([
+    { title: 'Close to the whole field', link: 'https://journal.example/1', summary: 'broad', date: RECENT },
+    { title: 'Close to one seed', link: 'https://journal.example/2', summary: 'narrow', date: RECENT },
+  ]);
+  const fetch = routedFetch({ [feedUrl]: res(200, feed), [arxivCategoryFeed('cond-mat.mtrl-sci')]: res(200, arxivFeed([{ id: '2610.00001', title: 'Read whole, barely past', summary: 'whole' }])) });
+  const near = { 'Close to the whole field': [0.12, 0.85], 'Close to one seed': [0.2, 0.7], 'Read whole, barely past': [0.11, 0.7] };
+  const lib = seedLibrary({ abstractSim: () => 0, wholeSim: () => null });
+  lib.radarScore = async (q) => Object.fromEntries(q.items.map((i) => { const [seed_max, seed_raw] = near[i.text.split('. ')[0]]; return [i.id, { similarity: 0.5, negative: 0, seed_max, seed_best: 'zotero/K1', seed_raw }]; }));
+  lib.radarFulltext = async (q) => Object.fromEntries(q.items.map((i) => [i.id, { seed_max: 0.04, seed_best: 'zotero/K1', seed_raw: 0.9 }]));
+  const threshold = { abstract: 0.1, full: 0.03, calibration: { baseline: { labels: ['zotero/K1'], abstract: [0.6], full: [0.8] } } };
+  const config = validateRadar({ scope: { kind: 'library' }, profile: profile({ topics: [] }), size: { fresh: 15, older: 0 }, seeds: seeds(), threshold,
+    sources: [{ id: 'database:arxiv', on: true, kind: 'database', db: 'arxiv' }, { id: 'feed:j', on: true, kind: 'feed', url: feedUrl, title: 'Journal' }] });
+  const out = await collectRadar({ config, since: '2026-09-01', now: NOW, fetch, library: lib, state: emptyState() });
+  assert.deepEqual(out.picked.map((p) => p.title), ['Close to one seed', 'Close to the whole field', 'Read whole, barely past']);
+  assert.deepEqual(out.picked.map((p) => p.score), [0.1, 0.02, 0.01]);
+  assert.equal(out.picked[2].why?.similarity, 0.9, 'the plain similarity stays on the row');
+});
+
+test('a radar with no baselines still ranks on plain similarity', async () => {
+  const fetch = routedFetch({ [arxivCategoryFeed('cond-mat.mtrl-sci')]: res(200, arxivFeed([{ id: '2610.00001', title: 'Plain', summary: 'band gap' }])) });
+  const lib = seedLibrary({ abstractSim: () => 0.8, wholeSim: () => null });
+  const config = validateRadar({ scope: { kind: 'library' }, profile: profile({ topics: [] }), sources: [{ id: 'database:arxiv', on: true, kind: 'database', db: 'arxiv' }], size: { fresh: 15, older: 0 }, seeds: seeds(), threshold: { abstract: 0.78, full: 0.82 } });
+  const out = await collectRadar({ config, since: '2026-09-01', now: NOW, fetch, library: lib, state: emptyState() });
+  assert.equal(out.picked[0].score, 0.9);
 });
 
 test('a seed run looks back at most a week, and a feed adds only what passes the threshold', async () => {

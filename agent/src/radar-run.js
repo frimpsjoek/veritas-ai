@@ -94,7 +94,7 @@ export async function collectRadar(run) {
   }
   const cut = seeds ? (threshold ? threshold.abstract - ABSTRACT_MARGIN : DEFAULT_CUT) : undefined;
   const baseline = threshold?.calibration?.baseline ?? null;
-  const scoring = { backend: library, collections, profile: config.profile, state, watched, seeds, cut, seedTitle, baseline };
+  const scoring = { backend: library, collections, profile: config.profile, state, watched, seeds, cut, seedTitle, baseline, rankBar: baseline && threshold ? threshold.abstract : null };
   const abstracts = { ...state.abstracts };
   if (run.abstractFetch) {
     // A title shares one noun phrase with a seed and scores as if it were the seed's topic. A first pass orders the
@@ -230,7 +230,7 @@ async function decideWhole(ranked, ctx) {
   for (const it of ranked) {
     const w = whole[it.id];
     if (w && typeof w.seed_max === 'number' && w.seed_best) {
-      if (w.seed_max >= /** @type {number} */ (wholeCut)) out.push(rescoreWhole(it, w.seed_raw ?? w.seed_max, { label: w.seed_best, title: ctx.seedTitle(w.seed_best), margin: Math.round(w.seed_max * 1000) / 1000 }));
+      if (w.seed_max >= /** @type {number} */ (wholeCut)) out.push(rescoreWhole(it, w.seed_raw ?? w.seed_max, { label: w.seed_best, title: ctx.seedTitle(w.seed_best), margin: Math.round(w.seed_max * 1000) / 1000 }, ctx.baseline ? wholeCut : null));
     } else if (seedBar(it) >= abstractCut) out.push(it);
   }
   return out.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
