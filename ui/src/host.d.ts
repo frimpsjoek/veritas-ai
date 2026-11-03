@@ -107,7 +107,7 @@ export interface UiHost {
   /** `items` is parallel to `papers` (index-for-index), `null` where that one failed, so a caller — find-view.js's
    *  table, ticking several at once — can mark exactly the rows that made it in, the way the pre-005 code mutated
    *  each row's `.key`/`.citekey` in place as `discover.add()` finished it. */
-  addToLibrary?(papers: OutsidePaper[]): Promise<{ items: ({ key: string; citekey: string } | null)[] }>;
+  addToLibrary?(papers: OutsidePaper[], options?: { collection?: string | null }): Promise<{ items: ({ key: string; citekey: string } | null)[] }>;
 
   // --- small chrome
   notice(text: string): void;           // Zotero: progress window; Obsidian: Notice

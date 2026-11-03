@@ -297,8 +297,8 @@ export function createWebHost(options = {}) {
       return label;
     },
 
-    async addToLibrary(papers) {
-      const reply = /** @type {any} */ (await api.call('/zotero/add', 'POST', { papers }));
+    async addToLibrary(papers, options) {
+      const reply = /** @type {any} */ (await api.call('/zotero/add', 'POST', { papers, ...(options?.collection ? { collection: options.collection } : {}) }));
       const results = /** @type {{ status: string, key?: string, id?: string }[]} */ (reply.results ?? []);
       const queued = results.some((r) => r.status === 'queued');
       if (results.some((r) => r.status === 'added')) host.notice(queued ? 'Some papers were added to Zotero; the rest will be added when Zotero opens.' : 'Added to Zotero');

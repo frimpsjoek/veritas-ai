@@ -158,3 +158,24 @@ test('a DOI answered with its abstract only is a landing page: journal and date,
   const arxiv = readerPlan({ source: 'arxiv', abstract_html: '<p>x</p>', paper: { doi: '10.48550/arXiv.1', arxiv: '1' } });
   assert.deepEqual([arxiv.landing, arxiv.abstractHtml, arxiv.doi, arxiv.citation], [false, '', '', ''], 'an arXiv answer keeps its own look');
 });
+
+test('the paper on screen becomes what Add to Zotero sends', async () => {
+  const { paperToAdd } = await import('../src/browser-state.js');
+  assert.equal(paperToAdd({ mode: 'reader', title: 'A page', html: '<p>x</p>' }), null, 'an ordinary page is not a paper');
+  const paper = paperToAdd({ source: 'arxiv', title: 'T', byline: 'Ann Chen, Bo Li', abstract: 'We show it.', url: 'https://arxiv.org/abs/2610.1',
+    paper: { arxiv: '2610.1', doi: '10.48550/arXiv.2610.1', submitted: '30 Oct 2026' }, links: [{ label: 'PDF', url: 'https://arxiv.org/pdf/2610.1', kind: 'pdf' }] });
+  assert.deepEqual(paper?.authors, ['Ann Chen', 'Bo Li']);
+  assert.equal(paper?.year, 2026);
+  assert.equal(paper?.venue, 'arXiv');
+  assert.equal(paper?.pdf, 'https://arxiv.org/pdf/2610.1');
+  assert.deepEqual(paperToAdd({ source: 'arxiv', title: 'T', byline: 'Ann Chen et al.', paper: { authors: ['Ann Chen', 'Bo Li', 'Cy Wu'] } })?.authors, ['Ann Chen', 'Bo Li', 'Cy Wu'], 'not the short byline');
+  assert.equal(paperToAdd({ source: 'openalex', title: 'J', paper: { journal: 'JACS', published: '2024-05-01', doi: '10.1/x' } })?.venue, 'JACS');
+});
+
+test('collections are listed under their parents by name, and a lost parent does not hide one', async () => {
+  const { collectionOptions } = await import('../src/browser-state.js');
+  const options = collectionOptions([{ key: 'b', name: 'Beta' }, { key: 'c', name: 'Child', parent: 'b' }, { key: 'a', name: 'Alpha' }, { key: 'o', name: 'Orphan', parent: 'gone' }]);
+  assert.deepEqual(options.map((o) => o.key), ['a', 'b', 'c', 'o']);
+  assert.equal(options[2].label, '  Child');
+  assert.deepEqual(collectionOptions(/** @type {any} */ (null)), []);
+});

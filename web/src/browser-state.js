@@ -115,12 +115,58 @@ export function readerPlan(answer) {
     abstract: String(answer?.abstract ?? ''),
     abstractHtml: landing ? String(answer?.abstract_html ?? '') : '',
     abstractLabel: 'Abstract',
+    arxiv: String(paper.arxiv ?? ''),
     doi,
     doiUrl: doi ? `https://doi.org/${doi}` : '',
     citation: landing ? String(paper.citation ?? '') : '',
     math: answer?.math === true,
     html: String(answer?.html ?? ''),
   };
+}
+
+/** What Add to Zotero sends for the paper on screen; null for a page that is not a paper. @param {any} answer */
+export function paperToAdd(answer) {
+  if (answer?.source !== 'arxiv' && answer?.source !== 'openalex') return null;
+  const paper = answer.paper ?? {};
+  const links = Array.isArray(answer.links) ? answer.links : [];
+  const year = /\b(?:19|20)\d\d\b/.exec(String(paper.published ?? paper.submitted ?? ''))?.[0];
+  return {
+    title: String(answer.title ?? ''),
+    // The byline stops at "et al."; the paper's own list has everyone.
+    authors: Array.isArray(paper.authors) ? paper.authors.map(String) : String(answer.byline ?? '').split(/,\s+/).filter(Boolean),
+    year: year ? Number(year) : null,
+    venue: answer.source === 'arxiv' ? 'arXiv' : String(paper.journal ?? ''),
+    doi: paper.doi || null,
+    abstract: String(answer.abstract ?? ''),
+    url: String(answer.url ?? ''),
+    source: answer.source,
+    arxiv: paper.arxiv || undefined,
+    pdf: links.find((/** @type {any} */ l) => l?.kind === 'pdf')?.url,
+    type: answer.source === 'arxiv' ? 'preprint' : undefined,
+  };
+}
+
+/** The Zotero collections as a picker lists them: each under its parent, by name, indented.
+ *  @param {{ key: string, name: string, parent?: string | null }[]} collections @returns {{ key: string, label: string }[]} */
+export function collectionOptions(collections) {
+  const list = Array.isArray(collections) ? collections : [];
+  const keys = new Set(list.map((c) => c.key));
+  /** @type {Map<string | null, typeof list>} */
+  const under = new Map();
+  for (const c of list) {
+    const parent = c.parent && keys.has(c.parent) ? c.parent : null;
+    under.set(parent, [...(under.get(parent) ?? []), c]);
+  }
+  /** @type {{ key: string, label: string }[]} */
+  const out = [];
+  const walk = (/** @type {string | null} */ parent, /** @type {number} */ depth) => {
+    for (const c of [...(under.get(parent) ?? [])].sort((a, b) => a.name.localeCompare(b.name))) {
+      out.push({ key: c.key, label: `${'\u00A0\u00A0'.repeat(depth)}${c.name}` }); // an <option> drops plain spaces
+      walk(c.key, depth + 1);
+    }
+  };
+  walk(null, 0);
+  return out;
 }
 
 // Inline TeX in an answer the server marked as math: \(…\), \[…\], $$…$$ and $…$. Unlike titleNodes (chat/markdown.js),

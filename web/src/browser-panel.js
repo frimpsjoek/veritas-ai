@@ -4,11 +4,12 @@
 // view (the readable article, drawn like a note), and a plain card when neither works. A PDF goes to the PDF reader.
 import { h } from '../../ui/src/dom.js';
 import { icon } from '../../ui/src/icons.js';
+import { logoFor, logoSvg } from '../../ui/src/logos.js';
 import { interceptLinks, isPdfUrl } from '../../ui/src/links.js';
 import { noteFragment } from '../../ui/src/sources/view-kit.js';
 import { PdfViewer } from './pdf-viewer.js';
 import { mathNode } from '../../ui/src/chat/markdown.js';
-import { addressOf, blockedReason, createHistory, fileNameOf, firstPrefer, mathParts, pageQuery, readerPlan, sourceOf, stepBack } from './browser-state.js';
+import { addressOf, blockedReason, createHistory, fileNameOf, firstPrefer, collectionOptions, mathParts, pageQuery, paperToAdd, readerPlan, sourceOf, stepBack } from './browser-state.js';
 
 const FRAME_SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox';
 
@@ -136,18 +137,22 @@ export function createBrowserPanel({ host, doc, win, into }) {
       }
       top.append(chips);
     }
-    if (plan.links.length || plan.citation) {
-      const row = h(doc, 'p', 'sbw-reader-links');
+    const adding = host.can.addToLibrary ? paperToAdd(page) : null;
+    if (plan.links.length || plan.citation || adding) {
+      const row = h(doc, 'div', 'sbw-reader-links');
+      // The way into the paper leads: its full text where there is one, else the first link.
+      const lead = plan.links.find((l) => l.label === 'Full text') ?? plan.links[0];
       for (const link of plan.links) {
-        const b = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sbw-quiet', link.label));
+        const b = /** @type {HTMLButtonElement} */ (h(doc, 'button', `sb-button sbw-reader-action${link === lead ? ' is-primary' : ''}`));
         b.setAttribute('type', 'button');
         b.title = link.outside ? `${addressOf(link.url)} (opens in your browser)` : addressOf(link.url);
+        b.append(icon(doc, link.outside ? 'open' : link.kind === 'pdf' ? 'paper' : 'note', 'sb-p-icon sbw-reader-out'), link.label);
         // the PDF goes to the PDF reader and the full text to this reader, both in the panel (Back returns here); a
         // publisher's page goes to the system browser, since publishers refuse to load here (bot protection)
-        if (link.outside) b.append(icon(doc, 'open', 'sb-p-icon sbw-reader-out'));
         b.addEventListener('click', () => (link.outside ? host.openLink(link.url, { outside: true }) : api.open(link.url)));
         row.append(b);
       }
+      if (adding) row.append(saveControl(adding));
       if (plan.citation) {
         const cite = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sbw-quiet', 'Copy citation'));
         cite.setAttribute('type', 'button');
@@ -161,7 +166,8 @@ export function createBrowserPanel({ host, doc, win, into }) {
     article.append(top);
     // a paper's graphical abstract, only when the figure finder (Home's /paper-figure: the publisher page's preview
     // image when that page answers, or a figure at a known address) has a real one; nothing is drawn while it looks
-    if (plan.landing && plan.doi) figureOf(plan.doi, top);
+    if (plan.landing && plan.doi) figureOf({ doi: plan.doi }, top, 'Graphical abstract');
+    else if (plan.arxiv && !plan.html) figureOf({ arxiv: plan.arxiv }, top, 'First figure of the paper', true);
     const text = h(doc, 'div', 'sbw-note-body');
     if (plan.abstractHtml) {
       text.append(h(doc, 'h2', 'sbw-reader-label', plan.abstractLabel), noteFragment(doc, plan.abstractHtml, host));
@@ -214,21 +220,67 @@ export function createBrowserPanel({ host, doc, win, into }) {
     return foot;
   }
 
-  /** @param {string} doi @param {HTMLElement} after */
-  function figureOf(doi, after) {
+  /** Add to Zotero, beside a picker of collections. The collection last picked is the one offered next time.
+   *  @param {NonNullable<ReturnType<typeof paperToAdd>>} paper */
+  function saveControl(paper) {
+    const box = h(doc, 'span', 'sbw-reader-save');
+    const add = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sb-button sbw-reader-action'));
+    add.setAttribute('type', 'button');
+    const logo = logoFor('zotero');
+    add.append(...(logo ? [logoSvg(doc, logo, 14)] : []), 'Add to Zotero');
+    const picker = /** @type {HTMLSelectElement} */ (h(doc, 'select', 'sbw-reader-collection'));
+    picker.setAttribute('aria-label', 'Zotero collection');
+    picker.title = 'Which Zotero collection to add it to';
+    picker.hidden = true;
+    const choice = (/** @type {string} */ value, /** @type {string} */ label) => {
+      const option = /** @type {HTMLOptionElement} */ (h(doc, 'option', '', label));
+      option.value = value;
+      return option;
+    };
+    picker.append(choice('', 'My Library'));
+    host.json('/zotero/collections').then((/** @type {any} */ found) => {
+      const options = collectionOptions(found);
+      if (!options.length) return;
+      picker.append(...options.map((o) => choice(o.key, o.label)));
+      const saved = String(host.prefs.get('zoteroCollection') ?? '');
+      if (options.some((o) => o.key === saved)) picker.value = saved;
+      picker.hidden = false;
+    }, () => {});
+    picker.addEventListener('change', () => host.prefs.set('zoteroCollection', picker.value));
+    add.addEventListener('click', async () => {
+      add.disabled = true;
+      const label = add.lastChild;
+      try {
+        const out = await host.addToLibrary?.([paper], { collection: picker.value || null });
+        if (!out?.items?.[0]) throw new Error('not added');
+        if (label) label.textContent = String(out.items[0].key).startsWith('queued-') ? 'Waiting for Zotero' : 'Added to Zotero';
+        picker.disabled = true;
+      } catch (error) {
+        host.logError(error);
+        host.notice("Couldn't add this paper to Zotero.");
+        add.disabled = false;
+      }
+    });
+    box.append(add, picker);
+    return box;
+  }
+
+  /** @param {{ doi?: string, arxiv?: string }} paper @param {HTMLElement} after @param {string} alt @param {boolean} [caption] */
+  function figureOf(paper, after, alt, caption = false) {
     const mine = token;
-    host.json(`/paper-figure?${new URLSearchParams({ doi })}`).then((/** @type {any} */ found) => {
+    host.json(`/paper-figure?${new URLSearchParams({ doi: paper.doi ?? '', ...(paper.arxiv ? { arxiv: paper.arxiv } : {}) })}`).then((/** @type {any} */ found) => {
       if (mine !== token || !found?.image || !/^(https?:\/\/|data:image\/)/i.test(String(found.image))) return;
       const box = h(doc, 'figure', 'sbw-reader-figure');
       box.hidden = true;
       const img = /** @type {HTMLImageElement} */ (h(doc, 'img'));
-      img.alt = 'Graphical abstract';
+      img.alt = alt;
       img.referrerPolicy = 'no-referrer';
       img.decoding = 'async';
       img.addEventListener('load', () => { box.hidden = false; }, { once: true });
       img.addEventListener('error', () => box.remove(), { once: true });
       img.src = String(found.image);
       box.append(img);
+      if (caption) box.append(h(doc, 'figcaption', 'sbw-reader-figure-note', alt));
       after.after(box);
     }, () => {});
   }

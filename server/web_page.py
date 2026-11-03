@@ -362,7 +362,7 @@ def _landing(url: str, doi: str, work: dict, record: dict | None, text: str) -> 
     published = published_of(work, record)
     year = str(work.get("publication_year") or (published.rsplit(" ", 1)[-1] if published else ""))
     names = [n for n in ((a.get("author") or {}).get("display_name") for a in work.get("authorships") or []) if n]
-    paper = {"doi": doi, "journal": journal, "published": published, "volume": volume, "issue": issue, "pages": pages,
+    paper = {"doi": doi, "journal": journal, "published": published, "volume": volume, "issue": issue, "pages": pages, "authors": names,
              "citation": citation_of(doi, title, names, journal, year, volume, issue, pages)}
     links = [{"label": "Publisher's page", "url": f"https://doi.org/{doi}", "kind": "outside"}]
     access = work.get("open_access") or {}
@@ -1081,7 +1081,7 @@ def _arxiv(url: str, arxiv: str, kind: str, prefer: str | None, get) -> dict | N
     links = [{"label": "PDF", "url": f"https://arxiv.org/pdf/{arxiv}", "kind": "pdf"}]
     answer = {"mode": "reader", "url": url, "title": paper["title"], "byline": _names(paper["authors"]),
               "abstract": paper["abstract"], "html": "", "source": "arxiv", "math": True,
-              "paper": {k: paper[k] for k in ("arxiv", "version", "submitted", "revised", "subjects", "doi", "comment")},
+              "paper": {**{k: paper[k] for k in ("arxiv", "version", "submitted", "revised", "subjects", "doi", "comment")}, "authors": _flip(paper["authors"])},
               "links": links}
     if kind == "html":
         read = None
