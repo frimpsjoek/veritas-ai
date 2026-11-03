@@ -15,6 +15,7 @@ import { paintNote } from './note-view.js';
 import { createBrowserPanel } from './browser-panel.js';
 import { documentUrl, isDocumentPath } from '../../ui/src/sources/view-kit.js';
 import { headerProgress } from './progress-view.js';
+import { serverLight } from './server-light.js';
 
 /** @typedef {import("../../ui/src/sources/route.js").WebRoute} WebRoute */
 
@@ -115,7 +116,8 @@ export function createShell({ host, doc = document, win = /** @type {Window} */ 
   const page = h(doc, 'div', 'sbw-view sbw-view-page');
   // spec 019 G2: a thin bar under the header while the index builds; it opens Settings > Search index
   main.append(headerProgress(doc, host, formatRoute({ view: 'settings', section: 'index' })), chatHost, page);
-  root.append(rail, main);
+  const light = serverLight(doc, host);
+  root.append(rail, main, light.root);
   // Spec 015: web links open in a panel over the content area (the host decides inside or outside).
   const browser = createBrowserPanel({ host, doc, win, into: main });
   host.setBrowser((url) => browser.open(url));
@@ -259,6 +261,7 @@ export function createShell({ host, doc = document, win = /** @type {Window} */ 
       win.removeEventListener('hashchange', onHash);
       host.setBrowser(null);
       clearInterval(timer);
+      light.stop();
       chat?.destroy();
       root.remove();
     },

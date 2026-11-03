@@ -198,3 +198,7 @@ body { background: var(--sb-ui-bg); color: var(--sb-ui-text); font: 15px/1.45 va
 
 /* Abstracts read as set text: justified, hyphenated so the gaps stay even (the paper reader, Home's papers) */
 .sbw-abstract, .sbw-paper-abstract, .sbw-paper-why { text-align: justify; hyphens: auto; -webkit-hyphens: auto; }
+
+/* server-light.js: on while the server answers, an empty ring when it does not. Top right of the window at every width. */
+.sbw-server-light { position: fixed; z-index: 40; top: calc(env(safe-area-inset-top, 0px) + 6px); right: 6px; box-sizing: border-box; width: 9px; height: 9px; border: 2px solid var(--sb-ui-danger); border-radius: 50%; }
+.sbw-server-light.is-on { border-color: var(--sb-ui-ok); background: var(--sb-ui-ok); }
