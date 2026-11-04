@@ -11,7 +11,7 @@ import { dueSlot } from './schedule.js';
 
 /** @typedef {import('./schedule.js').Schedule} Schedule */
 /** @typedef {{ kind: 'artifact', session: string, result: { id: string } } | { kind: 'session' }} RoutineTarget */
-/** @typedef {{ at: string, slot: string | null, status: 'done' | 'failed' | 'skipped', reason?: string, added?: number, session?: string, writes?: any[], review?: string, summary?: string }} RoutineRun */
+/** @typedef {{ at: string, slot: string | null, status: 'done' | 'failed' | 'skipped', reason?: string, tries?: number, added?: number, session?: string, writes?: any[], review?: string, summary?: string }} RoutineRun */
 /**
  * @typedef {{
  *   id: string, name: string, prompt: string, skills: string[], depth: 'fastest' | 'quick' | 'standard' | 'deep', schedule: Schedule,

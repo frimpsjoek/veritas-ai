@@ -369,6 +369,8 @@ export type RoutineTarget = { kind: "artifact"; session: string; result: { id: s
 export interface RoutineRun {
   at: string; slot: string | null; status: "done" | "failed" | "skipped"; reason?: string; added?: number;
   session?: string; review?: string; writes?: ResultRef[]; summary?: string;
+  /** Which try at its slot a scheduled run was; a run the user started has none. */
+  tries?: number;
 }
 export interface Routine {
   /** The project a new session each run starts in. Unknown or deleted means none. Artifact routines use their session's. */

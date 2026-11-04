@@ -254,6 +254,9 @@ p.sbw-prose { margin: 0 0 var(--sbw-s3); max-width: var(--measure); }
 .sbw-reader-save { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--sbw-s1); }
 .sbw-reader-collection { box-sizing: border-box; max-width: 200px; min-height: 36px; padding: 0 var(--sbw-s2); border: 1px solid var(--sb-ui-line); border-radius: var(--sbw-r1); background: var(--sb-ui-control); color: var(--sb-ui-text); font: inherit; font-size: var(--sbw-t-small); }
 .sbw-reader-collection[hidden] { display: none; }
+.sbw-browser-save { flex: none; }
+.sbw-browser-save .sbw-reader-save { flex-wrap: nowrap; }
+.sbw-browser-save .sbw-reader-collection { max-width: 140px; }
 /* A DOI's landing page (2026-10-29): line icons for "opens outside" and the citation, a graphical abstract only when
    one was found, the DOI and the access note under the abstract in the same prose family, smaller and muted. */
 .sbw-reader-links .sbw-quiet:has(.sb-p-icon) { display: inline-flex; align-items: center; gap: 5px; }
@@ -274,6 +277,7 @@ p.sbw-prose { margin: 0 0 var(--sbw-s3); max-width: var(--measure); }
 @media (max-width: 480px) {
   .sbw-browser-bar { gap: 0; padding: 0 var(--sbw-s2); }
   .sbw-browser-text { padding: 6px 6px; font-size: 12px; }
+  .sbw-browser-save .sbw-reader-collection { display: none; }
 }
 
 /* Open in Zotero / Obsidian: the app's own logo before the words */

@@ -21,7 +21,7 @@ function setup(over = {}) {
   const runs = [];
   const logs = [];
   const deps = {
-    store, clock: () => clock.now, tickMs: 60_000, startupGraceMs: 45_000, log: (l) => logs.push(l),
+    store, clock: () => clock.now, tickMs: 60_000, startupGraceMs: 45_000, wakeGapMs: Infinity, log: (l) => logs.push(l),
     run: async (r, ctx) => { runs.push({ id: r.id, ...ctx }); return { status: 'done', added: 2, summary: 'ok' }; },
     ...over,
   };
@@ -372,6 +372,87 @@ test('a radar that has never run runs on the first tick after the grace, then wa
     assert.equal(t.runs.length, 1, 'once: after the first run it is back on its schedule');
     await pulse(s, t.clock, 90 * 60_000);
     assert.equal(t.runs.length, 2, 'and its 07:30 slot runs as usual');
+    await s.dispose();
+  } finally { mock.timers.reset(); }
+});
+
+const failedRadar = (over = {}) => {
+  const slot = iso(local(2026, 5, 4, 7, 30));
+  return routine('rad', { kind: 'radar', radar: radarConfig, lastSlot: slot, lastRun: { at: iso(local(2026, 5, 4, 7, 31)), slot, status: 'failed', reason: 'timed out', tries: 1 }, ...over });
+};
+
+test('a radar whose scheduled run failed tries again after a wait, at most three times, then waits for its next slot', async () => {
+  mock.timers.enable({ apis: ['setInterval'] });
+  try {
+    const t = setup({ run: async (r, ctx) => { t.runs.push(ctx); throw new Error('timed out'); } });
+    await t.store.write(failedRadar());
+    t.clock.now = local(2026, 5, 4, 7, 40);
+    const s = createRoutineScheduler(t.deps);
+    await pulse(s, t.clock);
+    assert.equal(t.runs.length, 0, 'too soon');
+    await pulse(s, t.clock, 30 * 60_000);
+    assert.equal(t.runs.length, 1);
+    assert.equal(t.runs[0].slot, iso(local(2026, 5, 4, 7, 30)), 'the same slot, so no second issue for the day');
+    assert.equal((await t.store.read('rad')).lastRun.tries, 2);
+    await pulse(s, t.clock, 30 * 60_000);
+    assert.equal((await t.store.read('rad')).lastRun.tries, 3);
+    await pulse(s, t.clock, 30 * 60_000);
+    await pulse(s, t.clock, 30 * 60_000);
+    assert.equal(t.runs.length, 2, 'three tries in all');
+    t.clock.now = local(2026, 5, 5, 7, 31);
+    await pulse(s, t.clock);
+    assert.equal(t.runs.length, 3, 'the next day is a new slot');
+    assert.equal((await t.store.read('rad')).lastRun.tries, 1, 'with its own count');
+    await s.dispose();
+  } finally { mock.timers.reset(); }
+});
+
+test('a retry that works ends the retrying', async () => {
+  mock.timers.enable({ apis: ['setInterval'] });
+  try {
+    const t = setup();
+    await t.store.write(failedRadar());
+    t.clock.now = local(2026, 5, 4, 9, 0);
+    const s = createRoutineScheduler(t.deps);
+    await pulse(s, t.clock);
+    assert.equal(t.runs.length, 1);
+    assert.equal((await t.store.read('rad')).lastRun.status, 'done');
+    await pulse(s, t.clock, 40 * 60_000);
+    assert.equal(t.runs.length, 1);
+    await s.dispose();
+  } finally { mock.timers.reset(); }
+});
+
+test('no retry for a run the user started or stopped, a paused radar, or a routine that is not a radar', async () => {
+  mock.timers.enable({ apis: ['setInterval'] });
+  try {
+    const t = setup();
+    const { tries, ...manual } = failedRadar().lastRun;
+    await t.store.write(failedRadar({ id: 'manual', lastRun: manual }));
+    await t.store.write(failedRadar({ id: 'stopped', lastRun: { ...failedRadar().lastRun, reason: 'stopped' } }));
+    await t.store.write(failedRadar({ id: 'paused', status: 'paused' }));
+    await t.store.write(failedRadar({ id: 'digest', kind: 'digest', radar: undefined }));
+    t.clock.now = local(2026, 5, 4, 9, 0);
+    const s = createRoutineScheduler(t.deps);
+    await pulse(s, t.clock);
+    assert.deepEqual(t.runs, []);
+    await s.dispose();
+  } finally { mock.timers.reset(); }
+});
+
+test('after the computer has slept, nothing starts until it has been awake a while', async () => {
+  mock.timers.enable({ apis: ['setInterval'] });
+  try {
+    const t = setup({ wakeGapMs: 5 * 60_000 });
+    t.clock.now = local(2026, 5, 4, 6, 0);
+    await t.store.write(routine('r1', { lastSlot: iso(local(2026, 5, 3, 7, 30)) }));
+    const s = createRoutineScheduler(t.deps);
+    await pulse(s, t.clock);
+    assert.equal(t.runs.length, 0, 'not due yet');
+    await pulse(s, t.clock, 2 * 60 * 60_000);
+    assert.equal(t.runs.length, 0, 'a short wake in the night starts nothing');
+    await pulse(s, t.clock);
+    assert.equal(t.runs.length, 1, 'still awake a minute later: it runs');
     await s.dispose();
   } finally { mock.timers.reset(); }
 });

@@ -395,6 +395,13 @@ def _landing(url: str, doi: str, work: dict, record: dict | None, text: str) -> 
             "links": links}
 
 
+def _pdf_paper(doi: str, work: dict) -> dict:
+    """What Add to Zotero needs about a paper that opens as a PDF, from OpenAlex alone: a PDF has no landing page to ask."""
+    names = [n for n in ((a.get("author") or {}).get("display_name") for a in work.get("authorships") or []) if n]
+    paper = {"doi": doi, "journal": journal_of(work, None), "published": published_of(work, None), "authors": names}
+    return {k: v for k, v in paper.items() if v}
+
+
 def _paper(url: str, doi: str, get) -> dict | None:
     """A paper link's answer from the library, OpenAlex's open-access copy or its abstract; None to try the page."""
     found = library_pdf(doi)
@@ -408,7 +415,7 @@ def _paper(url: str, doi: str, get) -> dict | None:
     pdf = next((p for p in oa_pdfs(work) if _serves_pdf(p["url"], get)), None)
     if pdf:
         return {"mode": "pdf", "url": pdf["url"], "title": title, "source": "open access", "version": pdf["version"],
-                "where": pdf["where"]}
+                "where": pdf["where"], "byline": byline_of(work), "abstract": abstract_of(work), "paper": _pdf_paper(doi, work)}
     record = crossref(doi, get)
     # Crossref keeps the abstract's paragraphs, sub- and superscripts; OpenAlex only its words
     text = jats_html((record or {}).get("abstract") or "") or jats_html(html.escape(abstract_of(work), quote=False))

@@ -172,6 +172,20 @@ test('the paper on screen becomes what Add to Zotero sends', async () => {
   assert.equal(paperToAdd({ source: 'openalex', title: 'J', paper: { journal: 'JACS', published: '2024-05-01', doi: '10.1/x' } })?.venue, 'JACS');
 });
 
+test('a paper opened as an open-access PDF can be added, under its DOI; one from the library already is there', async () => {
+  const { paperToAdd } = await import('../src/browser-state.js');
+  const paper = paperToAdd({ mode: 'pdf', source: 'open access', url: 'https://www.osti.gov/servlets/purl/1', title: 'Pymatgen', byline: 'Ann Chen, Bo Li', abstract: 'A library.',
+    paper: { doi: '10.1/x', journal: 'CMS', published: '1 Feb 2013', authors: ['Ann Chen', 'Bo Li', 'Cy Wu'] } });
+  assert.deepEqual(paper?.authors, ['Ann Chen', 'Bo Li', 'Cy Wu']);
+  assert.equal(paper?.doi, '10.1/x');
+  assert.equal(paper?.venue, 'CMS');
+  assert.equal(paper?.year, 2013);
+  assert.equal(paper?.pdf, 'https://www.osti.gov/servlets/purl/1');
+  assert.equal(paper?.url, 'https://doi.org/10.1/x', 'the item points at the paper, not at one copy of it');
+  assert.equal(paperToAdd({ mode: 'pdf', source: 'library', url: 'https://doi.org/10.1/x', title: 'Mine' }), null);
+  assert.equal(paperToAdd({ mode: 'pdf', url: 'https://x.org/a.pdf', title: 'a.pdf' }), null, 'a bare PDF link says nothing about its paper');
+});
+
 test('collections are listed under their parents by name, and a lost parent does not hide one', async () => {
   const { collectionOptions } = await import('../src/browser-state.js');
   const options = collectionOptions([{ key: 'b', name: 'Beta' }, { key: 'c', name: 'Child', parent: 'b' }, { key: 'a', name: 'Alpha' }, { key: 'o', name: 'Orphan', parent: 'gone' }]);

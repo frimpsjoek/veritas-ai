@@ -21,7 +21,7 @@ test('a paused radar does not run at its slot; after resume the next slot runs i
     const clock = { now: local(2026, 5, 4, 8, 0) };
     const runs = [];
     const s = createRoutineScheduler({
-      store, clock: () => clock.now, tickMs: 60_000, startupGraceMs: 45_000, log: () => {},
+      store, clock: () => clock.now, tickMs: 60_000, startupGraceMs: 45_000, wakeGapMs: Infinity, log: () => {},
       run: async (r) => { runs.push(r.id); return { status: 'done', added: 0, summary: 'ok' }; },
     });
     const pulse = async (ms = 60_000) => { clock.now += ms; mock.timers.tick(60_000); await s.idle(); };

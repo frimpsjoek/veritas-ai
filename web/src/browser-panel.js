@@ -38,13 +38,15 @@ export function createBrowserPanel({ host, doc, win, into }) {
   const titleEl = h(doc, 'span', 'sbw-browser-title');
   const addressEl = h(doc, 'span', 'sbw-browser-address');
   where.append(titleEl, addressEl);
+  // Add to Zotero while a paper is open as a PDF: in the bar, so it stays in reach as the pages scroll
+  const barSave = h(doc, 'span', 'sbw-browser-save');
   const reload = tool('refresh', 'Reload', () => { if (history.current) void show(history.current, false); });
   const modeButton = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sbw-browser-text'));
   modeButton.setAttribute('type', 'button');
   modeButton.hidden = true;
   const outside = tool('open', 'Open in your browser', () => { if (history.current) host.openLink(shownUrl, { outside: true }); });
   const closer = tool('close', 'Close', () => api.close());
-  bar.append(back, where, reload, modeButton, outside, closer);
+  bar.append(back, where, barSave, reload, modeButton, outside, closer);
   const body = h(doc, 'div', 'sbw-browser-body');
   root.append(bar, body);
   into.append(root);
@@ -86,6 +88,7 @@ export function createBrowserPanel({ host, doc, win, into }) {
     if (push) history.push(entry); else history.replace(entry);
     head('', entry.url);
     modeButton.hidden = true;
+    barSave.replaceChildren();
     if (isPdfUrl(entry.url) && !entry.prefer) {
       const name = fileNameOf(entry.url);
       head(name, entry.url);
@@ -98,7 +101,11 @@ export function createBrowserPanel({ host, doc, win, into }) {
     if (mine !== token) return;
     if (!answer || answer.mode === 'blocked') return card(blockedReason(answer, failure), answer?.url ?? entry.url, answer?.title);
     head(answer.title, answer.url, sourceOf(answer));
-    if (answer.mode === 'pdf') return pdf(answer.url, answer.title);
+    if (answer.mode === 'pdf') {
+      const adding = host.can.addToLibrary ? paperToAdd(answer) : null;
+      if (adding) barSave.replaceChildren(saveControl(adding));
+      return pdf(answer.url, answer.title);
+    }
     if (answer.mode === 'frame') return framed(answer);
     return readerView(answer);
   }

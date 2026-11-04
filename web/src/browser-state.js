@@ -126,7 +126,7 @@ export function readerPlan(answer) {
 
 /** What Add to Zotero sends for the paper on screen; null for a page that is not a paper. @param {any} answer */
 export function paperToAdd(answer) {
-  if (answer?.source !== 'arxiv' && answer?.source !== 'openalex') return null;
+  if (answer?.source !== 'arxiv' && answer?.source !== 'openalex' && answer?.source !== 'open access') return null;
   const paper = answer.paper ?? {};
   const links = Array.isArray(answer.links) ? answer.links : [];
   const year = /\b(?:19|20)\d\d\b/.exec(String(paper.published ?? paper.submitted ?? ''))?.[0];
@@ -138,10 +138,11 @@ export function paperToAdd(answer) {
     venue: answer.source === 'arxiv' ? 'arXiv' : String(paper.journal ?? ''),
     doi: paper.doi || null,
     abstract: String(answer.abstract ?? ''),
-    url: String(answer.url ?? ''),
+    // a PDF's address is one copy of the paper; the DOI is the paper
+    url: answer.mode === 'pdf' && paper.doi ? `https://doi.org/${paper.doi}` : String(answer.url ?? ''),
     source: answer.source,
     arxiv: paper.arxiv || undefined,
-    pdf: links.find((/** @type {any} */ l) => l?.kind === 'pdf')?.url,
+    pdf: answer.mode === 'pdf' ? String(answer.url ?? '') : links.find((/** @type {any} */ l) => l?.kind === 'pdf')?.url,
     type: answer.source === 'arxiv' ? 'preprint' : undefined,
   };
 }

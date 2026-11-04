@@ -156,7 +156,9 @@ def test_an_open_access_copy_comes_before_the_publisher(web):
     pages[openalex_url(DOI)] = Response("x", 200, {}, json.dumps(WORK_GREEN).encode())
     answer = web_page.page(f"https://doi.org/{DOI}", get=get)
     assert answer == {"mode": "pdf", "url": "https://arxiv.org/pdf/2301.06171", "title": WORK_GREEN["title"],
-                      "source": "open access", "version": "submitted", "where": "arXiv (Cornell University)"}
+                      "source": "open access", "version": "submitted", "where": "arXiv (Cornell University)",
+                      "byline": "A. Author, B. Author", "abstract": "Spins flip here.",
+                      "paper": {"doi": DOI, "authors": ["A. Author", "B. Author"]}}
     assert not any("doi.org/10" in c and "openalex" not in c for c in calls), "the publisher is never asked"
     n = len(calls)
     web_page.page(f"https://doi.org/{DOI}", get=get)
