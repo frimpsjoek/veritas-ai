@@ -165,7 +165,7 @@ function scriptedAgentService(calls, reply, store, providers) {
   return {
     where: /** @type {"local"} */ ('local'),
     conversations: {
-      list: async () => (store?.conversations ? store.conversations.map((c) => ({ ...c })) : []),
+      list: async () => { if (store?.listFail) throw new Error('HTTP 503'); return store?.conversations ? store.conversations.map((c) => ({ ...c })) : []; },
       load: async (id) => store?.recordsBy?.[id] ?? store?.records ?? [],
       create: async () => {
         if (!store?.conversations) return 'conv1';
