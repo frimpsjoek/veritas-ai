@@ -72,6 +72,7 @@ button.sbw-quiet { border: 0; background: none; font: inherit; color: var(--sb-u
 .sbw-paper-abstract { margin: var(--sbw-s2) 0 0; color: var(--sb-ui-text); font-size: 14px; line-height: 1.6; }
 .sbw-paper-title { display: block; font-family: var(--sbw-serif); font-size: 18px; line-height: 1.3; color: var(--sb-ui-text); text-decoration: none; }
 a.sbw-paper-title:hover { text-decoration: underline; text-underline-offset: 3px; }
+.sbw-paper-authors { margin: var(--sbw-s1) 0 0; color: var(--sb-ui-accent); font-size: var(--sbw-t-small); font-weight: 500; }
 .sbw-paper-meta { margin: var(--sbw-s1) 0 0; color: var(--sb-ui-muted); font-size: var(--sbw-t-small); }
 /* clip, not hidden or a line clamp: those make a box of their own, which sits beside a float instead of running round it */
 .sbw-paper-why { max-height: 10.5em; overflow: clip; margin: var(--sbw-s1) 0 0; color: var(--sb-ui-muted); font-size: 14px; line-height: 1.5; }
@@ -107,7 +108,7 @@ a.sbw-paper-title:hover { text-decoration: underline; text-underline-offset: 3px
 .sb-coll-note { flex: none; color: var(--sb-ui-muted); font-size: 11px; font-weight: 400; }
 .sb-coll-none { margin: 0; padding: 6px 8px; color: var(--sb-ui-muted); }
 /* A paper judged Not for me folds to its title and what was decided, so the page keeps moving. */
-.sbw-paper.is-dismissed :is(.sbw-paper-meta, .sbw-paper-why, .sbw-paper-more, .sbw-paper-figure-box) { display: none !important; }
+.sbw-paper.is-dismissed :is(.sbw-paper-authors, .sbw-paper-meta, .sbw-paper-why, .sbw-paper-more, .sbw-paper-figure-box) { display: none !important; }
 .sbw-paper.is-dismissed .sbw-paper-title { font-size: 15px; color: var(--sb-ui-muted); }
 .sbw-today .sb-dg-toast { position: fixed; bottom: 24px; z-index: 30; width: max-content; max-width: calc(100vw - 32px); box-sizing: border-box; }
 @media (max-width: 699px) { .sbw-today .sb-dg-toast { bottom: calc(72px + env(safe-area-inset-bottom, 0px)); } }

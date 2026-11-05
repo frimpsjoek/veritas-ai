@@ -140,8 +140,9 @@ function paperEntry(doc, row, links, api, digest, show = 'abstract', onView, sho
   // Issues written before 2026-11-02 hold arXiv's authors as one string of TeX.
   const authors = row.venue === 'arXiv' ? arxivAuthors(row.authors) : (row.authors ?? []).map(plainName);
   const who = authors.length > 3 ? `${authors.slice(0, 3).join(', ')} +${authors.length - 3}` : authors.join(', ');
-  const meta = [showAuthors ? who : '', row.venue, row.radar?.date ?? row.year, row.radar?.afield ? `From further afield: ${row.radar.afield}` : '', row.radar?.nearBar ? 'Just under the bar' : ''].filter(Boolean).join(' · ');
+  const meta = [row.venue, row.radar?.date ?? row.year, row.radar?.afield ? `From further afield: ${row.radar.afield}` : '', row.radar?.nearBar ? 'Just under the bar' : ''].filter(Boolean).join(' · ');
   text.append(title);
+  if (showAuthors && who) text.append(h(doc, 'p', 'sbw-paper-authors', who));
   if (meta) text.append(h(doc, 'p', 'sbw-paper-meta', meta));
   const abstract = String(row.abstract ?? '').trim();
   // The AI summary unless the person chose abstracts; a paper with no abstract keeps its summary either way.

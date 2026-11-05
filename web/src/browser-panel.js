@@ -140,7 +140,7 @@ export function createBrowserPanel({ host, doc, win, into }) {
     // inline TeX ($…$, \(…\)) drawn as MathML, only for answers the server marked as having math
     const words = (/** @type {string} */ value) => plan.math ? withMath(value) : doc.createTextNode(value);
     // A paper's page has no long text to keep narrow: it takes the width, with the figure beside the abstract.
-    const article = h(doc, 'article', `${plan.articleClass}${plan.html ? (plan.math ? ' is-math' : '') : ' is-wide'}`);
+    const article = h(doc, 'article', `${plan.articleClass}${plan.html ? (plan.math || plan.paper ? ' is-math' : '') : ' is-wide'}`);
     const top = h(doc, 'header', 'sbw-reader-head');
     const heading = h(doc, 'h1', 'sbw-reader-title');
     heading.append(words(plan.title));
@@ -266,7 +266,9 @@ export function createBrowserPanel({ host, doc, win, into }) {
       const verdict = link.verdict();
       row.replaceChildren();
       if (verdict) {
-        row.append(h(doc, 'span', 'sb-dg-state', settledLabel(verdict)), pill('Undo', () => void tell('undo')));
+        // The Zotero button beside it already says whether an add went through or is waiting.
+        if (verdict !== 'added') row.append(h(doc, 'span', 'sb-dg-state', settledLabel(verdict)));
+        row.append(pill('Undo', () => void tell('undo')));
         return;
       }
       for (const a of actionList(false).filter((x) => x.verdict === 'liked' || x.verdict === 'dismissed')) {

@@ -504,3 +504,34 @@ def test_an_equation_table_becomes_display_math_with_its_number():
     assert "$x$ follows" in read["html"]
     assert read["html"].count("<table>") == 1, "an ordinary table stays a table"
     assert read["math"] is True
+
+
+def _latexml(body: str):
+    words = "Words about the method go here, enough to keep as text. " * 8
+    return web_page.reader("https://arxiv.org/html/1", f"<html><body><article><p>{words}</p>{body}</article></body></html>".encode())["html"]
+
+
+def test_a_preamble_latexml_could_not_convert_goes_whole():
+    macro = lambda name: f'<span class="ltx_ERROR undefined">\\{name}</span>'
+    html = _latexml(f'<div>{macro("labname")}<p>Some Lab {macro("labshort")}SL {macro("school")}XYZ {macro("site")}example.org</p></div>')
+    assert "labname" not in html and "Some Lab" not in html and "example.org" not in html
+
+
+def test_a_macro_in_a_sentence_goes_and_the_sentence_stays():
+    html = _latexml('<p>Seven tiers (<span class="ltx_ERROR undefined">\\cref</span>sch:tiers) follow, with <span class="ltx_ERROR undefined">\\mybold</span>care.</p>')
+    assert "<p>Seven tiers follow, with care.</p>" in html
+    assert "\x02" not in html and "\x03" not in html
+
+
+def test_a_figure_whose_picture_did_not_convert_keeps_its_caption_and_says_so():
+    html = _latexml('<figure class="ltx_float"><span class="ltx_ERROR undefined">{tikzpicture}</span><p>[ tier/.style=ddnode ] '
+                    '<span class="ltx_ERROR undefined">\\node</span>[fill=DDNavy!9] (t1) Tier 1</p>'
+                    '<figcaption>Scheme 1: the seven tiers.</figcaption></figure><p>Text after the figure.</p>')
+    assert "ddnode" not in html and "tikzpicture" not in html and "DDNavy" not in html
+    assert web_page.FIGURE_NOT_DRAWN in html
+    assert "Scheme 1: the seven tiers." in html and "Text after the figure." in html
+
+
+def test_a_colour_name_does_not_run_into_the_words_after_it():
+    html = _latexml('<div><span class="ltx_ERROR undefined">\\color</span> <p><span class="ltx_text">DDNavyGenerate credible structures.</span></p></div>')
+    assert "<p>Generate credible structures.</p>" in html

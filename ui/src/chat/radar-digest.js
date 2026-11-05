@@ -62,6 +62,8 @@ export class RadarDigest {
     this.judging = !!digest.judging;
     /** @type {Map<string, string>} the collection a paper was just added to, for its settled line */
     this.placed = new Map();
+    /** Added while Zotero or its plugin could not take them: queued, not yet in the library. @type {Set<string>} */
+    this.waiting = new Set();
     /** @type {Promise<any> | null} */ this.collections = null;
     /** @type {(() => void) | null} a verdict was loaded, given or taken back */ this.onChange = null;
     /** @type {Map<string, Verdict>} what was done with each paper, by radar key */
@@ -148,7 +150,8 @@ export class RadarDigest {
     if (verdict) {
       const state = h(this.doc, 'span', `sb-dg-state${verdict === 'dismissed' ? ' is-dismissed' : ''}`);
       const placed = verdict === 'added' ? this.placed.get(key) : '';
-      state.append(markSvg(this.doc, SETTLED_MARK[verdict]), this.doc.createTextNode(placed ? `${settledLabel(verdict)} \u00B7 ${placed}` : settledLabel(verdict)));
+      const said = verdict === 'added' && this.waiting.has(key) ? 'Waiting for Zotero' : settledLabel(verdict);
+      state.append(markSvg(this.doc, SETTLED_MARK[verdict]), this.doc.createTextNode(placed ? `${said} \u00B7 ${placed}` : said));
       box.append(state, this.button('Undo', () => this.undo(row), false, busy, null, 'Take this back'));
       return;
     }
@@ -233,6 +236,7 @@ export class RadarDigest {
         const collection = collectionTarget(list, String(this.host.prefs?.get(COLLECTION_PREF) ?? ''));
         const out = await this.host.addToLibrary?.([outsidePaper(row)], collection ? { collection } : undefined);
         if (!out?.items?.[0]) { this.host.notice("Couldn't add that paper to Zotero."); return; }
+        if (String(out.items[0].key).startsWith('queued-')) this.waiting.add(key); else this.waiting.delete(key);
         if (collection) this.placed.set(key, collectionLabel(list, collection));
       }
       const ai = await this.host.ai();

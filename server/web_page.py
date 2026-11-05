@@ -467,6 +467,16 @@ SKIP = {"script", "style", "noscript", "svg", "nav", "header", "footer", "aside"
         "select", "textarea", "head", "object", "canvas", "dialog", "menu"}
 # Text only screen readers get, and LaTeXML's author block, dates and footer (the header shows authors and dates).
 SKIP_CLASSES = {"sr-only", "visually-hidden", "screen-reader-text", "ltx_authors", "ltx_dates", "ltx_page_footer"}
+# LaTeXML writes what it could not convert as <span class="ltx_ERROR">\macro</span> and carries on with the macro's
+# arguments as text. The macro goes; a paragraph that is mostly such leftovers (a custom preamble) goes whole.
+TEX_ERROR = "\x02"
+TEX_LABEL = "\x03"  # where a cross-reference's label was: "(\\cref sch:tiers)" should leave no empty brackets
+REFERENCE_MACROS = {"\\cref", "\\Cref", "\\autoref", "\\ref", "\\eqref", "\\cite", "\\citep", "\\citet"}
+LEFTOVER_MIN, LEFTOVER_ANY, LEFTOVER_CHARS = 3, 8, 150  # at least this many, and this many in any length or one per so many characters
+TEX_LABEL_TEXT = re.compile(r"^\s*[\w-]+:[\w:.-]+")
+COLOR_MACROS = {"\\color", "\\textcolor"}
+TEX_COLOR_TEXT = re.compile(r"^\s*[\w!.-]*?[a-z0-9](?=[A-Z][a-z])")  # "DDNavyGenerate credible": the name runs into the words
+FIGURE_NOT_DRAWN = "A figure here is drawn in TeX, which this view cannot show. The PDF has it."
 VOID = {"br", "img", "hr", "meta", "link", "input", "source", "wbr", "area", "base", "col", "embed", "param", "track"}
 HEADING = re.compile(r"h[1-6]")
 LABEL = re.compile(r"^\s*(Title|Authors?|Abstract)\s*:\s*")
@@ -507,6 +517,10 @@ class _Reader(html.parser.HTMLParser):
         self.loose: list[str] = []  # inline text waiting for its paragraph
         self.math: dict | None = None
         self.equation: dict | None = None  # the row being read of a LaTeXML equation table
+        self.tex_error: list[str] | None = None  # the text of the ltx_ERROR span being read
+        self.figure_depth = 0
+        self.dropping_figure = False  # in a figure whose picture did not convert: nothing but its caption is kept
+        self.after_macro: re.Pattern | None = None  # what the text after an unconverted macro starts with, to take off
         self.in_equation = False
         self.has_math = False
 
@@ -559,6 +573,16 @@ class _Reader(html.parser.HTMLParser):
         if self.math is not None:
             if tag == "annotation" and a.get("encoding", "").lower() in ("application/x-tex", "tex"):
                 self.math["in_tex"] = True
+            return
+        if tag == "figure":
+            self.figure_depth += 1
+        if self.dropping_figure:
+            if tag == "figcaption":
+                self.dropping_figure = False
+            else:
+                return
+        if tag == "span" and "ltx_ERROR" in a.get("class", "").split():
+            self.tex_error = []
             return
         hidden = "hidden" in a or a.get("aria-hidden") == "true" or SKIP_CLASSES & set(a.get("class", "").split())
         if tag in SKIP or (hidden and tag not in VOID):
@@ -622,6 +646,23 @@ class _Reader(html.parser.HTMLParser):
                     self._emit(html.escape(f"$${' '.join(row['tex'])}$$" + (f" {number}" if number else ""), quote=False))
                     self._close("p")
             return
+        if self.tex_error is not None:
+            if tag == "span":
+                name, self.tex_error = "".join(self.tex_error).strip(), None
+                self._emit(TEX_ERROR)
+                self.after_macro = TEX_LABEL_TEXT if name in REFERENCE_MACROS else TEX_COLOR_TEXT if name in COLOR_MACROS else None
+                if name.startswith("{") and self.figure_depth:  # \begin{tikzpicture}: the source of a picture follows
+                    self.dropping_figure = True
+                    self._open("p")
+                    self._emit(f"<em>{FIGURE_NOT_DRAWN}</em>")
+                    self._close("p")
+            return
+        if tag == "figure":
+            self.figure_depth = max(0, self.figure_depth - 1)
+            if not self.figure_depth:
+                self.dropping_figure = False
+        if self.dropping_figure:
+            return
         if tag in BOUNDARY:
             if not self.blocks:
                 self._flush()
@@ -643,6 +684,14 @@ class _Reader(html.parser.HTMLParser):
             if self.math["in_tex"]:
                 self.math["buf"].append(data)
             return
+        if self.tex_error is not None:
+            self.tex_error.append(data)
+            return
+        if self.dropping_figure:
+            return
+        if self.after_macro and data.strip():
+            data = self.after_macro.sub(TEX_LABEL, data, count=1)
+            self.after_macro = None
         if self.in_equation:
             if self.equation is not None and not self.skip_n:
                 self.equation["number"].append(data)
@@ -922,13 +971,24 @@ def reader(url: str, page: bytes, kind_charset: str = "") -> dict | None:
     if not zoned or tag != "article":
         _prune_chrome(root)
     _tidy(root, title, byline)
-    body = root.html()
+    body = _without_tex_errors(root.html())
     # drop the empty tags a stripped page leaves behind
     for _ in range(3):
         body = re.sub(r"<(\w+)>\s*</\1>", "", body)
     if _text_length(body) < MIN_TEXT:
         return None
     return {"title": title, "byline": byline, "html": body.strip(), **({"math": True} if parser.has_math else {})}
+
+
+def _without_tex_errors(body: str) -> str:
+    """Takes out the marks _Reader left for what LaTeXML could not convert, and any paragraph that is mostly that."""
+    def paragraph(found: re.Match) -> str:
+        count = found.group(1).count(TEX_ERROR)
+        leftovers = count >= LEFTOVER_ANY or (count >= LEFTOVER_MIN and _text_length(found.group(1)) / count < LEFTOVER_CHARS)
+        return "" if leftovers else found.group(0)
+    body = re.sub(r"<p>(.*?)</p>", paragraph, body, flags=re.S)
+    body = re.sub(rf"\s*\(\s*{TEX_ERROR}?{TEX_LABEL}\s*\)", "", body)
+    return body.replace(TEX_ERROR, "").replace(TEX_LABEL, "")
 
 
 def _is_pdf(answer: Response) -> bool:
