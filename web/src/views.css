@@ -113,7 +113,10 @@ button.sbw-tree-twist:hover { background: var(--sb-ui-hover); color: var(--sb-ui
   .sbw-lib-venue { padding-inline-start: var(--sbw-s3); }
 }
 
+/* the chip names the collection on a phone; the path would take two lines of a 28 px heading */
+.sbw-lib-crumb { display: none; }
 @media (min-width: 700px) {
+  .sbw-lib-crumb { display: inline; }
   .sbw-lib { --lib-gutter: var(--sbw-s5); flex-direction: row; }
   .sbw-lib-tree { display: block; position: static; z-index: auto; flex: none; width: 224px; box-shadow: none; border-right: 1px solid var(--sb-ui-line); padding-top: var(--sbw-s5); }
   .sbw-tree-close, .sbw-lib-chip { display: none; }

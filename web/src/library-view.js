@@ -461,7 +461,9 @@ export function createLibraryView(ctx) {
   scroller.addEventListener('scroll', () => drawRows(), { passive: true });
   new (/** @type {any} */ (win)).ResizeObserver(() => drawRows(true)).observe(scroller);
   search.addEventListener('input', () => {
-    // says so at once, in place of a count that no longer holds; clearing the box waits for the timer like any other edit
+    // says so at once, in place of a count that no longer holds, and an answer still on its way is for the old words;
+    // clearing the box waits for the timer like any other edit
+    searchToken++;
     if (search.value.trim()) { searching = true; searchFailed = false; paintStatus(); }
     win.clearTimeout(searchTimer);
     searchTimer = win.setTimeout(() => { void runSearch(); }, SEARCH_MS);
