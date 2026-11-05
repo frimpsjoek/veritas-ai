@@ -66,8 +66,8 @@ export async function runWebChecks(browser, port, outDir) {
     await page.waitForSelector('.sbw-paper');
     const home = await page.evaluate(() => ({
       banner: (() => { const b = document.querySelector('.sbw-today-banner'); return { label: b.querySelector('.sbw-cover-label')?.textContent, title: b.querySelector('.sbw-cover-title')?.textContent, line: b.querySelector('.sbw-cover-line')?.textContent, fresh: b.classList.contains('is-new'), href: b.getAttribute('href'), chat: document.querySelector('.sbw-today-chat:not([hidden])')?.getAttribute('href') ?? null }; })(),
-      papers: [...document.querySelectorAll('.sbw-paper')].map((p) => ({ source: p.querySelector('.sbw-paper-source')?.textContent ?? null, title: p.querySelector('.sbw-paper-title')?.textContent, href: p.querySelector('a.sbw-paper-title')?.getAttribute('href') ?? null, meta: p.querySelector('.sbw-paper-meta')?.textContent ?? null, why: p.querySelector('.sbw-paper-why')?.textContent ?? null })),
-      heads: [...document.querySelectorAll('.sbw-papers-head')].map((x) => x.textContent),
+      papers: [...document.querySelectorAll('.sbw-paper')].map((p) => ({ via: p.querySelector('.sbw-why-via')?.textContent ?? null, title: p.querySelector('.sbw-paper-title')?.textContent, href: p.querySelector('a.sbw-paper-title')?.getAttribute('href') ?? null, meta: p.querySelector('.sbw-paper-meta')?.textContent ?? null, why: p.querySelector('.sbw-paper-why')?.textContent ?? null })),
+      heads: [...document.querySelectorAll('.sbw-papers-head')].map((x) => x.firstChild.textContent),
       shelves: [...document.querySelectorAll('.sbw-shelf')].map((sh) => ({ title: sh.querySelector('.sbw-shelf-title')?.textContent, count: sh.querySelector('.sbw-shelf-count')?.textContent, covers: [...sh.querySelectorAll('.sbw-cover-title')].map((c) => c.textContent), pager: sh.querySelector('.sbw-pager-where')?.textContent ?? null })),
       count: document.querySelector('.sbw-home-date')?.textContent, badge: document.querySelector('.sbw-nav-item[data-view="home"] .sbw-nav-badge')?.textContent,
     }));
@@ -92,7 +92,7 @@ export async function runWebChecks(browser, port, outDir) {
     });
     check(`${tag} a paper with a graphical abstract shows it on the right in a 4:3 frame; the others have none`, JSON.stringify(figures.withFigure) === '[true,false,false]' && figures.right, figures);
     check(`${tag} "Read the abstract" opens the full abstract and "Show less" closes it`, figures.before.label === 'Read the abstract' && figures.before.shown === false && figures.after.label === 'Show less' && figures.after.shown === true && figures.after.text.endsWith('The end.'), figures);
-    check(`${tag} each paper says where it was found`, home.papers[0].source === 'Found via bioRxiv, Ecology feed', home.papers[0]);
+    check(`${tag} each paper says where it was found`, home.papers[0].via === '\u00B7 via bioRxiv, Ecology feed', home.papers[0]);
     const stepped = await page.evaluate(async () => {
       const wait = () => new Promise((r) => setTimeout(r, 80));
       const title = () => document.querySelector('.sbw-today-banner .sbw-cover-title')?.textContent;
@@ -267,13 +267,13 @@ export async function runWebChecks(browser, port, outDir) {
       check(`${tag} Remove asks first and takes the row away`, true);
     }
 
-    // Home: each paper of the issue can be rated where it is read (Add to Zotero or Read later, Like, Dislike), with Undo
+    // Home: each paper of the issue can be rated where it is read (Add to Zotero or Read later, Like, Not for me), with Undo
     await go(page, '#/home');
     await page.waitForSelector('.sbw-paper .sb-dg-acts .sb-dg-act');
     const acts = await page.evaluate(() => [...document.querySelectorAll('.sbw-paper')].map((p) => [...p.querySelectorAll('.sb-dg-act')].map((b) => b.textContent)));
-    check(`${tag} Home: every paper of the issue has the radar's actions`, acts.length >= 2 && acts.every((a) => a.length === 3 && (a[0] === 'Add to Zotero' || a[0] === 'Read later') && a[1] === 'Like' && a[2] === 'Dislike'), acts);
-    const rows = await page.evaluate(() => [...document.querySelectorAll('.sbw-paper .sb-dg-acts')].map((box) => new Set([...box.querySelectorAll('.sb-dg-act')].map((b) => Math.round(b.getBoundingClientRect().top))).size));
-    check(`${tag} Home: each paper's actions fit on one line`, rows.every((n) => n === 1), rows);
+    check(`${tag} Home: every paper of the issue has the radar's actions`, acts.length >= 2 && acts.every((a) => a.length === 3 && (a[0] === 'Add to Zotero' || a[0] === 'Read later') && a[1] === 'Like' && a[2] === 'Not for me'), acts);
+    const rows = await page.evaluate(() => [...document.querySelectorAll('.sbw-paper .sb-dg-acts')].map((box) => { const paper = box.closest('.sbw-paper').getBoundingClientRect(); return [...box.querySelectorAll('.sb-dg-act, .sb-dg-chev')].every((b) => b.getBoundingClientRect().right <= paper.right + 1); }));
+    check(`${tag} Home: each paper's actions wrap inside its column`, rows.every(Boolean), rows);
     if (width === 1280) {
       // under each paper: the AI summary (default) or the abstract, remembered
       const firstLine = () => page.locator('.sbw-paper .sbw-paper-why').first().textContent();
@@ -284,10 +284,10 @@ export async function runWebChecks(browser, port, outDir) {
       await page.locator('.sbw-layout-btn', { hasText: 'AI summary' }).click();
       await page.waitForFunction(() => document.querySelector('.sbw-paper .sbw-paper-why')?.textContent.startsWith('Burrows stay'));
       const first = page.locator('.sbw-paper').first();
-      await first.getByRole('button', { name: 'Dislike' }).click();
+      await first.getByRole('button', { name: 'Not for me' }).click();
       await page.waitForFunction(() => document.querySelector('.sbw-paper')?.classList.contains('is-dismissed'));
       const fb = await page.evaluate(() => window.__store.feedback ?? []);
-      check(`${tag} Home: Dislike tells the radar and greys the paper`, JSON.stringify(fb.at(-1)) === JSON.stringify({ routineId: 'r2', key: 'doi:10.1/vole', verdict: 'dismissed' }) && (await first.locator('.sb-dg-state').textContent()) === 'Disliked', fb);
+      check(`${tag} Home: Not for me tells the radar and folds the paper`, JSON.stringify(fb.at(-1)) === JSON.stringify({ routineId: 'r2', key: 'doi:10.1/vole', verdict: 'dismissed' }) && (await first.locator('.sb-dg-state').textContent()) === 'Not for me: fewer like this', fb);
       await first.getByRole('button', { name: 'Undo' }).click();
       await page.waitForFunction(() => !document.querySelector('.sbw-paper')?.classList.contains('is-dismissed'));
       check(`${tag} Home: Undo puts it back`, (await page.evaluate(() => window.__store.feedback.at(-1).verdict)) === 'undo');

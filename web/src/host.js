@@ -61,7 +61,7 @@ export function createWebHost(options = {}) {
   const base = options.base ?? win.location.origin;
   const token = options.token ?? null;
   let openRefHook = options.onOpenRef ?? null;
-  /** @type {((url: string) => void) | null} */ let browserHook = null;
+  /** @type {((url: string, radar?: import('../../ui/src/host').RadarLink) => void) | null} */ let browserHook = null;
 
   /** @type {"server" | "offline"} */
   let whereState = 'server';
@@ -261,7 +261,7 @@ export function createWebHost(options = {}) {
       const plan = planOpen(abs, opts, { mode: linkMode(host.prefs), hasBrowser: Boolean(browserHook) });
       if (plan === 'scheme') win.location.assign(url);
       else if (plan === 'outside') openTab(abs);
-      else browserHook?.(abs);
+      else browserHook?.(abs, opts?.radar);
     },
     setBrowser(fn) { browserHook = fn; },
     revealFile(path) { host.notice(`Saved to ${path}`); },

@@ -186,10 +186,3 @@ test('a paper opened as an open-access PDF can be added, under its DOI; one from
   assert.equal(paperToAdd({ mode: 'pdf', url: 'https://x.org/a.pdf', title: 'a.pdf' }), null, 'a bare PDF link says nothing about its paper');
 });
 
-test('collections are listed under their parents by name, and a lost parent does not hide one', async () => {
-  const { collectionOptions } = await import('../src/browser-state.js');
-  const options = collectionOptions([{ key: 'b', name: 'Beta' }, { key: 'c', name: 'Child', parent: 'b' }, { key: 'a', name: 'Alpha' }, { key: 'o', name: 'Orphan', parent: 'gone' }]);
-  assert.deepEqual(options.map((o) => o.key), ['a', 'b', 'c', 'o']);
-  assert.equal(options[2].label, '  Child');
-  assert.deepEqual(collectionOptions(/** @type {any} */ (null)), []);
-});

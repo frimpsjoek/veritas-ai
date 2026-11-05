@@ -6,14 +6,16 @@
 // button's wording come from collection-data.js.
 import { h } from '../dom.js';
 import { lucide } from '../icons.js';
-import { collectionRows, collectionLabel } from './collection-data.js';
+import { collectionRows, collectionLabel, collectionTarget } from './collection-data.js';
 
 export const COLLECTION_PREF = 'zoteroCollection';
 
 /**
  * @param {Document} doc @param {any} host a UiHost (collections(), prefs)
- * @param {{ buttonClass: string, onPick?: (key: string) => void }} o `buttonClass` styles the chevron like the button it sits beside
- * @returns {{ el: HTMLElement, toggle: HTMLButtonElement, key: () => string, close: () => void }} `el` wraps the chevron and the menu
+ * @param {{ buttonClass: string, list?: Promise<any>, onPick?: (key: string) => void }} o `buttonClass` styles the chevron like the button it sits beside;
+ *   `list`: the collections, when several menus on one page share one request
+ * @returns {{ el: HTMLElement, toggle: HTMLButtonElement, target: () => Promise<string | null>, close: () => void }} `el` wraps the chevron and the menu; `target`: the
+ *   collection to add to, null for My Library
  */
 export function collectionMenu(doc, host, o) {
   const root = h(doc, 'span', 'sb-coll');
@@ -24,15 +26,18 @@ export function collectionMenu(doc, host, o) {
   toggle.append(lucide(doc, 'chevronDown', 14));
   root.append(toggle);
   /** @type {import('./collection-data.js').CollectionLike[] | null} */ let collections = null;
-  let key = String(host.prefs.get(COLLECTION_PREF) ?? '');
+  // Read each time: another menu on the page may have picked since.
+  const chosen = () => String(host.prefs.get(COLLECTION_PREF) ?? '');
   /** @type {HTMLElement | null} */ let pop = null;
   const say = () => {
-    const label = collectionLabel(collections, key);
+    const label = collectionLabel(collections, chosen());
     toggle.title = `Add to ${label} (change)`;
     toggle.setAttribute('aria-label', `Collection: ${label}. Pick another`);
   };
   say();
-  const loading = Promise.resolve(host.collections?.()).then((/** @type {any} */ list) => { collections = Array.isArray(list) ? list : []; say(); }, () => { collections = []; say(); });
+  toggle.addEventListener('pointerenter', say);
+  toggle.addEventListener('focus', say);
+  const loading = new Promise((resolve) => { resolve(o.list ?? host.collections?.()); }).then((/** @type {any} */ list) => { collections = Array.isArray(list) ? list : []; say(); }, () => { collections = []; say(); });
 
   const close = () => {
     if (!pop) return;
@@ -46,7 +51,6 @@ export function collectionMenu(doc, host, o) {
   const onKey = (/** @type {KeyboardEvent} */ event) => { if (event.key === 'Escape') { event.stopPropagation(); close(); toggle.focus(); } };
 
   const pick = (/** @type {string} */ next) => {
-    key = next;
     host.prefs.set(COLLECTION_PREF, next);
     say();
     close();
@@ -64,13 +68,14 @@ export function collectionMenu(doc, host, o) {
     search.setAttribute('aria-label', 'Find a collection');
     const list = h(doc, 'div', 'sb-coll-list');
     const fill = () => {
-      const rows = collectionRows(collections, { query: search.value, lastUsed: String(host.prefs.get(COLLECTION_PREF) ?? '') });
+      const key = chosen();
+      const rows = collectionRows(collections, { query: search.value, lastUsed: key });
       list.replaceChildren(...rows.map((row) => {
         const b = /** @type {HTMLButtonElement} */ (h(doc, 'button', `sb-coll-row${row.key === key ? ' is-on' : ''}`));
         b.setAttribute('type', 'button');
         b.setAttribute('role', 'menuitemradio');
         b.setAttribute('aria-checked', String(row.key === key));
-        b.style.setProperty('--depth', String(row.depth));
+        b.style.setProperty('--sbw-coll-depth', String(row.depth));
         if (row.key) b.append(lucide(doc, 'folder', 13));
         b.append(h(doc, 'span', 'sb-coll-name', row.name));
         if (row.note) b.append(h(doc, 'small', 'sb-coll-note', row.note));
@@ -101,5 +106,5 @@ export function collectionMenu(doc, host, o) {
     search.focus();
   };
   toggle.addEventListener('click', (event) => { event.stopPropagation(); void open(); });
-  return { el: root, toggle, key: () => key, close };
+  return { el: root, toggle, target: async () => { await loading; return collectionTarget(collections, chosen()); }, close };
 }

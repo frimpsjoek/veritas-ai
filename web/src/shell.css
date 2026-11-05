@@ -180,17 +180,6 @@ body { background: var(--sb-ui-bg); color: var(--sb-ui-text); font: 15px/1.45 va
 .sbw-seeds-collections .sbw-hint { flex-basis: 100%; margin: 0; }
 .sbw-seeds-count { font-weight: 600; margin: 0; }
 
-/* Rating a paper where it is read (Home's issue): the radar's three actions as small outlined buttons, Undo in a toast */
-.sbw-paper .sb-dg-acts { margin-top: var(--sbw-s2); gap: var(--sbw-s2); }
-.sbw-paper .sb-dg-act, .sbw-today .sb-dg-toast .sb-dg-act { font: inherit; font-size: 13px; line-height: 1.3; padding: 4px 12px; border: 1px solid var(--sb-ui-line); border-radius: 999px; background: transparent; color: var(--sb-ui-text); cursor: pointer; white-space: nowrap; }
-.sbw-paper .sb-dg-act { display: inline-flex; align-items: center; gap: 6px; }
-.sbw-paper .sb-dg-act.is-icon { padding: 4px 9px; }
-.sbw-paper .sb-dg-act:hover:not(:disabled) { border-color: var(--sb-ui-accent); color: var(--sb-ui-accent); }
-.sbw-paper .sb-dg-act.is-primary { border-color: var(--sb-ui-accent); color: var(--sb-ui-accent); font-weight: 600; }
-.sbw-paper .sb-dg-act:disabled { opacity: .5; cursor: default; }
-.sbw-paper.is-dismissed { opacity: .55; }
-.sbw-today .sb-dg-toast { position: fixed; bottom: 24px; }
-.sbw-today .sb-dg-toast .sb-dg-act { color: var(--sb-ui-bg); border-color: transparent; text-decoration: underline; padding: 0; }
 .sbw-chip-logo { margin-inline-end: 6px; vertical-align: -2px; }
 .sbw-src-logo { color: var(--sb-ui-text); }
 .sbw-note-author { margin-inline-end: 6px; }

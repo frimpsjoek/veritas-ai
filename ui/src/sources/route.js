@@ -60,10 +60,10 @@ export function formatRoute(route) {
 }
 
 /** Home's links (home/links.js) as hash routes; a web address goes through the host (spec 015).
- *  @param {{ openLink(url: string, opts?: { outside?: boolean }): void }} host @returns {import('../home/links.js').HomeLinks} */
+ *  @param {{ openLink(url: string, opts?: { outside?: boolean, radar?: import('../host').RadarLink }): void }} host @returns {import('../home/links.js').HomeLinks} */
 export function webLinks(host) {
   return {
     href: (target) => (target.to === 'url' ? target.url : target.to === 'session' ? formatRoute({ view: 'chat', session: target.id }) : target.to === 'issue' ? formatRoute({ view: 'home', issue: target.id }) : target.to === 'sources' ? formatRoute({ view: 'settings', section: 'radar' }) : formatRoute({ view: target.to })),
-    openWeb: (url, event) => host.openLink(url, event.metaKey || event.ctrlKey || event.shiftKey ? { outside: true } : undefined),
+    openWeb: (url, event, radar) => host.openLink(url, event.metaKey || event.ctrlKey || event.shiftKey ? { outside: true } : radar ? { radar } : undefined),
   };
 }

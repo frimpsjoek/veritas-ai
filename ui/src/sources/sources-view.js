@@ -196,7 +196,7 @@ export async function mountSources(into, { host, doc, links }, { mode, routines:
     cols.append(
       col('What it includes', `Up to ${sizes.fresh} new papers from the places you follow, ${sizes.older} older ${sizes.older === 1 ? 'paper' : 'papers'} your library keeps citing, and up to ${sizes.discover} that none of them published.`),
       col('When', whenText(form)),
-      col('How to read it', 'Open Today on Home. Each paper says why it is there. Add, Read later, Like and Dislike teach the radar what you want.'),
+      col('How to read it', 'Open Today on Home. Each paper says why it is there. Add, Read later, Like and Not for me teach the radar what you want.'),
     );
     explain.append(h(doc, 'h2', 'sbw-src-h2', 'How your radar works'), diagram(doc, sourceLabels(form), host.kind === 'web'), h(doc, 'p', 'sbw-src-powered', 'Powered by your sources'), cols);
   }

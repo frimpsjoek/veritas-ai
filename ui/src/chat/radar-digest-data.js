@@ -135,7 +135,7 @@ export function keyAction(event) {
 export function outsidePaper(row) {
   return {
     title: row.title, authors: row.authors, year: row.year, venue: row.venue, doi: row.doi, abstract: row.abstract,
-    url: row.doi ? `https://doi.org/${row.doi}` : row.url, source: row.foundBy[0] ?? 'radar',
+    url: row.doi ? `https://doi.org/${row.doi}` : row.url, source: row.foundBy?.[0] ?? 'radar',
     arxiv: row.pdfUrl?.match(/arxiv\.org\/pdf\/([^?#]+)/i)?.[1] ?? null, citations: row.citations,
   };
 }

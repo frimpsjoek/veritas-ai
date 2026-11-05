@@ -362,7 +362,7 @@ export function createFakeHost(opts = {}) {
     openRef() {},
     openLink(url, o) {
       // mirrors the web host (src/web/host.js): inside goes to the shell's browser panel, outside is recorded
-      if (opts.kind === 'web' && !o?.outside && browserHook) browserHook(url);
+      if (opts.kind === 'web' && !o?.outside && browserHook) browserHook(url, o?.radar);
       else (globalThis.__opened ??= []).push({ kind: 'url', url, outside: true });
     },
     setBrowser(fn) { browserHook = fn; },
@@ -370,7 +370,7 @@ export function createFakeHost(opts = {}) {
     ...(opts.kind === 'web' ? {} : { openInTab() {} }),
 
     async searchOutside() { return { papers: OUTSIDE_PAPERS, failed: [] }; },
-    async addToLibrary(papers) { opts.calls?.push({ kind: 'add-to-library', titles: papers.map((p) => p.title), dois: papers.map((p) => p.doi) }); return { items: papers.map((_, i) => ({ key: `fake-${i}`, citekey: `fake${i}2026` })) }; },
+    async addToLibrary(papers, options) { opts.calls?.push({ kind: 'add-to-library', titles: papers.map((p) => p.title), dois: papers.map((p) => p.doi), collection: options?.collection ?? null }); return { items: papers.map((_, i) => ({ key: `fake-${i}`, citekey: `fake${i}2026` })) }; },
 
     notice(text) { opts.calls?.push({ kind: 'notice', text }); },
     // the web host's extras (src/web/host.js), used by the shell
