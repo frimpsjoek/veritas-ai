@@ -76,16 +76,23 @@ export function createLibraryView(ctx) {
 
   // ---- main column
   const head = h(doc, 'div', 'sbw-lib-head');
+  const collectionsToggle = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sbw-lib-collections'));
+  collectionsToggle.setAttribute('type', 'button');
+  collectionsToggle.setAttribute('aria-label', 'Collections');
+  collectionsToggle.setAttribute('aria-expanded', 'false');
+  collectionsToggle.append(icon(doc, 'panelLeft'));
   const title = h(doc, 'h1', 'sbw-h1 sbw-lib-title', 'Library');
   const crumb = h(doc, 'span', 'sbw-lib-crumb');
   title.append(crumb);
-  head.append(title);
+  head.append(collectionsToggle, title);
 
   const bar = h(doc, 'div', 'sbw-lib-bar');
-  const collectionsToggle = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sbw-quiet sbw-lib-collections'));
-  collectionsToggle.setAttribute('type', 'button');
-  collectionsToggle.setAttribute('aria-expanded', 'false');
-  collectionsToggle.append(icon(doc, 'folder', 'sb-p-icon sbw-quiet-icon'), h(doc, 'span', '', 'Collections'));
+  // below 700 px the tree is a sheet: this chip names the chosen collection and opens it
+  const chip = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sbw-lib-chip'));
+  chip.setAttribute('type', 'button');
+  chip.setAttribute('aria-expanded', 'false');
+  const chipName = h(doc, 'span', 'sbw-lib-chip-name', 'All papers');
+  chip.append(icon(doc, 'folder'), chipName, icon(doc, 'chevron'));
   const search = /** @type {HTMLInputElement} */ (h(doc, 'input', 'sbw-lib-search'));
   search.type = 'search';
   search.placeholder = 'Search papers';
@@ -115,7 +122,7 @@ export function createLibraryView(ctx) {
   const clear = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sbw-quiet sbw-lib-clear', 'Clear'));
   clear.setAttribute('type', 'button');
   clear.hidden = true;
-  bar.append(collectionsToggle, search, sortBox, h(doc, 'span', 'sbw-spacer-x'), clear, ask);
+  bar.append(chip, search, sortBox, h(doc, 'span', 'sbw-spacer-x'), clear, ask);
 
   const staleBox = h(doc, 'div', 'sbw-lib-stale');
   staleBox.setAttribute('role', 'status');
@@ -352,7 +359,14 @@ export function createLibraryView(ctx) {
   // ---- the tree
   function paintTree() {
     treeBox.replaceChildren();
-    treeBox.append(h(doc, 'div', 'sbw-tree-head', 'Collections'));
+    const treeHead = h(doc, 'div', 'sbw-tree-head', 'Collections');
+    const closeSheet = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sbw-tree-close'));
+    closeSheet.setAttribute('type', 'button');
+    closeSheet.setAttribute('aria-label', 'Close collections');
+    closeSheet.append(icon(doc, 'close'));
+    closeSheet.addEventListener('click', () => { setSheet(false); collectionsToggle.focus(); });
+    treeHead.append(closeSheet);
+    treeBox.append(treeHead);
     const all = h(doc, 'div', `sbw-tree-row${collection === null ? ' is-selected' : ''}`);
     const allLink = /** @type {HTMLAnchorElement} */ (h(doc, 'a', 'sbw-tree-link'));
     allLink.href = formatRoute({ view: 'library' });
@@ -408,6 +422,7 @@ export function createLibraryView(ctx) {
       link.href = formatRoute({ view: 'library', collection: step.key });
       crumb.append(link);
     });
+    chipName.textContent = collectionName() || 'All papers';
     search.placeholder = searchPlaceholder(collectionName());
     search.setAttribute('aria-label', search.placeholder);
   }
@@ -426,7 +441,7 @@ export function createLibraryView(ctx) {
     if (event.key === 'Escape' && search.value) { search.value = ''; void runSearch(); }
   });
   // Wide: the button hides or shows the collections column, like the chat history, and the choice is kept.
-  // Narrow: it opens the collections over the list, as before.
+  // Narrow: it and the chip open the collections as a sheet over the list.
   const wide = () => Boolean(win.matchMedia?.('(min-width: 700px)').matches);
   const applyCollapsed = (/** @type {boolean} */ collapsed) => {
     root.classList.toggle('hide-tree', collapsed);
@@ -434,6 +449,13 @@ export function createLibraryView(ctx) {
     collectionsToggle.title = collapsed ? 'Show collections' : 'Hide collections';
   };
   applyCollapsed(Boolean(host.prefs?.get?.('libraryTreeCollapsed')));
+  /** @param {boolean} on */
+  function setSheet(on) {
+    root.classList.toggle('show-tree', on);
+    collectionsToggle.setAttribute('aria-expanded', String(on));
+    chip.setAttribute('aria-expanded', String(on));
+    if (on) /** @type {HTMLElement | null} */ (treeBox.querySelector('.sbw-tree-close'))?.focus();
+  }
   collectionsToggle.addEventListener('click', () => {
     if (wide()) {
       const collapsed = !root.classList.contains('hide-tree');
@@ -441,14 +463,19 @@ export function createLibraryView(ctx) {
       applyCollapsed(collapsed);
       return;
     }
-    const on = root.classList.toggle('show-tree');
-    collectionsToggle.setAttribute('aria-expanded', String(on));
+    setSheet(!root.classList.contains('show-tree'));
   });
+  chip.addEventListener('click', () => setSheet(true));
   treeBox.addEventListener('click', (event) => {
-    if (/** @type {HTMLElement} */ (event.target).closest('a')) {
-      root.classList.remove('show-tree');
-      collectionsToggle.setAttribute('aria-expanded', 'false');
-    }
+    if (/** @type {HTMLElement} */ (event.target).closest('a')) setSheet(false);
+  });
+  treeBox.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && root.classList.contains('show-tree')) { setSheet(false); collectionsToggle.focus(); }
+  });
+  // a tap on the list closes the sheet; the buttons that open it decide for themselves
+  main.addEventListener('pointerdown', (event) => {
+    const target = /** @type {HTMLElement} */ (event.target);
+    if (root.classList.contains('show-tree') && !collectionsToggle.contains(target) && !chip.contains(target)) setSheet(false);
   });
   clear.addEventListener('click', () => { ticked.clear(); refresh(); });
   ask.addEventListener('click', () => {
