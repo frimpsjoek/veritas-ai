@@ -297,7 +297,7 @@ export const LOCAL_MODELS = [
  * leaves the host without `saveFile` (the Download fallbacks), whose calls are otherwise recorded in `_saved`.
  * @returns {import("../../src/host").UiHost & { _saved: { name: string, text: string, mime: string }[], _setWhere(next: "server" | "local" | "offline"): void,
  *           _setContext(items: import("../../src/host").ContextItem[]): void,
- *           ready: Promise<void>, json(): Promise<any>, setContext(items: import("../../src/host").ContextItem[]): void, setOpenRef(): void, setBrowser(fn: ((url: string) => void) | null): void,
+ *           ready: Promise<void>, json(): Promise<any>, setContext(items: import("../../src/host").ContextItem[]): void, setOpenRef(): void, setBrowser(fn: ((url: string, radar?: any) => void) | null): void,
  *           server: { url: string, sameOrigin: boolean }, assets: { sameOrigin: boolean, url(path: string): Promise<string>, bytes(path: string): Promise<ArrayBuffer>, frame(route: string, query: Record<string, string>): Promise<string>, revokeAll(): void } }}
  */
 export function createFakeHost(opts = {}) {
@@ -309,7 +309,7 @@ export function createFakeHost(opts = {}) {
   let contextItems = opts.context ?? [];
   const candidates = opts.candidates;
   const saved = [];
-  /** @type {((url: string) => void) | null} */ let browserHook = null;
+  /** @type {((url: string, radar?: any) => void) | null} */ let browserHook = null;
 
   return {
     kind: opts.kind ?? 'zotero',
