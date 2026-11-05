@@ -15,6 +15,7 @@ import { ancestorsOf, contextOf, crumbPath, nextSort, rowOfHit, rowOfItem, parse
 /** @typedef {import("../../ui/src/sources/view-kit.js").ViewContext} ViewContext */
 
 const ROW_HEIGHT = 56;
+const SKELETON_ROWS = 8;
 const SEARCH_MS = 250;
 const SEARCH_LIMIT = 100;
 const STORE_PREFIX = 'sbw-library-v1:';
@@ -130,16 +131,26 @@ export function createLibraryView(ctx) {
   const status = h(doc, 'p', 'sbw-hint sbw-lib-status');
   status.setAttribute('role', 'status');
   const columns = h(doc, 'div', 'sbw-lib-cols');
-  columns.setAttribute('aria-hidden', 'true');
-  for (const label of ['', 'Title', 'Authors', 'Year', 'Venue']) columns.append(h(doc, 'span', '', label));
+  columns.setAttribute('role', 'row');
+  columns.setAttribute('aria-rowindex', '1');
+  for (const label of ['', 'Title', 'Authors', 'Year', 'Venue']) {
+    const cell = h(doc, 'span', '', label);
+    cell.setAttribute('role', 'columnheader');
+    if (!label) cell.setAttribute('aria-label', 'Select');
+    columns.append(cell);
+  }
   const scroller = h(doc, 'div', 'sbw-lib-scroll');
-  scroller.setAttribute('role', 'table');
-  scroller.setAttribute('aria-label', 'Papers');
+  scroller.setAttribute('role', 'rowgroup');
+  // the table is the header and the scrolling rows together; only the rows in view exist, so the count is stated
+  const table = h(doc, 'div', 'sbw-lib-table');
+  table.setAttribute('role', 'table');
+  table.setAttribute('aria-label', 'Papers');
   const space = h(doc, 'div', 'sbw-lib-space');
   const rowsBox = h(doc, 'div', 'sbw-lib-rows');
   space.append(rowsBox);
   scroller.append(space);
-  main.append(head, bar, staleBox, status, columns, scroller);
+  table.append(columns, scroller);
+  main.append(head, bar, staleBox, status, table);
 
   // ---- the rows on show
   // Search results start in the server's relevance order until the reader picks a sort.
@@ -157,6 +168,7 @@ export function createLibraryView(ctx) {
   function makeRow(row, index) {
     const el = h(doc, 'div', 'sbw-lib-row');
     el.setAttribute('role', 'row');
+    el.setAttribute('aria-rowindex', String(index + 2));
     el.style.transform = `translateY(${index * ROW_HEIGHT}px)`;
     el.classList.toggle('is-ticked', ticked.has(row.key));
     const tick = h(doc, 'label', 'sbw-chk');
@@ -183,6 +195,7 @@ export function createLibraryView(ctx) {
       h(doc, 'span', 'sbw-lib-authors', authorLine(row.authors, 3)),
       h(doc, 'span', 'sbw-lib-year', row.year ? String(row.year) : ''),
       h(doc, 'span', 'sbw-lib-venue', row.venue));
+    for (const cell of Array.from(el.children)) cell.setAttribute('role', 'cell');
     el.addEventListener('click', (event) => {
       if (event.defaultPrevented || /** @type {HTMLElement} */ (event.target).closest('a')) return;
       go({ view: 'paper', key: row.key });
@@ -190,7 +203,23 @@ export function createLibraryView(ctx) {
     return el;
   }
 
+  /** Grey rows of the real height while the first answer is on its way, so the list doesn't jump when it arrives. */
+  function drawSkeleton() {
+    const fragment = doc.createDocumentFragment();
+    for (let i = 0; i < SKELETON_ROWS; i++) {
+      const el = h(doc, 'div', 'sbw-lib-skel');
+      el.style.transform = `translateY(${i * ROW_HEIGHT}px)`;
+      el.append(h(doc, 'span'), h(doc, 'span', 'sbw-lib-skel-text'), h(doc, 'span', 'sbw-lib-skel-wide'), h(doc, 'span', 'sbw-lib-skel-year'), h(doc, 'span', 'sbw-lib-skel-wide'));
+      fragment.append(el);
+    }
+    rowsBox.setAttribute('aria-hidden', 'true');
+    rowsBox.replaceChildren(fragment);
+    rangeKey = '';
+  }
+
   function drawRows(force = false) {
+    if (loading && !list.length) { drawSkeleton(); return; }
+    rowsBox.removeAttribute('aria-hidden');
     const { first, last } = visibleRange({ scrollTop: scroller.scrollTop, viewport: scroller.clientHeight || 600, rowHeight: ROW_HEIGHT, total: list.length });
     const key = `${first}:${last}`;
     if (!force && key === rangeKey) return;
@@ -270,7 +299,8 @@ export function createLibraryView(ctx) {
 
   function refresh() {
     list = shown();
-    space.style.height = `${list.length * ROW_HEIGHT}px`;
+    space.style.height = `${(loading && !list.length ? SKELETON_ROWS : list.length) * ROW_HEIGHT}px`;
+    table.setAttribute('aria-rowcount', String(list.length + 1));
     paintStatus();
     paintStale();
     paintSortButtons();

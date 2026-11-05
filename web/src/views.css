@@ -77,11 +77,16 @@ button.sbw-tree-twist:hover { background: var(--sb-ui-hover); color: var(--sb-ui
 .sbw-lib-status.is-error { color: var(--sb-ui-danger); }
 .sbw-lib-cols { display: none; }
 
+.sbw-lib-table { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
 .sbw-lib-scroll { flex: 1; min-height: 0; overflow: auto; padding-inline: var(--lib-gutter); border-top: 1px solid var(--sb-ui-line); }
 .sbw-lib-scroll[hidden], .sbw-lib-cols[hidden] { display: none; }
 .sbw-lib-space { position: relative; }
 .sbw-lib-rows { position: absolute; inset: 0 0 auto 0; }
 .sbw-lib-row { position: absolute; top: 0; left: 0; right: 0; height: 56px; box-sizing: border-box; display: grid; grid-template-columns: 32px minmax(0, 1fr) 44px; align-items: center; border-bottom: 1px solid var(--sb-ui-line); cursor: pointer; }
+.sbw-lib-skel { position: absolute; top: 0; left: 0; right: 0; height: 56px; box-sizing: border-box; display: grid; grid-template-columns: 32px minmax(0, 1fr) 44px; align-items: center; border-bottom: 1px solid var(--sb-ui-line); }
+.sbw-lib-skel-text, .sbw-lib-skel-wide, .sbw-lib-skel-year { height: 10px; border-radius: 5px; background: var(--sb-ui-hover); }
+.sbw-lib-skel-text { width: 60%; margin-inline: var(--sbw-s1); }
+.sbw-lib-skel-wide { display: none; }
 .sbw-lib-row:hover, .sbw-lib-row.is-ticked { background: var(--sb-ui-hover); }
 .sbw-lib-text { display: flex; flex-direction: column; min-width: 0; padding-inline: var(--sbw-s1); }
 .sbw-lib-link { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--sb-ui-text); text-decoration: none; line-height: 1.3; }
@@ -101,7 +106,8 @@ button.sbw-tree-twist:hover { background: var(--sb-ui-hover); color: var(--sb-ui
   .sbw-lib-cols > :nth-child(4) { text-align: end; }
   .sbw-lib-cols > :nth-child(5) { padding-inline-start: var(--sbw-s3); }
   .sbw-lib-scroll { border-top: 0; }
-  .sbw-lib-row { grid-template-columns: 32px minmax(0, 1fr) 200px 56px 160px; }
+  .sbw-lib-row, .sbw-lib-skel { grid-template-columns: 32px minmax(0, 1fr) 200px 56px 160px; }
+  .sbw-lib-skel-wide { display: block; margin-inline: var(--sbw-s3); }
   .sbw-lib-sub { display: none; }
   .sbw-lib-authors, .sbw-lib-venue { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--sb-ui-muted); font-size: var(--sbw-t-small); padding-inline-end: var(--sbw-s3); }
   .sbw-lib-venue { padding-inline-start: var(--sbw-s3); }
