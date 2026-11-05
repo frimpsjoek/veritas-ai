@@ -29,7 +29,7 @@ import { ArtifactPanel, downloadResult } from './artifact-panel.js';
 import { openPopover, menuItem } from './popover.js';
 import { buildSwitcher, paintSwitcher, openRowMenu } from './projects-menu.js';
 import { filterEntries, emptyLine, projectOf } from './projects-data.js';
-import { whereLabel } from './history-data.js';
+import { whereLabel, groupEntries, findEntries, noMatchLine, entryTitle, whenLabel } from './history-data.js';
 import { newsLabel, newsTitle } from './routines-data.js';
 import { KIND_NAME, KIND_ICON, hasGaps } from './artifact-data.js';
 import { describeOn, turnsOn } from './papers-chat-data.js';
@@ -203,7 +203,7 @@ export class ChatView {
     this.switcher = buildSwitcher(this);
     this.switcher.hidden = true; // shown once the engine says it has projects (an older server has none)
     this.listEntries = [];
-    this.side.append(this.switcher, newChat, this.list);
+    this.side.append(this.switcher, newChat, this.buildFind(), this.list);
 
     const main = this.el('div', 'sb-ai-main');
     const head = this.head = this.el('div', 'sb-ai-head');
@@ -353,6 +353,22 @@ export class ChatView {
     this.narrow = new this.win.ResizeObserver(() => this.applyNarrow(root.clientWidth < 560));
     this.narrow.observe(root);
     return root;
+  }
+
+  /** "Find a chat": a filter over the titles already listed, no request. */
+  buildFind() {
+    this.listQuery = '';
+    this.listFailed = '';
+    const find = this.el('label', 'sb-ai-find');
+    const input = this.findInput = /** @type {HTMLInputElement} */ (this.el('input', 'sb-ai-find-input'));
+    input.type = 'search';
+    input.placeholder = 'Find a chat';
+    input.setAttribute('aria-label', 'Find a chat');
+    const apply = () => { this.listQuery = input.value.trim(); this.paintList(); };
+    input.addEventListener('input', apply);
+    input.addEventListener('keydown', (event) => { if (event.key === 'Escape' && input.value) { input.value = ''; apply(); } });
+    find.append(this.icon('find'), input);
+    return find;
   }
 
   /** Scope, years and thoroughness for a Research report; Find papers uses only the scope. Other modes hide the row. */
@@ -737,6 +753,8 @@ export class ChatView {
   /** "in <project>" after the title when the open chat or report belongs to one. */
   paintHeaderCrumb() {
     const entry = this.listEntries.find((e) => (e.kind === 'chat' && e.conversation.id === this.sessionID) || (e.kind === 'report' && e.progress.id === this.reviewID));
+    // a chat opened before the list arrived (a link) gets its name here
+    if (entry?.kind === 'chat') { this.currentTitle = entry.conversation.title; this.headerName.textContent = this.currentTitle; }
     const id = entry ? projectOf(entry.kind === 'chat' ? entry.conversation : entry.progress, this.projects.map((p) => p.id)) : null;
     const project = this.projects.find((p) => p.id === id);
     this.headerCrumb.textContent = project ? `in ${project.name}` : '';
@@ -992,16 +1010,21 @@ export class ChatView {
       ai = await this.host.ai();
     } catch (error) {
       this.host.logError(error);
+      this.listFailed = String(/** @type {any} */ (error)?.message ?? error) || 'no answer';
       this.paintWhere(null);
+      this.paintList();
       return;
     }
-    this.paintWhere(ai.where);
     this.engineCanFill = Boolean(ai.sessions?.run && ai.sessions?.estimate && ai.sessions?.events);
     this.engineCanReport = Boolean(ai.reviews?.answer); // pipeline 2 (spec 007 E7): clarify cards and reports written from a table
     this.canProject = Boolean(ai.projects);
-    const [conversations, reviews, searches, projects] = await Promise.all([ai.conversations.list().catch(() => []),
+    /** @type {any} */ let failed = null; // the chats could not be listed: the list says so instead of looking empty, and keeps the ones it had
+    const [conversations, reviews, searches, projects] = await Promise.all([ai.conversations.list().catch((error) => { failed = error; return this.listedChats ?? []; }),
       Promise.resolve().then(() => ai.reviews.list()).catch(() => []), FindView.list(this.host).catch(() => []),
       this.canProject ? ai.projects.list().catch(() => this.projects) : []]);
+    this.listFailed = failed ? String(failed?.message ?? failed) || 'no answer' : '';
+    if (failed) this.host.logError(failed); else this.listedChats = conversations;
+    this.paintWhere(failed ? null : ai.where);
     this.projects = projects;
     this.newsById = new Map(conversations.filter((x) => x.news).map((x) => [x.id, x.news])); // the Routines view reads this
     if (this.projectId && !projects.some((p) => p.id === this.projectId)) this.setProject(null, { refresh: false }); // its project is gone
@@ -1020,15 +1043,43 @@ export class ChatView {
     this.paintHeaderCrumb();
     const entries = filterEntries(all, this.projectId, known);
     this.recent = this.recent.filter((c) => entries.some((e) => e.kind === 'chat' && e.conversation.id === c.id));
+    this.paintList();
+    if (this.thread.querySelector('.sb-ai-empty')) this.renderSuggestions();
+    this.renderAddStep();
+  }
+
+  /** Draws the history from what refreshList last fetched: the open project, then "Find a chat", under day headings. */
+  paintList() {
+    const known = this.projects.map((p) => p.id);
+    const entries = findEntries(filterEntries(this.listEntries, this.projectId, known), this.listQuery);
     this.list.replaceChildren();
-    if (!entries.length) this.list.append(this.el('div', 'sb-muted sb-ai-list-empty', emptyLine(projects.find((p) => p.id === this.projectId))));
-    for (const entry of entries) {
-      this.list.append(entry.kind === 'chat' ? this.chatRow(entry.conversation) : entry.kind === 'find' ? this.findRow(entry.search) : this.reportRow(entry.progress));
+    if (this.listFailed) this.list.append(this.listFailure());
+    else if (!entries.length) this.list.append(this.el('div', 'sb-muted sb-ai-list-empty', this.listQuery ? noMatchLine(this.listQuery) : emptyLine(this.projects.find((p) => p.id === this.projectId))));
+    for (const group of groupEntries(entries)) {
+      const heading = this.el('div', 'sb-ai-list-day', group.label);
+      heading.setAttribute('role', 'heading');
+      heading.setAttribute('aria-level', '3');
+      this.list.append(heading);
+      for (const entry of group.entries) {
+        this.list.append(entry.kind === 'chat' ? this.chatRow(entry.conversation) : entry.kind === 'find' ? this.findRow(entry.search) : this.reportRow(entry.progress));
+      }
     }
     this.markSelected();
-    if (this.thread.querySelector('.sb-ai-empty')) this.renderSuggestions();
     this.markRunning();
-    this.renderAddStep();
+  }
+
+  /** The list's own line when the chats can't be fetched: never "Your chats and reports appear here", which would read as none. */
+  listFailure() {
+    const box = this.el('div', 'sb-ai-list-failed');
+    box.setAttribute('role', 'alert');
+    box.title = this.listFailed;
+    const line = this.el('div', 'sb-ai-list-failed-line');
+    line.append(this.icon('alert'), this.el('span', '', "Can't reach the server"));
+    const retry = this.el('button', 'sb-ai-list-retry', 'Try again');
+    retry.setAttribute('type', 'button');
+    retry.addEventListener('click', () => this.refreshList());
+    box.append(line, retry);
+    return box;
   }
 
   /** Is this session's step running right now (the one open here)? A quiet dot, as reports have their status. */
@@ -1162,9 +1213,7 @@ export class ChatView {
   }
 
   when(iso) {
-    const date = new Date(iso);
-    const today = new Date().toDateString() === date.toDateString();
-    return today ? date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : date.toLocaleDateString();
+    return whenLabel(iso);
   }
 
   /** What's open, so another view can show the same thing ("Open in a tab"). */
@@ -1272,7 +1321,7 @@ export class ChatView {
     this.resetArtifacts();
     this.sessionID = id;
     this.markSeen(id);
-    this.setHeaderTitle(this.list.querySelector(`[data-id="${id}"] .sb-ai-conv-title`)?.textContent);
+    this.setHeaderTitle(entryTitle(this.listEntries.find((e) => e.kind === 'chat' && e.conversation.id === id) ?? { kind: 'chat' }));
     this.markSelected();
     const ai = await this.host.ai();
     const records = await ai.conversations.load(id);
@@ -2639,6 +2688,17 @@ tab-content:has(> .sb-ai) { display: flex; }
 .sb-ai-new { align-self: stretch; }
 .sb-ai-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
 .sb-ai-list-empty { padding: 4px 6px; }
+.sb-ai-find { display: flex; align-items: center; gap: 6px; padding: 0 8px; border: 1px solid var(--sb-ui-line); border-radius: 6px; background: var(--sb-ui-bg); color: var(--sb-ui-muted); }
+.sb-ai-find:focus-within { border-color: var(--sb-ui-accent); }
+.sb-ai-find > .sb-ai-icon { width: 14px; height: 14px; }
+.sb-ai .sb-ai-find-input { flex: 1; min-width: 0; height: 28px; min-height: 0; padding: 0; border: none; border-radius: 0; background: transparent; box-shadow: none; outline: none; color: var(--sb-ui-text); font: inherit; }
+.sb-ai-list-day { padding: 10px 6px 3px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--sb-ui-faint); }
+.sb-ai-list-day:first-child { padding-top: 2px; }
+.sb-ai-list-failed { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 8px; margin-bottom: 4px; border: 1px solid var(--sb-ui-line); border-radius: 6px; background: var(--sb-ui-bg); }
+.sb-ai-list-failed-line { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.sb-ai-list-failed-line > .sb-ai-icon { color: var(--sb-ui-danger); }
+.sb-ai .sb-ai-list-retry { height: auto; min-height: 0; padding: 3px 10px; border: 1px solid var(--sb-ui-line); border-radius: 999px; background: transparent; box-shadow: none; color: var(--sb-ui-text); font: inherit; font-size: 12px; cursor: pointer; }
+.sb-ai .sb-ai-list-retry:hover { background: var(--sb-ui-hover); }
 .sb-ai-conv { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 6px; }
 .sb-ai-conv > .sb-ai-icon { width: 14px; height: 14px; opacity: .6; }
 .sb-ai-conv:hover { background: var(--sb-ui-hover); }
