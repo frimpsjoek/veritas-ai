@@ -20,6 +20,14 @@ export const REQUEST_BUDGET = 120;
 export const HOST_GAPS = /** @type {Record<string, number>} */ ({ 'export.arxiv.org': 3000 });
 /** Seed radar: phrase searches on the arXiv API per run, on top of the category feeds. */
 const SEED_PHRASES = 3;
+/** And the radar's topics, at most this many, 3 s apart (HOST_GAPS), each asked for papers by its weight. */
+const SEED_TOPICS = 8;
+const MIN_PER_TOPIC = 5;
+/** OpenAlex lists a journal's papers the day they appear but gives them to their authors weeks later: on 2026-11-04 a
+ *  journal's newest was that day and the newest for seven followed authors was 7 weeks old, so a run's window never saw
+ *  one. What was shown is dropped by the seen set; what fell below the bar is scored again. */
+const AUTHOR_LAG_DAYS = 60;
+const PER_AUTHOR = 20;
 const DB_TOPICS = 5;
 const MCP_TOPICS = 3;
 const PER_QUERY = 20;
@@ -193,7 +201,7 @@ export async function fetchSource(source, env) {
   try {
     switch (source.kind) {
       case 'database': {
-        if (source.db === 'arxiv' && env.seedPlan) return done(...(await seededArxiv(env.fetch, env.seedPlan, env.since, env.feedCaches)));
+        if (source.db === 'arxiv' && env.seedPlan) return done(...(await seededArxiv(env.fetch, env.seedPlan, env.since, env.feedCaches, seedTopics(env.profile, env.seedPlan, env.turn))));
         const topics = topicsOf(env.profile, DB_TOPICS, env.turn);
         if (!topics.length) return done([], 'no topics to search for');
         const raws = [], errors = [];
@@ -203,7 +211,7 @@ export async function fetchSource(source, env) {
         return done(raws, allFailed(errors, topics.length, raws.length));
       }
       case 'journal': return done(await openAlexWorks(env.fetch, `primary_location.source.id:${shortId(source.openalexId)},from_publication_date:${env.since}`));
-      case 'author': return done(await openAlexWorks(env.fetch, `authorships.author.id:${shortId(source.openalexId)},from_publication_date:${env.since}`));
+      case 'author': return done(await openAlexWorks(env.fetch, `authorships.author.id:${shortId(source.openalexId)},from_publication_date:${daysBefore(env.since, AUTHOR_LAG_DAYS)}`, PER_AUTHOR));
       case 'feed': {
         const got = await fetchFeed(env.fetch, source.url, env.feedCache);
         const fresh = got.items.filter((i) => !i.date || i.date >= env.since);
@@ -227,14 +235,25 @@ export async function fetchSource(source, env) {
 }
 
 const shortId = (/** @type {string} */ id) => id.replace(/^https?:\/\/openalex\.org\//, '');
+const daysBefore = (/** @type {string} */ date, /** @type {number} */ days) => new Date(Date.parse(date) - days * 86_400_000).toISOString().slice(0, 10);
+
+/** A seed radar's topics to search for on arXiv, strongest first (the seeds' title phrases say nothing of an interest
+ *  with few seeds), with how many papers to ask each for; one a title phrase already asks for is left out.
+ *  @param {import("./radar-types").RadarProfile} profile @param {SeedPlan} plan @param {number} [turn] */
+function seedTopics(profile, plan, turn) {
+  const asked = new Set(plan.phrases.slice(0, SEED_PHRASES).map((p) => p.toLowerCase()));
+  const weight = new Map(profile.topics.map((t) => [t.text, t.weight]));
+  return topicsOf(profile, SEED_TOPICS, turn).filter((t) => !asked.has(t.toLowerCase()))
+    .map((text) => ({ text, limit: Math.max(MIN_PER_TOPIC, Math.round(PER_QUERY * Math.min(1, weight.get(text) ?? 1))) }));
+}
 
 /** @typedef {{ categories: string[], phrases: string[] }} SeedPlan */
 
 /** A seed radar's arXiv (spec 021 G2): every new paper in the seeds' categories, from arXiv's daily RSS
- *  listing, plus a few phrase searches across all of arXiv for seeds outside those categories.
- *  @param {typeof fetch} fetchFn @param {SeedPlan} plan @param {string} since @param {Record<string, import("./feeds.js").FeedCache> | undefined} caches
+ *  listing, plus a few phrase searches across all of arXiv for seeds outside those categories, and its topics.
+ *  @param {typeof fetch} fetchFn @param {SeedPlan} plan @param {string} since @param {Record<string, import("./feeds.js").FeedCache> | undefined} caches @param {{ text: string, limit: number }[]} topics
  *  @returns {Promise<[RawPaper[], string | null]>} */
-async function seededArxiv(fetchFn, plan, since, caches) {
+async function seededArxiv(fetchFn, plan, since, caches, topics) {
   const raws = [], errors = [];
   for (const category of plan.categories) {
     const got = await fetchFeed(fetchFn, arxivCategoryFeed(category), caches?.[arxivCategoryFeed(category)] ?? null);
@@ -244,7 +263,10 @@ async function seededArxiv(fetchFn, plan, since, caches) {
   for (const phrase of plan.phrases.slice(0, SEED_PHRASES)) {
     try { raws.push(...(await searchSource(fetchFn, 'arxiv', phrase, PER_QUERY, since))); } catch (e) { errors.push(message(e)); }
   }
-  return [raws, allFailed(errors, plan.categories.length + Math.min(plan.phrases.length, SEED_PHRASES), raws.length)];
+  for (const topic of topics) {
+    try { raws.push(...(await searchSource(fetchFn, 'arxiv', topic.text, topic.limit, since))); } catch (e) { errors.push(message(e)); }
+  }
+  return [raws, allFailed(errors, plan.categories.length + Math.min(plan.phrases.length, SEED_PHRASES) + topics.length, raws.length)];
 }
 
 /**

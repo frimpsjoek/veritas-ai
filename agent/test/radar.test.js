@@ -144,7 +144,7 @@ test('validateRadar keeps mcp args as a plain object under 4 KB and the Hugging 
 
 test('a source that hits the OpenAlex limit records the message, and the run finishes with the other sources', async () => {
   const { openAlexFetch } = await import('../src/openalex.js');
-  const net = openAlexFetch(routedFetch({ [FEED]: res(200, feedWith(3)), 'https://api.openalex.org/works?filter=authorships.author.id:A7,from_publication_date:2026-10-01&sort=publication_date:desc&per_page=50&select=id,doi,ids,display_name,publication_year,publication_date,authorships,primary_location,cited_by_count,best_oa_location,type,abstract_inverted_index,keywords': res(429, '{}', { 'retry-after': '600' }) }), () => null);
+  const net = openAlexFetch(routedFetch({ [FEED]: res(200, feedWith(3)), 'https://api.openalex.org/works?filter=authorships.author.id:A7,from_publication_date:2026-08-02&sort=publication_date:desc&per_page=20&select=id,doi,ids,display_name,publication_year,publication_date,authorships,primary_location,cited_by_count,best_oa_location,type,abstract_inverted_index,keywords': res(429, '{}', { 'retry-after': '600' }) }), () => null);
   const cfg = config({ sources: [{ id: 'f', on: true, kind: 'feed', url: FEED, title: 'J' }, { id: 'a', on: true, kind: 'author', openalexId: 'A7', name: 'Doe' }] });
   const out = await run(cfg, net, radarLibrary());
   assert.equal(out.picked.length, 3, 'the feed still gave its papers');

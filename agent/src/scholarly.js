@@ -62,7 +62,7 @@ const validSince = (since) => (typeof since === 'string' && /^\d{4}-\d{2}-\d{2}$
 
 async function arxiv(fetchFn, query, limit, since = /** @type {string | null} */ (null)) {
   const STOP = new Set('the and for with from into between about over under using use how what which why when does can are was were this that these those its their our your via of in on to by at an as is be or not'.split(' '));
-  const words = query.toLowerCase().replace(/[^\p{L}\p{N}\s-]/gu, ' ').split(/\s+/).filter((w) => w.length > 2 && !STOP.has(w)).slice(0, 5);
+  const words = query.toLowerCase().replace(/[^\p{L}\p{N}\s-]/gu, ' ').split(/\s+/).filter((w) => w.length > 1 && !STOP.has(w)).slice(0, 5); // "GW" and "AI" are words here
   if (!words.length) return [];
   const range = since ? `+AND+submittedDate:[${since.replace(/-/g, '')}0000+TO+209912312359]` : '';
   const url = `https://export.arxiv.org/api/query?search_query=${words.map((w) => `all:${encodeURIComponent(w)}`).join('+AND+')}${range}&max_results=${limit}&sortBy=relevance`;

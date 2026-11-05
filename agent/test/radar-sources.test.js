@@ -68,6 +68,31 @@ test('feed source: items before `since` are left out, a 304 keeps the cache and 
   assert.equal(second.error, null);
 });
 
+test('a seed radar also searches arXiv for its topics, more from the ones that weigh more, and 2-letter terms count', async () => {
+  const urls = [];
+  const fetch = async (url) => { urls.push(String(url)); return res(200, '<feed></feed>'); };
+  const topics = [{ text: 'GW quasiparticle calculations', weight: 1, origin: 'user' }, { text: 'AI agents for science', weight: 1, origin: 'user' }, { text: 'quantum dot theory', weight: 0.5, origin: 'user' }, { text: 'title phrase', weight: 1, origin: 'user' }];
+  const r = await fetchSource({ id: 'database:arxiv', on: true, kind: 'database', db: 'arxiv' }, { fetch, profile: profile({ topics }), since: '2026-10-01', seedPlan: { categories: [], phrases: ['title phrase', 'another phrase'] } });
+  assert.equal(r.error, null);
+  const asked = urls.filter((u) => u.includes('export.arxiv.org'));
+  assert.equal(asked.length, 5, 'two title phrases and three topics; a topic that is also a phrase once');
+  const url = (w) => asked.find((u) => u.includes(`all:${w}`));
+  assert.match(url('gw'), /all:gw\+AND\+all:quasiparticle\+AND\+all:calculations/);
+  assert.match(url('ai'), /all:ai\+AND\+all:agents\+AND\+all:science/);
+  assert.match(url('gw'), /max_results=20/);
+  assert.match(url('dot'), /max_results=10/, 'half the weight, half the papers');
+});
+
+test('a followed author looks back two months: OpenAlex attributes papers to people weeks after it lists them', async () => {
+  const urls = [];
+  const fetch = async (url) => { urls.push(String(url)); return res(200, '{"results":[]}'); };
+  await fetchSource({ id: 'author:A1', on: true, kind: 'author', openalexId: 'A1', name: 'Jane Doe' }, { fetch, profile: profile(), since: '2026-11-03' });
+  assert.match(urls[0], /authorships\.author\.id:A1,from_publication_date:2026-09-04/);
+  assert.match(urls[0], /per_page=20/);
+  await fetchSource({ id: 'journal:S1', on: true, kind: 'journal', openalexId: 'S1', name: 'J', issn: null }, { fetch, profile: profile(), since: '2026-11-03' });
+  assert.match(urls[1], /from_publication_date:2026-11-03/, 'a journal is listed the day it publishes');
+});
+
 test('journal and author sources use the OpenAlex filters with the since date', async () => {
   const work = { id: 'https://openalex.org/W1', doi: 'https://doi.org/10.9999/inv.9', display_name: 'Invented journal paper', publication_date: '2026-10-03', publication_year: 2026, primary_location: { source: { display_name: 'J. Invented' } }, authorships: [{ author: { display_name: 'Doe, J.' } }] };
   const fetchFn = routedFetch({});
@@ -77,7 +102,7 @@ test('journal and author sources use the OpenAlex filters with the since date', 
   const j = await fetchSource({ id: 'j', on: true, kind: 'journal', openalexId: 'https://openalex.org/S42', name: 'J. Invented', issn: null }, env);
   const a = await fetchSource({ id: 'a', on: true, kind: 'author', openalexId: 'A7', name: 'Doe' }, env);
   assert.match(decodeURIComponent(fetchFn.calls[0].url), /filter=primary_location\.source\.id:S42,from_publication_date:2026-10-01/);
-  assert.match(decodeURIComponent(fetchFn.calls[1].url), /filter=authorships\.author\.id:A7,from_publication_date:2026-10-01/);
+  assert.match(decodeURIComponent(fetchFn.calls[1].url), /filter=authorships\.author\.id:A7,from_publication_date:2026-08-02/);
   assert.equal(j.items[0].date, '2026-10-03');
   assert.equal(j.items[0].openalexId, 'W1');
   assert.equal(j.items[0].doi, '10.9999/inv.9');
