@@ -1593,6 +1593,7 @@ export class ChatView {
     this.input.value = '';
     this.fitInput();
     this.renderSend();
+    const attached = this.attachments;
     this.attachments = [];
     this.skills = [];
     this.renderChips();
@@ -1603,7 +1604,7 @@ export class ChatView {
     const on = current?.kind === 'papers' ? { result: { id: current.ref.id, version: current.ref.version }, rows: 'all' } : null;
     const user = this.addUser(text, attachments, on ? { skills, on } : { skills });
     const turn = this.addAnswer();
-    turn.retry = { run: () => this.resendAfterSwitch(text, this.mode) };
+    turn.retry = { run: () => { this.attachments = attached; this.skills = skills; this.renderChips(); return this.resendAfterSwitch(text, this.mode); } };
     this.startLive(turn);
     this.reserveSpace(user, turn.root);
     this.follower.follow();
@@ -2053,6 +2054,15 @@ export class ChatView {
     turn.text = box;
     // The chosen AI is not installed: offer the ones that are ready. Only a turn asked just now knows its question (`retry`).
     if (error.kind === NOT_INSTALLED && turn.retry) void offerSwitch(this, box, turn.retry.run);
+    else if (turn.retry) box.append(this.tryAgainButton(turn.retry.run));
+  }
+
+  /** Asks the failed question again, once, as a new turn under this one. @param {() => any} run */
+  tryAgainButton(run) {
+    const again = /** @type {HTMLButtonElement} */ (this.el('button', 'sb-ai-error-again', 'Try again'));
+    again.setAttribute('type', 'button');
+    again.addEventListener('click', () => { again.disabled = true; void run(); });
+    return again;
   }
 
   /** `force` jumps to the end and follows from there; otherwise pins only if the thread is following. */
@@ -2871,6 +2881,9 @@ tab-content:has(> .sb-ai) { display: flex; }
 .sb-ai-badge { align-self: flex-start; font-size: 11.5px; padding: 1px 6px; border-radius: 6px; background: var(--sb-ui-line); color: var(--sb-ui-muted); }
 .sb-ai-notice { font-size: 11.5px; color: var(--sb-ui-muted); }
 .sb-ai-error { padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--sb-ui-danger) 12%, transparent); }
+.sb-ai .sb-ai-error-again { display: block; height: auto; min-height: 0; margin-top: 8px; padding: 3px 10px; border: 1px solid var(--sb-ui-line); border-radius: 999px; background: transparent; box-shadow: none; color: var(--sb-ui-text); font: inherit; font-size: 12px; cursor: pointer; }
+.sb-ai .sb-ai-error-again:hover { background: var(--sb-ui-hover); }
+.sb-ai .sb-ai-error-again[disabled] { opacity: .5; cursor: default; }
 .sb-ai-composer { padding: 4px 24px 16px; }
 .sb-ai-composer-inner { max-width: 712px; margin: 0 auto; display: flex; flex-direction: column; gap: 6px; }
 .sb-ai-box { display: flex; flex-direction: column; gap: 8px; padding: 12px 12px 10px 14px; border-radius: 18px;
