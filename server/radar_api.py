@@ -352,6 +352,7 @@ def _threshold(positive: list[float], negative: list[float]) -> dict:
 
 # Of a day's papers in the user's own field, about this share should pass: the closest tenth.
 FIELD_KEEP = 0.90
+FULL_PER_CATEGORY = 6      # field papers read whole per arXiv category, for its seeds' whole-paper baselines
 
 
 def _whole_vectors(searcher, papers: list[dict], limit: int, lock, cache_path: Path, fetch) -> list[np.ndarray]:
@@ -376,21 +377,53 @@ def _abstract_vectors(searcher, papers: list[dict], lock) -> list[np.ndarray]:
     return [_unit(v) for v in _embed(searcher, texts, lock)] if texts else []
 
 
+def _apply_field_cut(stats: dict, field_cut: float) -> None:
+    """The closest tenth of the field raises the bar, but only as far as the median seed: above it, half of the user's
+    own abstracts would not pass against their other seeds (2026-11-03: 0.119 against a separation of 0.07)."""
+    raised = min(field_cut, stats["related"]["p50"])
+    stats.update(field_cut=round(field_cut, 3), threshold=round(max(stats["threshold"], raised), 3))
+
+
+def _by_category(field: list[dict]) -> tuple[dict, set]:
+    """The field's papers per arXiv category, and the categories only a seed has (marked `own`), not the radar."""
+    groups: dict = {}
+    for paper in field:
+        groups.setdefault(paper.get("category"), []).append(paper)
+    return groups, {c for c, papers in groups.items() if papers[0].get("own")}
+
+
+def _field_base(matrix: np.ndarray, labels: list[str], vectors: dict, own: set, seed_categories: dict) -> np.ndarray:
+    """Each seed's baseline: its mean similarity to the radar's field, or to the category the seed was posted in when
+    that is higher. Measured only on the first two categories of a materials radar, one seed on agents scored against
+    papers far from it and was the closest seed of 35 of 54 rows (2026-11-03). `vectors`: category -> vectors."""
+    main = [v for c, vs in vectors.items() if c not in own for v in vs]
+    base = np.mean([matrix @ v for v in main], axis=0).astype(np.float32) if main else np.zeros(len(labels), dtype=np.float32)
+    for i, label in enumerate(labels):
+        mine = vectors.get(seed_categories.get(label))
+        if mine:
+            base[i] = max(base[i], float(np.mean([matrix[i] @ v for v in mine])))
+    return base
+
+
 def calibrate(searcher, body: dict, lock, hidden: set[str] = frozenset(), cache_path: Path | None = None, fetch=None) -> dict:
-    """POST /radar/calibrate {"seeds", "unrelated": [...], "field": [...]}; each paper {"title", "abstract", "arxiv"?}.
+    """POST /radar/calibrate {"seeds", "unrelated": [...], "field": [...], "seed_categories": {label: category}}; each
+    paper {"title", "abstract", "arxiv"?}, a field paper also its "category" and, when only a seed has that category, "own".
 
     `field`: recent papers from the seeds' own arXiv categories. Their mean similarity to each seed is that seed's
-    baseline, subtracted before taking the closest seed, so a seed close to the whole field stops winning by default.
-    Related: each library seed (abstract, and whole paper) against the other seeds; unrelated: papers from far fields.
-    The threshold sits where related and unrelated separate, and never below the closest tenth of the field."""
+    baseline (_field_base), subtracted before taking the closest seed, so a seed close to the whole field stops winning
+    by default. Related: each library seed (abstract, and whole paper) against the other seeds; unrelated: papers from
+    far fields. The threshold sits where related and unrelated separate, raised towards the closest tenth of the field
+    as far as the median seed (_apply_field_cut)."""
     seeds_body = body.get("seeds") or {}
     matrix, labels, total = seed_matrix(searcher, seeds_body, lock, hidden)
     if len(labels) < 3:
         raise ValueError("calibration needs at least 3 seed papers")
     cache_path = cache_path or kb.data_dir() / "radar-fulltext.sqlite"
     field, unrelated = body.get("field") or [], body.get("unrelated") or []
+    seed_categories = body.get("seed_categories") or {}
+    groups, own = _by_category(field)
     full_n = int(body.get("full_papers", 8))
-    zero = np.zeros(len(labels), dtype=np.float32)
+    full_each = max(FULL_PER_CATEGORY, math.ceil(full_n / max(len(groups), 1)))
 
     def adjusted(vectors, base, skip=None):
         out = []
@@ -402,8 +435,9 @@ def calibrate(searcher, body: dict, lock, hidden: set[str] = frozenset(), cache_
         return out
 
     # abstracts
-    field_abs = _abstract_vectors(searcher, field, lock)
-    base_abs = np.mean([matrix @ v for v in field_abs], axis=0).astype(np.float32) if field_abs else zero
+    by_abs = {c: _abstract_vectors(searcher, papers, lock) for c, papers in groups.items()}
+    field_abs = [v for vs in by_abs.values() for v in vs]
+    base_abs = _field_base(matrix, labels, by_abs, own, seed_categories)
     library = [i for i, label in enumerate(labels) if label.startswith("zotero/")]
     with lock:
         notes = abstracts(searcher.db, [labels[i] for i in library])
@@ -411,19 +445,18 @@ def calibrate(searcher, body: dict, lock, hidden: set[str] = frozenset(), cache_
     seed_abs = [_unit(v) for v in _embed(searcher, [notes[labels[i]][:TEXT_CHARS] for i in with_abstract], lock)] if with_abstract else []
     abstract = _threshold(adjusted(seed_abs, base_abs, with_abstract), adjusted(_abstract_vectors(searcher, unrelated, lock), base_abs))
     if field_abs:
-        field_cut = float(np.quantile(adjusted(field_abs, base_abs), FIELD_KEEP))
-        abstract.update(field_cut=round(field_cut, 3), threshold=round(max(abstract["threshold"], field_cut), 3))
+        _apply_field_cut(abstract, float(np.quantile(adjusted(field_abs, base_abs), FIELD_KEEP)))
 
     # whole papers
-    field_full = _whole_vectors(searcher, field, full_n, lock, cache_path, fetch)
-    base_full = np.mean([matrix @ v for v in field_full], axis=0).astype(np.float32) if field_full else zero
+    by_full = {c: _whole_vectors(searcher, papers, full_each, lock, cache_path, fetch) for c, papers in groups.items()}
+    field_full = [v for vs in by_full.values() for v in vs]
+    base_full = _field_base(matrix, labels, by_full, own, seed_categories)
     un_full = _whole_vectors(searcher, unrelated, full_n, lock, cache_path, fetch)
     full = None
     if un_full:
         full = _threshold(adjusted([matrix[i] for i in library], base_full, library), adjusted(un_full, base_full))
         if field_full:
-            field_cut = float(np.quantile(adjusted(field_full, base_full), FIELD_KEEP))
-            full.update(field_cut=round(field_cut, 3), threshold=round(max(full["threshold"], field_cut), 3))
+            _apply_field_cut(full, float(np.quantile(adjusted(field_full, base_full), FIELD_KEEP)))
     return {"abstract": abstract, "full": full, "seeds": len(labels), "seeds_of": total, "at": time.time(),
             "baseline": {"labels": labels, "abstract": [round(float(x), 4) for x in base_abs],
                          "full": [round(float(x), 4) for x in base_full]},

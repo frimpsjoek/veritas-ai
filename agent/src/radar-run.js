@@ -7,7 +7,7 @@ import { fetchAll, politeFetch, REQUEST_BUDGET, HOST_GAPS } from './radar-source
 import { worthReading } from './radar-older.js';
 import { mightInterest } from './radar-discover.js';
 import { mergeItems, dropKnown, pickTop, keysOf, seedBody, seedsKey, MIN_SEEDS } from './radar.js';
-import { calibrateRadar } from './radar-seeds.js';
+import { calibrateRadar, CALIBRATION_VERSION } from './radar-seeds.js';
 import { score, rescoreWhole, seedBar } from './radar-score.js';
 import { abstractsByDoi, fillAbstracts } from './scholarly.js';
 import { judgePool } from './radar-judge.js';
@@ -188,8 +188,8 @@ export function readableItems(items, active, looked) {
 }
 
 /**
- * A seed radar calibrates on a run when it has no threshold, or when its seeds changed since the calibration (one made
- * before calibrations remembered their seeds is kept); not when a try failed less than a day ago, nor with fewer seeds
+ * A seed radar calibrates on a run when it has no threshold, or when its seeds or the calibration's logic changed since
+ * (one made before calibrations remembered their seeds is kept); not when a try failed less than a day ago, nor with fewer seeds
  * than the server's minimum and no collection to fill them.
  * @param {import("./radar-types").RadarSeeds} seeds @param {import("./radar-types").SeedBody} body
  * @param {import("./radar-types").RadarThreshold | null} threshold @param {string | undefined} tried @param {string} now
@@ -197,8 +197,8 @@ export function readableItems(items, active, looked) {
 function wantsCalibration(seeds, body, threshold, tried, now) {
   if (tried && Date.parse(now) - Date.parse(tried) < CALIBRATE_RETRY_MS) return false;
   if (!body.collections.length && body.keys.length + body.texts.length < MIN_SEEDS) return false;
-  const made = threshold?.calibration?.seedsKey;
-  return !threshold || Boolean(made && made !== seedsKey(seeds));
+  const made = threshold?.calibration;
+  return !threshold || Boolean(made?.seedsKey && (made.seedsKey !== seedsKey(seeds) || (made.version ?? 1) < CALIBRATION_VERSION));
 }
 
 /** Search phrases from the seeds' titles (the server's profile narrowed to them); none when the server cannot.

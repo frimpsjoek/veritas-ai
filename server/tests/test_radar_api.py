@@ -301,7 +301,7 @@ def test_calibration_with_the_field_sets_baselines_and_keeps_its_closest_tenth(s
     assert base["labels"] == ["zotero/AAA", "zotero/BBB", "zotero/CCC"]
     assert base["abstract"][0] > base["abstract"][2], "the field is chemistry, so the bread seed has the lowest baseline"
     a = result["abstract"]
-    assert "field_cut" in a and a["threshold"] >= a["field_cut"]
+    assert "field_cut" in a and a["threshold"] >= min(a["field_cut"], a["related"]["p50"])
     assert result["field"]["abstracts"] == 20
 
 
@@ -376,3 +376,31 @@ def test_seeds_from_collections_leave_out_items_that_are_not_papers(searcher):
     assert set(labels) == {"zotero/CCC", "zotero/SHORT", "zotero/FULL"} and total == 3, "a thin item without DOI or abstract is left out"
     _, picked, _ = radar_api.seed_matrix(searcher, {"keys": ["JUNK0"], "collections": ["OTHER"]}, threading.Lock())
     assert "zotero/JUNK0" in picked, "a paper picked by hand is kept whatever its title"
+
+
+def test_a_seed_is_measured_against_the_category_it_was_posted_in(searcher, tmp_path):
+    # BBB is about force fields, but its neighbours in its own (invented) category are also close to it: without that
+    # category its baseline is low and it wins by default.
+    chem = [{"title": f"Bread {i}", "abstract": "wild yeast dough rising bakery flour", "category": "food.bake"} for i in range(5)]
+    own = [{"title": f"Forces {i}", "abstract": "learning force fields from quantum chemistry data", "category": "ml.forces", "own": True} for i in range(5)]
+    unrelated = [{"title": "Medieval trade routes", "abstract": "merchants silk caravans markets history"}]
+    seeds = {"keys": ["AAA", "BBB", "CCC"]}
+    body = {"seeds": seeds, "unrelated": unrelated, "field": chem + own, "seed_categories": {"zotero/BBB": "ml.forces"}}
+    base = radar_api.calibrate(searcher, body, threading.Lock(), cache_path=tmp_path / "ft.sqlite")["baseline"]
+    without = radar_api.calibrate(searcher, {**body, "seed_categories": {}}, threading.Lock(), cache_path=tmp_path / "ft.sqlite")["baseline"]
+    by = dict(zip(base["labels"], base["abstract"]))
+    was = dict(zip(without["labels"], without["abstract"]))
+    assert by["zotero/BBB"] > was["zotero/BBB"] + 0.3, "its own category sets its baseline"
+    assert by["zotero/CCC"] == was["zotero/CCC"], "a seed with no category keeps the radar's field"
+    assert was["zotero/BBB"] < 0.1, "a category only one seed was posted in is not part of the others' field"
+
+
+def test_the_field_cut_never_raises_the_bar_past_the_seeds_own_median():
+    stats = radar_api._threshold([0.08, 0.12, 0.14], [0.0, 0.01])
+    assert stats["threshold"] < stats["related"]["p50"]
+    radar_api._apply_field_cut(stats, 0.30)
+    assert stats["threshold"] == stats["related"]["p50"] and stats["field_cut"] == 0.30
+    low = radar_api._threshold([0.08, 0.12, 0.14], [0.0, 0.01])
+    before = low["threshold"]
+    radar_api._apply_field_cut(low, before - 0.05)
+    assert low["threshold"] == before, "a field cut below the separation changes nothing"

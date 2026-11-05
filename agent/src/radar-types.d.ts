@@ -44,7 +44,7 @@ export interface RadarSeeds {
   categories: string[];
 }
 export interface ThresholdStats { threshold: number; overlap: boolean; related: Record<string, number>; unrelated: Record<string, number>; n_related: number; n_unrelated: number;
-  /** The similarity that keeps the closest tenth of the seeds' own field; the threshold is never below it. */
+  /** The similarity that keeps the closest tenth of the seeds' own field; it raises the threshold as far as the median seed. */
   field_cut?: number }
 /** Per seed, its mean similarity to recent papers of its own field; subtracted before the closest seed is taken. */
 export interface SeedBaseline { labels: string[]; abstract: number[]; full: number[] }
@@ -53,7 +53,7 @@ export interface RadarThreshold {
   abstract: number;
   /** One read whole from arXiv, at or above this; null until calibrated with whole papers. */
   full: number | null;
-  calibration?: { abstract: ThresholdStats; full: ThresholdStats | null; seeds: number; at: string; baseline?: SeedBaseline | null; field?: { abstracts: number; whole: number }; seedsKey?: string } | null;
+  calibration?: { abstract: ThresholdStats; full: ThresholdStats | null; seeds: number; at: string; baseline?: SeedBaseline | null; field?: { abstracts: number; whole: number }; seedsKey?: string; /** The calibration logic that made it (radar-seeds.js); absent is 1. */ version?: number } | null;
 }
 
 /** What a fetcher returns before normalising: scholarly.js results, feed items and MCP text rows all fit. */

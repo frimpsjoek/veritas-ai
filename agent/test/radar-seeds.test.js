@@ -6,7 +6,7 @@ import { validateRadar, seedBody, seedsKey, MIN_SEEDS } from '../src/radar.js';
 import { collectRadar, SEED_WINDOW_DAYS } from '../src/radar-run.js';
 import { politeFetch } from '../src/radar-sources.js';
 import { arxivQuery, arxivCategoryFeed } from '../src/scholarly.js';
-import { myPapers, calibrateRadar } from '../src/radar-seeds.js';
+import { myPapers, calibrateRadar, CALIBRATION_VERSION } from '../src/radar-seeds.js';
 import { emptyState } from '../src/radar-state.js';
 import { feedXml, res, routedFetch, radarLibrary, profile } from './support/radar-fakes.mjs';
 
@@ -154,7 +154,7 @@ test('calibration fetches unrelated fields from arXiv RSS and keeps the server t
   const asked = [];
   const baseline = { labels: ['zotero/K1'], abstract: [0.6], full: [0.7] };
   const library = { async radarCalibrate(q) { asked.push(q); return { abstract: { threshold: 0.77, overlap: false, related: {}, unrelated: {}, n_related: 3, n_unrelated: 40 }, full: { threshold: 0.81, overlap: false, related: {}, unrelated: {}, n_related: 3, n_unrelated: 8 }, seeds: 3, at: 1792500000, baseline, field: { abstracts: 10, whole: 8 } }; } };
-  const out = await calibrateRadar({ fetch, library: /** @type {any} */ (library), seeds: /** @type {any} */ (seeds()) });
+  const out = await calibrateRadar({ fetch, library: /** @type {any} */ (library), seeds: /** @type {any} */ (seeds()), sleep: async () => {} });
   assert.equal(out.problem, null);
   assert.equal(out.threshold?.abstract, 0.77);
   assert.equal(out.threshold?.full, 0.81);
@@ -174,7 +174,7 @@ test('a seed radar that was never calibrated calibrates on its run, uses the bas
   const score = lib.radarScore;
   lib.radarScore = async (q) => { scored.push(q); return score(q); };
   const config = validateRadar({ scope: { kind: 'library' }, profile: profile({ topics: [] }), sources: [{ id: 'database:arxiv', on: true, kind: 'database', db: 'arxiv' }], size: { fresh: 15, older: 0 }, seeds: seeds() });
-  const out = await collectRadar({ config, since: '2026-09-01', now: NOW, fetch, library: lib, state: emptyState() });
+  const out = await collectRadar({ config, since: '2026-09-01', now: NOW, fetch, library: lib, state: emptyState(), sleep: async () => {} });
   assert.equal(asked.length, 1);
   assert.deepEqual(scored.at(-1).baseline, baseline, 'the run that calibrated scores with the new baselines');
   assert.equal(out.threshold?.abstract, 0.2);
@@ -186,7 +186,7 @@ test('a seed radar that was never calibrated calibrates on its run, uses the bas
   assert.equal(asked.length, 1, 'a calibrated radar is not calibrated again');
   assert.equal(later.threshold, null);
   const changed = { ...config, seeds: { ...config.seeds, papers: ['K2', 'K3'] }, threshold: out.threshold };
-  await collectRadar({ config: changed, since: '2026-09-01', now: NOW, fetch, library: lib, state: emptyState() });
+  await collectRadar({ config: changed, since: '2026-09-01', now: NOW, fetch, library: lib, state: emptyState(), sleep: async () => {} });
   assert.equal(asked.length, 2, 'seeds changed since the calibration: calibrate again');
 });
 
@@ -229,6 +229,53 @@ test('calibration reads the arXiv API when the daily RSS listings are empty (wee
   assert.ok(asked[0].unrelated.every((u) => u.arxiv && u.abstract));
   assert.equal(asked[0].field.length, 12, "the seeds' own category too");
   assert.ok(urls.some((u) => u.includes('search_query=cat:cond-mat.mtrl-sci')));
+});
+
+test('calibration measures each seed against the arXiv category it was posted in, from all the seed categories', async () => {
+  const listing = (c) => arxivFeed(Array.from({ length: 10 }, (_, i) => ({ id: `2610.${String(c.length).padStart(2, '0')}0${i}`, title: `${c} paper ${i}`, summary: `about ${c}` })));
+  const rss = [];
+  const fetch = async (url) => {
+    const u = String(url);
+    if (u.startsWith('https://rss.arxiv.org/rss/')) { const c = u.split('/').at(-1); rss.push(c); return res(200, listing(c)); }
+    if (u.includes('search_query=ti:')) {
+      const c = u.includes('ti:agents') ? 'cs.AI' : u.includes('ti:excitons') ? 'physics.chem-ph' : null;
+      return res(200, c ? `<feed><entry><id>http://arxiv.org/abs/2610.5v1</id><title>${c === 'cs.AI' ? 'Invented lab agents paper' : 'Excitons in dots'}</title><summary>s</summary><published>2026-10-02T00:00:00Z</published><arxiv:primary_category term="${c}"/></entry></feed>` : '<feed></feed>');
+    }
+    return res(404);
+  };
+  const asked = [];
+  const library = {
+    items: async () => [{ key: 'K2', title: 'Invented lab <i>agents</i> paper' }],
+    async radarCalibrate(q) { asked.push(q); return { abstract: { threshold: 0.6, overlap: false }, full: null, seeds: 3, at: 1792500000, baseline: null }; },
+  };
+  const out = await calibrateRadar({ fetch, library: /** @type {any} */ (library), seeds: /** @type {any} */ (seeds({ categories: ['cond-mat.mtrl-sci', 'physics.chem-ph', 'physics.comp-ph'] })), sleep: async () => {} });
+  assert.deepEqual(asked[0].seed_categories, { 'zotero/K2': 'cs.AI', 'text:Excitons in dots': 'physics.chem-ph' }, 'each seed found on arXiv, by its own label');
+  const count = (c) => asked[0].field.filter((p) => p.category === c).length;
+  assert.deepEqual(['cond-mat.mtrl-sci', 'physics.chem-ph', 'physics.comp-ph', 'cs.AI'].map(count), [10, 10, 10, 10], 'every seed category is read, not the first two');
+  assert.ok(asked[0].field.filter((p) => p.category === 'cs.AI').every((p) => p.own), "a category only a seed has is that seed's field alone");
+  assert.ok(asked[0].field.filter((p) => p.category === 'physics.chem-ph').every((p) => !p.own));
+  assert.equal(out.threshold?.calibration?.version, CALIBRATION_VERSION);
+});
+
+test('a radar calibrated by older logic calibrates again once; a failed try leaves its threshold standing', async () => {
+  const unrelated = Array.from({ length: 10 }, (_, i) => ({ id: `2610.2100${i}`, title: `Unrelated ${i}`, summary: 'stars and galaxies' }));
+  const fetch = async (url) => (String(url).startsWith('https://rss.arxiv.org/rss/') ? res(200, arxivFeed(unrelated)) : res(404));
+  const lib = seedLibrary({ abstractSim: () => 0.5, wholeSim: () => null });
+  let asked = 0, fail = true;
+  lib.radarCalibrate = async () => { asked += 1; if (fail) throw new Error('busy'); return { abstract: { threshold: 0.2, overlap: false }, full: null, seeds: 3, at: 1792500000, baseline: null }; };
+  const base = validateRadar({ scope: { kind: 'library' }, profile: profile({ topics: [] }), sources: [{ id: 'database:arxiv', on: true, kind: 'database', db: 'arxiv' }], size: { fresh: 15, older: 0 }, seeds: seeds() });
+  const old = { abstract: 0.3, full: null, calibration: { seedsKey: seedsKey(base.seeds), abstract: {}, full: null, seeds: 3, at: NOW } };
+  const run = (threshold, state = emptyState()) => collectRadar({ config: { ...base, threshold }, since: '2026-09-01', now: NOW, fetch, library: lib, state, sleep: async () => {} });
+  const failed = await run(old);
+  assert.equal(asked, 1, 'made before the version: calibrate again');
+  assert.equal(failed.threshold, null, 'the old threshold stands');
+  await run(old, failed.state);
+  assert.equal(asked, 1, 'and waits a day after a failed try');
+  fail = false;
+  const done = await run(old);
+  assert.equal(done.threshold?.calibration?.version, CALIBRATION_VERSION);
+  await run(done.threshold);
+  assert.equal(asked, 2, 'the current version is not calibrated again');
 });
 
 test('namesakes: the one with works in the library wins; with none, the one whose work reads closest to it', async () => {

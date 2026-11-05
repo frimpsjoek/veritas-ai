@@ -237,7 +237,7 @@ export function createHttpLibraryBackend(fetchFn, opts) {
       return data?.scores ?? {};
     },
 
-    /** Spec radar-seeds G4. @param {{ seeds: import("./radar-types").SeedBody, unrelated: { title: string, abstract: string, arxiv: string | null }[], field?: { title: string, abstract: string, arxiv: string | null }[], full_papers?: number }} q */
+    /** Spec radar-seeds G4. @param {{ seeds: import("./radar-types").SeedBody, unrelated: { title: string, abstract: string, arxiv: string | null }[], field?: { title: string, abstract: string, arxiv: string | null, category?: string, own?: boolean }[], seed_categories?: Record<string, string>, full_papers?: number }} q */
     async radarCalibrate(q) {
       return sendJSON('POST', '/radar/calibrate', q, WHOLE_PAPERS_MS, opts.slowFetch ?? fetchFn);
     },
