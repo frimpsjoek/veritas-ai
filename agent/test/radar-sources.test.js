@@ -83,6 +83,15 @@ test('a seed radar also searches arXiv for its topics, more from the ones that w
   assert.match(url('dot'), /max_results=10/, 'half the weight, half the papers');
 });
 
+test('arXiv asking to slow down stops the searches of this run; the listings still count', async () => {
+  const urls = [];
+  const fetch = async (url) => { urls.push(String(url)); return res(429); };
+  const topics = [{ text: 'first invented topic', weight: 1, origin: 'user' }, { text: 'second invented topic', weight: 1, origin: 'user' }];
+  const r = await fetchSource({ id: 'database:arxiv', on: true, kind: 'database', db: 'arxiv' }, { fetch, profile: profile({ topics }), since: '2026-10-01', seedPlan: { categories: [], phrases: ['a title phrase'] } });
+  assert.equal(urls.length, 1, 'no more requests after the 429');
+  assert.match(r.error, /429/);
+});
+
 test('a followed author looks back two months: OpenAlex attributes papers to people weeks after it lists them', async () => {
   const urls = [];
   const fetch = async (url) => { urls.push(String(url)); return res(200, '{"results":[]}'); };

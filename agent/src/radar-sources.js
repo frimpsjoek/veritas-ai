@@ -260,13 +260,16 @@ async function seededArxiv(fetchFn, plan, since, caches, topics) {
     if (got.error) { errors.push(`${category}: ${got.error}`); continue; }
     raws.push(...got.items.filter((i) => !i.date || i.date >= since).map((i) => ({ title: i.title, doi: i.doi, arxiv: i.arxiv, authors: arxivAuthors(i.authors), abstract: i.summary, date: i.date, url: i.link, venue: 'arXiv', kind: 'preprint' })));
   }
-  for (const phrase of plan.phrases.slice(0, SEED_PHRASES)) {
-    try { raws.push(...(await searchSource(fetchFn, 'arxiv', phrase, PER_QUERY, since))); } catch (e) { errors.push(message(e)); }
+  const searches = [...plan.phrases.slice(0, SEED_PHRASES).map((text) => ({ text, limit: PER_QUERY })), ...topics];
+  let tried = 0;
+  for (const search of searches) {
+    tried += 1;
+    try { raws.push(...(await searchSource(fetchFn, 'arxiv', search.text, search.limit, since))); } catch (e) {
+      errors.push(message(e));
+      if (/HTTP 429/.test(message(e))) break; // it asked to slow down: the next run tries again
+    }
   }
-  for (const topic of topics) {
-    try { raws.push(...(await searchSource(fetchFn, 'arxiv', topic.text, topic.limit, since))); } catch (e) { errors.push(message(e)); }
-  }
-  return [raws, allFailed(errors, plan.categories.length + Math.min(plan.phrases.length, SEED_PHRASES) + topics.length, raws.length)];
+  return [raws, allFailed(errors, plan.categories.length + tried, raws.length)];
 }
 
 /**
