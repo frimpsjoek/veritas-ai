@@ -63,6 +63,7 @@ fn quit(app: &AppHandle) {
 async fn boot(app: AppHandle, reuse: Option<String>) -> Result<serde_json::Value, String> {
     let data = data_dir(&app)?;
     std::fs::create_dir_all(&data).map_err(|e| format!("cannot create {}: {e}", data.display()))?;
+    server::look_at_source_folders(&data);
     let bundled = app.path().resource_dir().map_err(|e| e.to_string())?.join("web");
     web::install(&bundled, &data)?;
     if server::first_start(&data) {
