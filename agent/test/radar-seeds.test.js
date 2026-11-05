@@ -321,6 +321,14 @@ test('a journal paper cannot be read whole, so it is judged at the bar that gets
   assert.equal(by['Preprint at the whole bar'].score, 0);
 });
 
+test('the lower bar never goes below where unrelated papers end', async () => {
+  const items = [{ id: '2610.41001', title: 'Under unrelated papers', summary: 'x' }, { id: '2610.41002', title: 'Over unrelated papers', summary: 'y' }];
+  const lib = seedLibrary({ abstractSim: (text) => (text.startsWith('Under') ? 0.03 : 0.05), wholeSim: () => 0.1 });
+  const threshold = { abstract: 0.06, full: 0.05, calibration: { abstract: { unrelated: { p95: 0.04 } }, baseline: { labels: ['zotero/K1'], abstract: [0.5], full: [0.6] }, version: CALIBRATION_VERSION, seedsKey: seedsKey(seeds()) } };
+  await wholeRun(items, lib, { threshold });
+  assert.deepEqual(lib.calls.fulltext.flatMap((q) => q.items.map((i) => i.arxiv)), ['2610.41002'], '0.03 is past 0.06 - the margin, but not past 0.04');
+});
+
 test('a calibrated run leaves out what one broad seed alone holds up, and keeps what a second seed or a topic agrees with', async () => {
   const items = [{ id: '2610.40001', title: 'Harness for invented agents', summary: 'software' }, { id: '2610.40002', title: 'Two seeds agree here', summary: 'both' }, { id: '2610.40003', title: 'Topic in the text', summary: 'sleep spindle' }];
   const lib = seedLibrary({ abstractSim: () => 0.2, wholeSim: () => 0.1 });

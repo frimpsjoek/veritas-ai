@@ -26,6 +26,9 @@ export const WHOLE_SEED_SHARE = 20;
 const WHOLE_BATCH = 40;
 /** The abstract pass keeps papers this far below the abstract threshold; the whole-paper pass decides them. */
 export const ABSTRACT_MARGIN = 0.03;
+/** That lower bar, and never below where the unrelated fields end: a day's whole-paper reads are not for those.
+ *  @param {import("./radar-types").RadarThreshold} threshold */
+const lowerBar = (threshold) => Math.max(threshold.abstract - ABSTRACT_MARGIN, threshold.calibration?.abstract?.unrelated?.p95 ?? -Infinity);
 /** Until a radar is calibrated, the 2026-10-11 floor stands in. */
 const DEFAULT_CUT = 0.7;
 const HISTORY_DAYS = 7;
@@ -96,7 +99,7 @@ export async function collectRadar(run) {
     const got = await calibrateRadar({ fetch: run.fetch, library, seeds: config.seeds, ...(run.sleep ? { sleep: run.sleep } : {}) });
     if (got.threshold) threshold = calibrated = got.threshold;
   }
-  const cut = seeds ? (threshold ? threshold.abstract - ABSTRACT_MARGIN : DEFAULT_CUT) : undefined;
+  const cut = seeds ? (threshold ? lowerBar(threshold) : DEFAULT_CUT) : undefined;
   const baseline = threshold?.calibration?.baseline ?? null;
   const scoring = { backend: library, collections, profile: config.profile, state, watched, seeds, cut, seedTitle, baseline, rankBar: baseline && threshold ? threshold.abstract : null };
   const abstracts = { ...state.abstracts };
@@ -253,7 +256,7 @@ async function decideWhole(ranked, ctx) {
       try { Object.assign(whole, await ctx.library.radarFulltext({ seeds: ctx.seeds, items, ...(ctx.baseline ? { baseline: ctx.baseline } : {}) })); } catch { /* those papers keep their abstract */ }
     }
   }
-  const noCopy = ctx.baseline ? ABSTRACT_MARGIN : 0;
+  const noCopy = ctx.baseline && ctx.threshold ? ctx.threshold.abstract - lowerBar(ctx.threshold) : 0;
   const out = [];
   for (const it of ranked) {
     const w = whole[it.id];
