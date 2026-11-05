@@ -18,8 +18,12 @@ import { judgePool } from './radar-judge.js';
 const SHOWN_TEXT = 800;
 /** Spec radar-seeds: a run looks back at most this far, however long ago the last one was. */
 export const SEED_WINDOW_DAYS = 7;
-/** New arXiv papers read whole per run (D2: only those past the abstract cut). */
-export const WHOLE_PAPERS = 40;
+/** New arXiv papers read whole per run (D2: only those past the abstract cut), a PDF every 3 s, at most this many
+ *  closest to any one seed: the top 40 by abstract used to be mostly one broad seed's. */
+export const WHOLE_PAPERS = 100;
+export const WHOLE_SEED_SHARE = 20;
+/** The server reads this many per call (radar_api.FULLTEXT_MAX). */
+const WHOLE_BATCH = 40;
 /** The abstract pass keeps papers this far below the abstract threshold; the whole-paper pass decides them. */
 export const ABSTRACT_MARGIN = 0.03;
 /** Until a radar is calibrated, the 2026-10-11 floor stands in. */
@@ -211,9 +215,27 @@ async function seedPhrases(library, seeds) {
   } catch { return []; }
 }
 
+/** The arXiv candidates to read whole, best first: at most WHOLE_PAPERS, and WHOLE_SEED_SHARE closest to one seed.
+ *  @param {RadarItem[]} ranked */
+function wholeList(ranked) {
+  /** @type {Map<string, number>} */
+  const perSeed = new Map();
+  const out = [];
+  for (const it of ranked) {
+    if (!it.arxiv || out.length >= WHOLE_PAPERS) continue;
+    const seed = it.why?.seed?.label ?? '';
+    if ((perSeed.get(seed) ?? 0) >= WHOLE_SEED_SHARE) continue;
+    perSeed.set(seed, (perSeed.get(seed) ?? 0) + 1);
+    out.push(it);
+  }
+  return out;
+}
+
 /**
- * The whole-paper pass (spec 021 G3, D2): the best arXiv candidates past the abstract cut are read whole and
- * judged on that; the rest, and any paper that could not be read, are judged on their abstract.
+ * The whole-paper pass (spec 021 G3, D2): arXiv candidates past the abstract cut are read whole (wholeList) and
+ * judged on that; the rest, and any paper that could not be read, are judged on their abstract. A paper with no arXiv
+ * copy can never be read, and 0 of 248 journal papers passed the abstract bar (2026-11-03) while preprints passed
+ * through the whole-paper one: on a calibrated radar it is judged at the bar that gets a preprint read, and ranks from there.
  * @param {RadarItem[]} ranked best first, each with why.similarity to its closest seed
  * @param {{ library: import("./tools").LibraryBackend, seeds: import("./radar-types").SeedBody, threshold: import("./radar-types").RadarThreshold | null, seedTitle: (label: string) => string, baseline?: import("./radar-types").SeedBaseline | null }} ctx
  */
@@ -222,16 +244,20 @@ async function decideWhole(ranked, ctx) {
   const wholeCut = ctx.threshold?.full ?? null;
   /** @type {Record<string, { seed_max?: number, seed_best?: string | null, seed_raw?: number, error?: string }>} */
   let whole = {};
-  const toRead = ranked.filter((it) => it.arxiv).slice(0, WHOLE_PAPERS);
+  const toRead = wholeList(ranked);
   if (wholeCut != null && toRead.length && ctx.library.radarFulltext) {
-    try { whole = await ctx.library.radarFulltext({ seeds: ctx.seeds, items: toRead.map((it) => ({ id: it.id, arxiv: /** @type {string} */ (it.arxiv) })), ...(ctx.baseline ? { baseline: ctx.baseline } : {}) }); } catch { whole = {}; }
+    for (let i = 0; i < toRead.length; i += WHOLE_BATCH) {
+      const items = toRead.slice(i, i + WHOLE_BATCH).map((it) => ({ id: it.id, arxiv: /** @type {string} */ (it.arxiv) }));
+      try { Object.assign(whole, await ctx.library.radarFulltext({ seeds: ctx.seeds, items, ...(ctx.baseline ? { baseline: ctx.baseline } : {}) })); } catch { /* those papers keep their abstract */ }
+    }
   }
+  const noCopy = ctx.baseline ? ABSTRACT_MARGIN : 0;
   const out = [];
   for (const it of ranked) {
     const w = whole[it.id];
     if (w && typeof w.seed_max === 'number' && w.seed_best) {
       if (w.seed_max >= /** @type {number} */ (wholeCut)) out.push(rescoreWhole(it, w.seed_raw ?? w.seed_max, { label: w.seed_best, title: ctx.seedTitle(w.seed_best), margin: Math.round(w.seed_max * 1000) / 1000 }, ctx.baseline ? wholeCut : null));
-    } else if (seedBar(it) >= abstractCut) out.push(it);
+    } else if (it.arxiv ? seedBar(it) >= abstractCut : seedBar(it) >= abstractCut - noCopy) out.push(it.arxiv ? it : { ...it, score: Math.round(((it.score ?? 0) + noCopy) * 1000) / 1000 });
   }
   return out.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
 }

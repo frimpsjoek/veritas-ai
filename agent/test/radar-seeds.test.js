@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { validateRadar, seedBody, seedsKey, MIN_SEEDS } from '../src/radar.js';
-import { collectRadar, SEED_WINDOW_DAYS } from '../src/radar-run.js';
+import { collectRadar, SEED_WINDOW_DAYS, WHOLE_PAPERS, WHOLE_SEED_SHARE } from '../src/radar-run.js';
 import { politeFetch } from '../src/radar-sources.js';
 import { arxivQuery, arxivCategoryFeed } from '../src/scholarly.js';
 import { myPapers, calibrateRadar, CALIBRATION_VERSION } from '../src/radar-seeds.js';
@@ -104,7 +104,7 @@ test('a calibrated radar ranks on how far past its bar a paper is, not on plain 
     sources: [{ id: 'database:arxiv', on: true, kind: 'database', db: 'arxiv' }, { id: 'feed:j', on: true, kind: 'feed', url: feedUrl, title: 'Journal' }] });
   const out = await collectRadar({ config, since: '2026-09-01', now: NOW, fetch, library: lib, state: emptyState() });
   assert.deepEqual(out.picked.map((p) => p.title), ['Close to one seed', 'Close to the whole field', 'Read whole, barely past']);
-  assert.deepEqual(out.picked.map((p) => p.score), [0.1, 0.02, 0.01]);
+  assert.deepEqual(out.picked.map((p) => p.score), [0.13, 0.05, 0.01], 'a paper with no arXiv copy ranks from the lower bar it has to clear');
   assert.equal(out.picked[2].why?.similarity, 0.9, 'the plain similarity stays on the row');
 });
 
@@ -276,6 +276,51 @@ test('a radar calibrated by older logic calibrates again once; a failed try leav
   assert.equal(done.threshold?.calibration?.version, CALIBRATION_VERSION);
   await run(done.threshold);
   assert.equal(asked, 2, 'the current version is not calibrated again');
+});
+
+const wholeRun = (feedItems, lib, over = {}) => {
+  const fetch = routedFetch({ [arxivCategoryFeed('cond-mat.mtrl-sci')]: res(200, arxivFeed(feedItems)) });
+  const threshold = { abstract: 0.1, full: 0.05, calibration: { baseline: { labels: ['zotero/K1'], abstract: [0.5], full: [0.6] }, version: CALIBRATION_VERSION, seedsKey: seedsKey(seeds()) } };
+  const config = validateRadar({ scope: { kind: 'library' }, profile: profile({ topics: [] }), sources: [{ id: 'database:arxiv', on: true, kind: 'database', db: 'arxiv' }], size: { fresh: 50, older: 0, discover: 0 }, seeds: seeds(), threshold, ...over });
+  return collectRadar({ config, since: '2026-09-01', now: NOW, fetch, library: lib, state: emptyState() });
+};
+
+test('every arXiv paper past the lower bar is read whole, in batches the server takes, up to the total cap', async () => {
+  const items = Array.from({ length: WHOLE_PAPERS + 10 }, (_, i) => ({ id: `2610.${String(10000 + i)}`, title: `Invented paper number ${i}`, summary: 'band gap' }));
+  const lib = seedLibrary({ abstractSim: () => 0.09, wholeSim: () => 0.06 });
+  // a different closest seed per ten papers, so no seed's share is the limit here
+  lib.radarScore = async (q) => Object.fromEntries(q.items.map((it, i) => [it.id, { similarity: 0.5, negative: 0, seed_max: 0.09, seed_best: `zotero/K${i % 10}`, seed_raw: 0.6 }]));
+  await wholeRun(items, lib);
+  const read = lib.calls.fulltext.flatMap((q) => q.items);
+  assert.equal(read.length, WHOLE_PAPERS, 'not the first 40');
+  assert.ok(lib.calls.fulltext.every((q) => q.items.length <= 40), 'the server takes 40 a call');
+});
+
+test('one seed cannot fill the papers read whole', async () => {
+  const items = Array.from({ length: WHOLE_SEED_SHARE + 12 }, (_, i) => ({ id: `2610.${String(20000 + i)}`, title: `Invented paper number ${i}`, summary: i >= WHOLE_SEED_SHARE + 10 ? 'other' : 'hub' }));
+  const lib = seedLibrary({ abstractSim: (text) => (text.includes('other') ? 0.075 : 0.2), wholeSim: () => 0.06 });
+  const score = lib.radarScore;
+  lib.radarScore = async (q) => Object.fromEntries(Object.entries(await score(q)).map(([id, s]) => [id, { ...s, seed_best: q.items.find((i) => i.id === id).text.includes('other') ? 'zotero/NICHE' : 'zotero/HUB' }]));
+  await wholeRun(items, lib);
+  const read = lib.calls.fulltext.flatMap((q) => q.items.map((i) => i.arxiv));
+  assert.equal(read.length, WHOLE_SEED_SHARE + 2, "the hub's share, and both of the niche seed's papers, though they rank below all of the hub's");
+  assert.ok(read.includes(`2610.${20000 + WHOLE_SEED_SHARE + 10}`));
+});
+
+test('a journal paper cannot be read whole, so it is judged at the bar that gets an arXiv paper read, and ranks from there', async () => {
+  const journal = { id: 'journal:S1', on: true, kind: 'journal', openalexId: 'S1', name: 'J Invented', issn: null };
+  const works = { results: [{ id: 'https://openalex.org/W1', doi: 'https://doi.org/10.9/j1', display_name: 'Journal paper near the bar', type: 'article', publication_date: '2026-10-19', publication_year: 2026, primary_location: { landing_page_url: 'https://doi.org/10.9/j1', source: { display_name: 'J Invented' } }, abstract_inverted_index: { band: [0], gap: [1] }, authorships: [] }] };
+  const listing = arxivFeed([{ id: '2610.30001', title: 'Unreadable preprint near the bar', summary: 'band gap' }, { id: '2610.30002', title: 'Preprint at the whole bar', summary: 'band gap' }]);
+  const fetch = async (url) => (String(url) === arxivCategoryFeed('cond-mat.mtrl-sci') ? res(200, listing) : String(url).startsWith('https://api.openalex.org/works') ? res(200, JSON.stringify(works)) : res(404));
+  const lib = seedLibrary({ abstractSim: () => 0.08, wholeSim: (id) => (id === '2610.30002' ? 0.05 : null) });
+  const threshold = { abstract: 0.1, full: 0.05, calibration: { baseline: { labels: ['zotero/K1'], abstract: [0.5], full: [0.6] }, version: CALIBRATION_VERSION, seedsKey: seedsKey(seeds()) } };
+  const config = validateRadar({ scope: { kind: 'library' }, profile: profile({ topics: [] }), sources: [{ id: 'database:arxiv', on: true, kind: 'database', db: 'arxiv' }, journal], size: { fresh: 50, older: 0, discover: 0 }, seeds: seeds(), threshold });
+  const out = await collectRadar({ config, since: '2026-09-01', now: NOW, fetch, library: lib, state: emptyState() });
+  const by = Object.fromEntries(out.picked.map((r) => [r.title, r]));
+  assert.ok(by['Journal paper near the bar'], '0.08 clears 0.1 - the margin');
+  assert.ok(!by['Unreadable preprint near the bar'], 'a preprint that could not be read still needs the abstract bar');
+  assert.equal(by['Journal paper near the bar'].score, 0.02, '0.01 past the bar a journal paper has to clear, and 0.01 for a watched journal');
+  assert.equal(by['Preprint at the whole bar'].score, 0);
 });
 
 test('namesakes: the one with works in the library wins; with none, the one whose work reads closest to it', async () => {
