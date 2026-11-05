@@ -24,7 +24,7 @@ export interface LibraryBackend {
   /** Spec radar-seeds G3: new arXiv papers read whole and compared with the seeds; a paper that could not be read has `error`. */
   radarFulltext?(q: { seeds: import("./radar-types").SeedBody; items: { id: string; arxiv: string }[]; baseline?: import("./radar-types").SeedBaseline | null }): Promise<Record<string, { seed_max?: number; seed_best?: string | null; seed_raw?: number; error?: string }>>;
   /** Spec radar-seeds G4. */
-  radarCalibrate?(q: { seeds: import("./radar-types").SeedBody; unrelated: { title: string; abstract: string; arxiv: string | null }[]; field?: { title: string; abstract: string; arxiv: string | null; category?: string; own?: boolean }[]; seed_categories?: Record<string, string>; full_papers?: number }): Promise<{ abstract: import("./radar-types").ThresholdStats; full: import("./radar-types").ThresholdStats | null; seeds: number; at: number; baseline?: import("./radar-types").SeedBaseline; field?: { abstracts: number; whole: number } }>;
+  radarCalibrate?(q: { seeds: import("./radar-types").SeedBody; unrelated: { title: string; abstract: string; arxiv: string | null }[]; field?: { title: string; abstract: string; arxiv: string | null; category?: string }[]; full_papers?: number }): Promise<{ abstract: import("./radar-types").ThresholdStats; full: import("./radar-types").ThresholdStats | null; seeds: number; at: number; baseline?: import("./radar-types").SeedBaseline; field?: { abstracts: number; whole: number } }>;
   radarProfile?(q: { scope: import("./radar-types").ScoreScope; seeds?: { keys: string[] } }): Promise<import("./radar-types").SeedProfile>;
   /** Writes `Second Brain/Digests/<file>.md` in the vault. */
   writeDigest?(file: string, text: string): Promise<void>;

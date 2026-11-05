@@ -384,30 +384,25 @@ def _apply_field_cut(stats: dict, field_cut: float) -> None:
     stats.update(field_cut=round(field_cut, 3), threshold=round(max(stats["threshold"], raised), 3))
 
 
-def _by_category(field: list[dict]) -> tuple[dict, set]:
-    """The field's papers per arXiv category, and the categories only a seed has (marked `own`), not the radar."""
+def _by_category(field: list[dict]) -> dict:
+    """The field's papers per arXiv category."""
     groups: dict = {}
     for paper in field:
         groups.setdefault(paper.get("category"), []).append(paper)
-    return groups, {c for c, papers in groups.items() if papers[0].get("own")}
+    return groups
 
 
-def _field_base(matrix: np.ndarray, labels: list[str], vectors: dict, own: set, seed_categories: dict) -> np.ndarray:
-    """Each seed's baseline: its mean similarity to the radar's field, or to the category the seed was posted in when
-    that is higher. Measured only on the first two categories of a materials radar, one seed on agents scored against
-    papers far from it and was the closest seed of 35 of 54 rows (2026-11-03). `vectors`: category -> vectors."""
-    main = [v for c, vs in vectors.items() if c not in own for v in vs]
-    base = np.mean([matrix @ v for v in main], axis=0).astype(np.float32) if main else np.zeros(len(labels), dtype=np.float32)
-    for i, label in enumerate(labels):
-        mine = vectors.get(seed_categories.get(label))
-        if mine:
-            base[i] = max(base[i], float(np.mean([matrix[i] @ v for v in mine])))
-    return base
+def _field_base(matrix: np.ndarray, labels: list[str], vectors: dict) -> np.ndarray:
+    """Each seed's baseline: its mean similarity to the category it is closest to, of those read. Measured against one
+    mean of a materials radar's first two categories, a seed on agents scored against papers far from it and was the
+    closest seed of 35 of 54 rows (2026-11-03). `vectors`: category -> vectors."""
+    means = [np.mean([matrix @ v for v in vs], axis=0) for vs in vectors.values() if vs]
+    return np.max(means, axis=0).astype(np.float32) if means else np.zeros(len(labels), dtype=np.float32)
 
 
 def calibrate(searcher, body: dict, lock, hidden: set[str] = frozenset(), cache_path: Path | None = None, fetch=None) -> dict:
-    """POST /radar/calibrate {"seeds", "unrelated": [...], "field": [...], "seed_categories": {label: category}}; each
-    paper {"title", "abstract", "arxiv"?}, a field paper also its "category" and, when only a seed has that category, "own".
+    """POST /radar/calibrate {"seeds", "unrelated": [...], "field": [...]}; each paper {"title", "abstract", "arxiv"?},
+    a field paper also its "category".
 
     `field`: recent papers from the seeds' own arXiv categories. Their mean similarity to each seed is that seed's
     baseline (_field_base), subtracted before taking the closest seed, so a seed close to the whole field stops winning
@@ -420,8 +415,7 @@ def calibrate(searcher, body: dict, lock, hidden: set[str] = frozenset(), cache_
         raise ValueError("calibration needs at least 3 seed papers")
     cache_path = cache_path or kb.data_dir() / "radar-fulltext.sqlite"
     field, unrelated = body.get("field") or [], body.get("unrelated") or []
-    seed_categories = body.get("seed_categories") or {}
-    groups, own = _by_category(field)
+    groups = _by_category(field)
     full_n = int(body.get("full_papers", 8))
     full_each = max(FULL_PER_CATEGORY, math.ceil(full_n / max(len(groups), 1)))
 
@@ -437,7 +431,7 @@ def calibrate(searcher, body: dict, lock, hidden: set[str] = frozenset(), cache_
     # abstracts
     by_abs = {c: _abstract_vectors(searcher, papers, lock) for c, papers in groups.items()}
     field_abs = [v for vs in by_abs.values() for v in vs]
-    base_abs = _field_base(matrix, labels, by_abs, own, seed_categories)
+    base_abs = _field_base(matrix, labels, by_abs)
     library = [i for i, label in enumerate(labels) if label.startswith("zotero/")]
     with lock:
         notes = abstracts(searcher.db, [labels[i] for i in library])
@@ -450,7 +444,7 @@ def calibrate(searcher, body: dict, lock, hidden: set[str] = frozenset(), cache_
     # whole papers
     by_full = {c: _whole_vectors(searcher, papers, full_each, lock, cache_path, fetch) for c, papers in groups.items()}
     field_full = [v for vs in by_full.values() for v in vs]
-    base_full = _field_base(matrix, labels, by_full, own, seed_categories)
+    base_full = _field_base(matrix, labels, by_full)
     un_full = _whole_vectors(searcher, unrelated, full_n, lock, cache_path, fetch)
     full = None
     if un_full:

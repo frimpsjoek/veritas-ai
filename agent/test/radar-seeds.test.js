@@ -231,15 +231,15 @@ test('calibration reads the arXiv API when the daily RSS listings are empty (wee
   assert.ok(urls.some((u) => u.includes('search_query=cat:cond-mat.mtrl-sci')));
 });
 
-test('calibration measures each seed against the arXiv category it was posted in, from all the seed categories', async () => {
+test('calibration reads all the seed categories and the ones the seeds are cross-listed in', async () => {
   const listing = (c) => arxivFeed(Array.from({ length: 10 }, (_, i) => ({ id: `2610.${String(c.length).padStart(2, '0')}0${i}`, title: `${c} paper ${i}`, summary: `about ${c}` })));
-  const rss = [];
   const fetch = async (url) => {
     const u = String(url);
-    if (u.startsWith('https://rss.arxiv.org/rss/')) { const c = u.split('/').at(-1); rss.push(c); return res(200, listing(c)); }
-    if (u.includes('search_query=ti:')) {
-      const c = u.includes('ti:agents') ? 'cs.AI' : u.includes('ti:excitons') ? 'physics.chem-ph' : null;
-      return res(200, c ? `<feed><entry><id>http://arxiv.org/abs/2610.5v1</id><title>${c === 'cs.AI' ? 'Invented lab agents paper' : 'Excitons in dots'}</title><summary>s</summary><published>2026-10-02T00:00:00Z</published><arxiv:primary_category term="${c}"/></entry></feed>` : '<feed></feed>');
+    if (u.startsWith('https://rss.arxiv.org/rss/')) return res(200, listing(u.split('/').at(-1)));
+    if (u.includes('search_query=all:')) {
+      const title = u.includes('all:agents') ? 'Invented lab agents paper' : u.includes('all:excitons') ? 'Excitons in dots' : null;
+      const terms = title?.includes('agents') ? ['cond-mat.mtrl-sci', 'cs.AI'] : ['physics.chem-ph'];
+      return res(200, title ? `<feed><entry><id>http://arxiv.org/abs/2610.5v1</id><title>${title}</title><summary>s</summary><published>2026-10-02T00:00:00Z</published><arxiv:primary_category term="${terms[0]}"/>${terms.map((t) => `<category term="${t}"/>`).join('')}</entry></feed>` : '<feed></feed>');
     }
     return res(404);
   };
@@ -249,11 +249,9 @@ test('calibration measures each seed against the arXiv category it was posted in
     async radarCalibrate(q) { asked.push(q); return { abstract: { threshold: 0.6, overlap: false }, full: null, seeds: 3, at: 1792500000, baseline: null }; },
   };
   const out = await calibrateRadar({ fetch, library: /** @type {any} */ (library), seeds: /** @type {any} */ (seeds({ categories: ['cond-mat.mtrl-sci', 'physics.chem-ph', 'physics.comp-ph'] })), sleep: async () => {} });
-  assert.deepEqual(asked[0].seed_categories, { 'zotero/K2': 'cs.AI', 'text:Excitons in dots': 'physics.chem-ph' }, 'each seed found on arXiv, by its own label');
   const count = (c) => asked[0].field.filter((p) => p.category === c).length;
-  assert.deepEqual(['cond-mat.mtrl-sci', 'physics.chem-ph', 'physics.comp-ph', 'cs.AI'].map(count), [10, 10, 10, 10], 'every seed category is read, not the first two');
-  assert.ok(asked[0].field.filter((p) => p.category === 'cs.AI').every((p) => p.own), "a category only a seed has is that seed's field alone");
-  assert.ok(asked[0].field.filter((p) => p.category === 'physics.chem-ph').every((p) => !p.own));
+  assert.deepEqual(['cond-mat.mtrl-sci', 'physics.chem-ph', 'physics.comp-ph', 'cs.AI'].map(count), [10, 10, 10, 10], 'every seed category, not the first two, and where a seed is cross-listed');
+  assert.equal(asked[0].field.length, 40, 'each once');
   assert.equal(out.threshold?.calibration?.version, CALIBRATION_VERSION);
 });
 
