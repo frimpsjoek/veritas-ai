@@ -29,7 +29,7 @@ import { ArtifactPanel, downloadResult } from './artifact-panel.js';
 import { openPopover, menuItem } from './popover.js';
 import { buildSwitcher, paintSwitcher, openRowMenu } from './projects-menu.js';
 import { filterEntries, emptyLine, projectOf } from './projects-data.js';
-import { whereLabel, groupEntries, findEntries, noMatchLine, entryTitle, whenLabel } from './history-data.js';
+import { whereLabel, groupEntries, findEntries, noMatchLine, entryTitle, whenLabel, panelFoldsList } from './history-data.js';
 import { newsLabel, newsTitle } from './routines-data.js';
 import { KIND_NAME, KIND_ICON, hasGaps } from './artifact-data.js';
 import { describeOn, turnsOn } from './papers-chat-data.js';
@@ -224,7 +224,17 @@ export class ChatView {
     this.artifactsButton = this.el('button', 'sb-ai-artifacts-button');
     this.artifactsButton.hidden = true;
     this.artifactsButton.addEventListener('click', (event) => { event.stopPropagation(); this.openArtifactList(); });
-    head.append(this.historyToggle, this.historyNewChat, this.headerTitle, this.artifactsButton);
+    // the results panel's own toggle, beside "Artifacts (N)": opens the newest result, or closes the panel
+    this.panelToggle = this.el('button', 'sb-ai-panel-toggle');
+    this.panelToggle.setAttribute('type', 'button');
+    this.panelToggle.hidden = true;
+    this.panelToggle.append(this.icon('panelRight'));
+    this.panelToggle.addEventListener('click', () => {
+      if (this.artifactOpen) { this.closeArtifact(); return; }
+      const newest = [...this.artifacts].sort((a, b) => (a.updated < b.updated ? 1 : -1))[0];
+      if (newest) void this.openArtifact(newest.ref);
+    });
+    head.append(this.historyToggle, this.historyNewChat, this.headerTitle, this.artifactsButton, this.panelToggle);
     if (this.host.openInTab) {
       const openInTab = this.el('button', 'sb-ai-open-tab', '⤢');
       openInTab.title = 'Open this chat in its own tab';
@@ -717,6 +727,7 @@ export class ChatView {
    *  "New chat" gets its own header button when the side panel (which normally holds it) is hidden. */
   setHistoryCollapsed(collapsed) {
     this.historyCollapsed = collapsed;
+    this.autoFolded = false; // the user's choice: closing the results panel leaves it as it is
     this.host.prefs.set('historyCollapsed', collapsed);
     this.applyHistoryCollapsed(collapsed);
   }
@@ -1527,6 +1538,7 @@ export class ChatView {
     const panel = this.ensurePanel();
     if (!this.artifactOpen) this.threadScroll = this.scroller.scrollTop;
     this.artifactOpen = true;
+    this.foldListForPanel();
     this.artifactPane.hidden = false;
     this.applyArtifactLayout();
     await panel.open(`review:${review}`, { id: 'screening' }, 1);
@@ -2094,6 +2106,7 @@ export class ChatView {
     this.artifactsButton.hidden = n === 0;
     this.artifactsButton.textContent = `Artifacts (${n})`;
     this.artifactsButton.title = 'The tables and paper sets in this chat';
+    this.paintPanelToggle();
     this.renderCurrent();
     this.renderAddStep();
   }
@@ -2171,6 +2184,7 @@ export class ChatView {
     const panel = this.ensurePanel();
     if (!this.artifactOpen) this.threadScroll = this.scroller.scrollTop;
     this.artifactOpen = true;
+    this.foldListForPanel();
     this.artifactPane.hidden = false;
     this.applyArtifactLayout();
     const latest = this.artifacts.find((a) => a.ref.id === ref.id)?.ref.version;
@@ -2182,8 +2196,26 @@ export class ChatView {
     this.artifactOpen = false;
     this.artifactExpanded = false;
     this.artifactPane.hidden = true;
+    if (this.autoFolded) { this.autoFolded = false; this.historyCollapsed = false; this.applyHistoryCollapsed(false); }
     this.applyArtifactLayout();
     if (this.threadScroll != null) this.scroller.scrollTop = this.threadScroll; // the thread was hidden, not rebuilt
+  }
+
+  /** The panel needs the history list's room when the chat is short of it. The fold is not saved: closing the panel brings
+   *  the list back, unless the user folded it themselves. */
+  foldListForPanel() {
+    if (this.historyCollapsed || !panelFoldsList(this.root.clientWidth)) return;
+    this.autoFolded = true;
+    this.historyCollapsed = true;
+    this.applyHistoryCollapsed(true);
+  }
+
+  paintPanelToggle() {
+    const label = this.artifactOpen ? 'Close the results panel' : 'Open the results panel';
+    this.panelToggle.hidden = this.artifacts.length === 0;
+    this.panelToggle.title = label;
+    this.panelToggle.setAttribute('aria-label', label);
+    this.panelToggle.setAttribute('aria-expanded', String(Boolean(this.artifactOpen)));
   }
 
   /** spec 007 §4 "Widths": side by side from 960 px, over the thread from 560, full view below. */
@@ -2199,6 +2231,7 @@ export class ChatView {
     this.root.classList.toggle('has-artifact', open);
     for (const m of ['side', 'cover', 'full']) this.root.classList.toggle(`is-art-${m}`, open && mode === m);
     this.root.classList.toggle('is-art-expanded', expanded);
+    if (this.panelToggle) this.paintPanelToggle();
     this.panel?.setLayout(mode, expanded);
     if (open && mode === 'side' && !expanded) this.artifactPane.style.width = `${this.clampArtifactWidth(this.host.prefs.get('artifactWidth'))}px`;
     else this.artifactPane.style.width = '';
@@ -2759,9 +2792,9 @@ tab-content:has(> .sb-ai) { display: flex; }
 .sb-ai .sb-ai-chip-x, .sb-ai .sb-ai-picker-item, .sb-ai .sb-ai-picker-more { background: transparent; }
 .sb-ai-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .sb-ai-head { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--sb-ui-line); }
-.sb-ai .sb-ai-history-toggle { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; min-height: 0; padding: 0; border: none; border-radius: 6px;
+.sb-ai .sb-ai-history-toggle, .sb-ai .sb-ai-panel-toggle { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; min-height: 0; padding: 0; border: none; border-radius: 6px;
 	background: transparent; box-shadow: none; color: var(--sb-ui-muted); cursor: pointer; }
-.sb-ai .sb-ai-history-toggle:hover { background: var(--sb-ui-hover); color: var(--sb-ui-text); }
+.sb-ai .sb-ai-history-toggle:hover, .sb-ai .sb-ai-panel-toggle:hover { background: var(--sb-ui-hover); color: var(--sb-ui-text); }
 .sb-ai-history-newchat[hidden] { display: none; }
 .sb-ai-head-title { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; white-space: nowrap; }
 .sb-ai-head-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
