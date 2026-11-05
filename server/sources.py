@@ -263,7 +263,7 @@ def add_account(kind: str, user_id: str, *, key: str | None = None, name: str | 
 
 def resolved() -> Layout:
     """The layout from the list. Only the enabled folders are looked at, and only as far as a stat goes (_quick_kind):
-    kb resolves this at import, before the server listens."""
+    kb resolves this at import, while the server is still starting (listen_first.py)."""
     listed = folders()
     enabled = [f for f in listed if f.enabled]
     kinds = {f.name: _quick_kind(f) for f in enabled}

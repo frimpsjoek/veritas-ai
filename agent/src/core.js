@@ -1932,7 +1932,7 @@ export async function createLocalRuntime(deps) {
     },
 
     async dispose() {
-      await routineScheduler.dispose(); // first: a running routine ends as "stopped" before the things it uses go away
+      await routineScheduler.dispose(); // first: a running routine ends as "app closed" before the things it uses go away
       // A running columns step writes its version (unfinished cells pending) before the runtime goes away.
       for (const run of stepRuns.values()) { run.reason = 'stopped'; run.controller.abort(); }
       await Promise.allSettled([...stepRuns.values()].map((run) => run.done));

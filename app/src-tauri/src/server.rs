@@ -134,20 +134,26 @@ impl Server {
         format!("http://127.0.0.1:{}/app/", self.port)
     }
 
-    /// The first start unpacks the server (PyInstaller one-file) and opens the index, so this allows a while.
+    /// The server answers /ping as soon as it is running, before it has read the folders or opened the index, so the
+    /// wait is for its `ready`: the window then moves to a web app whose routes work. The first start also unpacks the
+    /// server (PyInstaller one-file), so this allows a while. A folder macOS has not allowed yet holds it up here too.
     fn wait_ready(&mut self, log: &Path) -> Result<(), String> {
         let deadline = Instant::now() + START_TIMEOUT;
         while Instant::now() < deadline {
             if let Ok(Some(status)) = self.child.try_wait() {
                 return Err(format!("the server stopped ({status}). Its log says:\n{}", log_tail(log)));
             }
-            if answers(self.port, "/ping") {
+            if ping(self.port).is_some_and(|answer| is_ready(&answer)) {
                 return Ok(());
             }
             std::thread::sleep(Duration::from_millis(300));
         }
         self.stop();
-        Err(format!("the server did not answer within {} s. Its log says:\n{}", START_TIMEOUT.as_secs(), log_tail(log)))
+        Err(format!(
+            "the server was not ready within {} s; if macOS is asking for Documents access, allow it and Retry. Its log says:\n{}",
+            START_TIMEOUT.as_secs(),
+            log_tail(log)
+        ))
     }
 
     /// Asks the server's process group to stop (the server stops agentd on the way out) and kills the group if
@@ -211,17 +217,102 @@ impl Drop for Server {
     }
 }
 
-/// True when `http://127.0.0.1:<port>/<path>` answers 200: a plain GET, since a blocking HTTP client for one
-/// health check is not worth its weight.
-fn answers(port: u16, path: &str) -> bool {
+/// What `GET /ping` answers, whole: a plain request, since a blocking HTTP client for one health check is not worth
+/// its weight. The server closes the connection after each answer.
+fn ping(port: u16) -> Option<String> {
     use std::io::Write;
     use std::net::{SocketAddr, TcpStream};
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(500)) else { return false };
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(500)).ok()?;
     let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-    if stream.write_all(format!("GET {path} HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n").as_bytes()).is_err() {
+    stream.write_all(b"GET /ping HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n").ok()?;
+    let mut answer = String::new();
+    stream.read_to_string(&mut answer).ok()?;
+    Some(answer)
+}
+
+/// A 200 whose body does not say `"ready": false`.
+fn is_ready(answer: &str) -> bool {
+    let Some((head, body)) = answer.split_once("\r\n\r\n") else { return false };
+    if !(head.starts_with("HTTP/1.") && head.get(9..12) == Some("200")) {
         return false;
     }
-    let mut head = [0u8; 12];
-    stream.read_exact(&mut head).is_ok() && head.starts_with(b"HTTP/1.") && &head[9..12] == b"200"
+    serde_json::from_str::<serde_json::Value>(body).is_ok_and(|ping| ping["ready"].as_bool() != Some(false))
+}
+
+/// The enabled folders in a sources.json (server/sources.py); an online source has no path.
+fn enabled_folders(listed: &str, home: Option<&Path>) -> Vec<PathBuf> {
+    let Ok(listed) = serde_json::from_str::<serde_json::Value>(listed) else { return Vec::new() };
+    let folders = listed["folders"].as_array().map(Vec::as_slice).unwrap_or_default();
+    folders
+        .iter()
+        .filter(|folder| folder["enabled"].as_bool() != Some(false))
+        .filter_map(|folder| folder["path"].as_str())
+        .map(|path| match (path.strip_prefix("~/"), home) {
+            (Some(rest), Some(home)) => home.join(rest),
+            _ => PathBuf::from(path),
+        })
+        .collect()
+}
+
+/// Opens each enabled folder from this process, the visible app, so a macOS permission prompt for ~/Documents is asked
+/// by something the user can see (the server is a background child). On a thread of its own, since the call blocks
+/// until the prompt is answered and the start must go on regardless; what the folder holds does not matter here.
+pub fn look_at_source_folders(data: &Path) {
+    let list = data.join("sources.json");
+    std::thread::spawn(move || {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let listed = fs::read_to_string(list).unwrap_or_default();
+        for folder in enabled_folders(&listed, home.as_deref()) {
+            let _ = fs::read_dir(folder).map(|mut entries| entries.next());
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_ready_answer_ends_the_wait() {
+        let ping = |body: &str| format!("HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n{body}");
+        assert!(!is_ready(&ping(r#"{"ok": true, "ready": false}"#)));
+        assert!(is_ready(&ping(r#"{"ok": true, "ready": true}"#)));
+        assert!(is_ready(&ping(r#"{"ok": true}"#)), "absent means ready");
+        assert!(!is_ready("HTTP/1.0 503 Service Unavailable\r\n\r\n{}"));
+        assert!(!is_ready(""));
+    }
+
+    #[test]
+    fn the_folders_to_look_at_are_the_enabled_ones_with_a_path() {
+        let listed = r#"{"version": 1, "folders": [
+            {"name": "vault", "path": "/Users/a/Documents/Vault", "enabled": true},
+            {"name": "unsaid", "path": "/Users/a/Documents/Notes"},
+            {"name": "off", "path": "/Users/a/Documents/Off", "enabled": false},
+            {"name": "web", "kind": "zotero-web", "user_id": "1", "enabled": true}
+        ]}"#;
+        let found = enabled_folders(listed, Some(Path::new("/Users/a")));
+        assert_eq!(found, [PathBuf::from("/Users/a/Documents/Vault"), PathBuf::from("/Users/a/Documents/Notes")]);
+    }
+
+    #[test]
+    fn a_folder_written_from_home_is_found_and_a_broken_list_is_no_folders() {
+        let found = enabled_folders(r#"{"folders": [{"path": "~/Documents/Vault"}]}"#, Some(Path::new("/Users/a")));
+        assert_eq!(found, [PathBuf::from("/Users/a/Documents/Vault")]);
+        assert!(enabled_folders("not json", None).is_empty());
+    }
+
+    /// A FIFO nobody writes to: reading it blocks for good, as a folder under an unanswered macOS prompt does.
+    #[cfg(unix)]
+    #[test]
+    fn looking_at_the_folders_never_holds_up_the_start() {
+        let data = std::env::temp_dir().join(format!("veritas-look-{}", std::process::id()));
+        fs::create_dir_all(&data).unwrap();
+        let list = std::ffi::CString::new(data.join("sources.json").to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(list.as_ptr(), 0o600) }, 0);
+        let before = Instant::now();
+        look_at_source_folders(&data);
+        assert!(before.elapsed() < Duration::from_secs(1));
+        let _ = fs::remove_dir_all(&data);
+    }
 }
