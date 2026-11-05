@@ -53,6 +53,11 @@ export const ICONS = {
   home: 'M2.75 7.5 8 2.75l5.25 4.75 M4.25 6.5v6.75h7.5V6.5 M6.75 13.25v-3.5h2.5v3.5',
   folder: 'M2.75 4.25h3.75l1.25 1.5h5.5v6.5H2.75z',
   grip: 'M6 4v.01 M6 8v.01 M6 12v.01 M10 4v.01 M10 8v.01 M10 12v.01',
+  // ---------- Lucide's panel-left / panel-right, circle-alert and loader-circle, scaled to the 16 px box and this stroke ----------
+  panelLeft: 'M3.25 2.75h9.5a1 1 0 0 1 1 1v8.5a1 1 0 0 1-1 1h-9.5a1 1 0 0 1-1-1v-8.5a1 1 0 0 1 1-1z M6 2.75v10.5',
+  panelRight: 'M3.25 2.75h9.5a1 1 0 0 1 1 1v8.5a1 1 0 0 1-1 1h-9.5a1 1 0 0 1-1-1v-8.5a1 1 0 0 1 1-1z M10 2.75v10.5',
+  alert: 'M8 1.75a6.25 6.25 0 1 0 0 12.5 6.25 6.25 0 0 0 0-12.5z M8 5v3.5 M8 11v.01',
+  loader: 'M14 8a6 6 0 1 1-4.15-5.7',
 
   // ---------- Settings sections (spec 016 U2): same 1.5 stroke; the sidebar draws them at 20 px ----------
   settingsGeneral: 'M2.75 5h5.25 M11 5h2.25 M9.5 3.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z M2.75 11h2.25 M8 11h5.25 M6.5 9.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z',
