@@ -11,6 +11,7 @@ import { calibrateRadar, CALIBRATION_VERSION } from './radar-seeds.js';
 import { score, rescoreWhole, seedBar, neighbour, hubOnly } from './radar-score.js';
 import { abstractsByDoi, fillAbstracts } from './scholarly.js';
 import { judgePool } from './radar-judge.js';
+import { taughtSeeds } from './radar-feedback.js';
 
 /** @typedef {import("./radar-types").RadarItem} RadarItem */
 /** @typedef {import("./radar-types").RadarState} RadarState */
@@ -49,7 +50,7 @@ export const NEEDS_SERVER = 'The reading radar needs the library server, which i
  *   config: import("./radar-types").RadarConfig, since: string, now: string, fetch: typeof fetch,
  *   library: import("./tools").LibraryBackend, hub?: any, state: RadarState, signal?: AbortSignal, budget?: number,
  *   keyed?: boolean, abstractFetch?: typeof fetch, sleep?: (ms: number) => Promise<void>,
- *   judge?: (pool: RadarItem[], profile: { topics: string[], seeds: string[], rejected: string[] }) => Promise<{ off: Set<string>, error: string | null }>,
+ *   judge?: (pool: RadarItem[], profile: { topics: string[], seeds: string[], rejected: string[], liked?: string[] }) => Promise<{ off: Set<string>, error: string | null }>,
  * }} run `keyed`: the user has saved an OpenAlex key; "Might interest you" needs one, and is left out when it is false or absent.
  *   `sleep` stands in for the waits between arXiv API requests (tests).
  *   `abstractFetch` (abstractNet): papers that came without an abstract are looked up before the final ranking; absent,
@@ -65,11 +66,11 @@ export async function collectRadar(run) {
   const active = config.sources.filter((s) => s.on);
   if (!active.length) throw new Error('No source is turned on.');
   const collections = config.scope.kind === 'collections' ? config.scope.keys : null;
-  const seeds = config.seeds ? seedBody(config.seeds) : null;
+  const chosen = config.seeds ? seedBody(config.seeds) : null;
   // A seed radar looks back at most SEED_WINDOW_DAYS (D3), even after a long pause.
   const floorDate = new Date(Date.parse(run.now) - SEED_WINDOW_DAYS * 86_400_000).toISOString().slice(0, 10);
-  const since = seeds && run.since < floorDate ? floorDate : run.since;
-  const seedPlan = seeds ? { categories: config.seeds?.categories ?? [], phrases: await seedPhrases(library, seeds) } : null;
+  const since = chosen && run.since < floorDate ? floorDate : run.since;
+  const seedPlan = chosen ? { categories: config.seeds?.categories ?? [], phrases: await seedPhrases(library, chosen) } : null;
 
   const [libraryItems, fetched] = await Promise.all([
     library.items({ collections: null }),
@@ -89,16 +90,19 @@ export async function collectRadar(run) {
   };
   const titles = new Map(libraryItems.map((it) => [`zotero/${it.key}`, it.title]));
   // Zotero titles can hold markup (<i>GW</i>); the why line is plain text.
-  const seedTitle = (/** @type {string} */ label) => String(titles.get(label) ?? label.replace(/^text:/, '')).replace(/<[^>]+>/g, '');
+  const seedTitle = (/** @type {string} */ label) => String(titles.get(label) ?? label.replace(/^(text|liked):/, '')).replace(/<[^>]+>/g, '');
   let threshold = config.threshold ?? null;
   // Without a calibration every margin is the plain similarity and a seed close to everything wins by default; the
   // setup calibrates, but a failed try there (arXiv busy, say) left the radar on the 0.70 default for good.
   let calibrated = null, calibrateTried = state.calibrateTried;
-  if (seeds && config.seeds && library.radarCalibrate && wantsCalibration(config.seeds, seeds, threshold, state.calibrateTried, run.now)) {
+  if (chosen && config.seeds && library.radarCalibrate && wantsCalibration(config.seeds, chosen, threshold, state.calibrateTried, run.now)) {
     calibrateTried = run.now;
     const got = await calibrateRadar({ fetch: run.fetch, library, seeds: config.seeds, ...(run.sleep ? { sleep: run.sleep } : {}) });
     if (got.threshold) threshold = calibrated = got.threshold;
   }
+  // Compared with what the user chose and, at a lower weight, what they liked; only the first was calibrated.
+  const taught = chosen ? taughtSeeds(state) : [];
+  const seeds = chosen && taught.length ? { ...chosen, taught } : chosen;
   const cut = seeds ? (threshold ? lowerBar(threshold) : DEFAULT_CUT) : undefined;
   const baseline = threshold?.calibration?.baseline ?? null;
   const scoring = { backend: library, collections, profile: config.profile, state, watched, seeds, cut, seedTitle, baseline, rankBar: baseline && threshold ? threshold.abstract : null };
@@ -124,7 +128,7 @@ export async function collectRadar(run) {
     const pool = pickTop(ranked, judgePool(config.size.fresh));
     const seedTitles = [...(config.seeds?.mine ?? []).map((m) => m.title), ...(config.seeds?.papers ?? []).map((k) => seedTitle(`zotero/${k}`))].filter((t) => t && !t.startsWith('zotero/'));
     const rejected = state.examples.negative.slice(-12).map((e) => e.text.split('. ')[0].slice(0, 200));
-    const judged = await run.judge(pool, { topics: config.profile.topics.map((t) => t.text), seeds: seedTitles, rejected });
+    const judged = await run.judge(pool, { topics: config.profile.topics.map((t) => t.text), seeds: seedTitles, rejected, liked: taught.map((t) => t.title) });
     judgeProblem = judged.error;
     // Only what was read is decided: a rejected paper is left out, the rest keep their rank.
     off = pool.filter((it) => judged.off.has(it.id));

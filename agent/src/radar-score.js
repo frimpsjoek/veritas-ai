@@ -31,8 +31,10 @@ export const WEIGHTS = {
 };
 
 /** On a calibrated seed radar the score is the margin past the bar (0.00-0.10 on 2026-11-03), so the bonuses that
- *  were sized for plain similarity would decide the ranking on their own; these are the same bonuses at that scale. */
-export const BAR_WEIGHTS = { followedAuthor: 0.02, watchedJournal: 0.01, topicMatch: 0.01, negativePenalty: 0.1 };
+ *  were sized for plain similarity would decide the ranking on their own; these are the same bonuses at that scale.
+ *  A dismissed paper counts from 0.72: of 54 labelled rows none was as close to one as 0.80 (the most was 0.74, whatever
+ *  the row's label), so Not relevant used to change nothing; at 0.80 it now costs more than most rows are past the bar. */
+export const BAR_WEIGHTS = { followedAuthor: 0.02, watchedJournal: 0.01, topicMatch: 0.01, negativeStart: 0.72, negativePenalty: 0.3 };
 
 const fold = (/** @type {string} */ s) => s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
 /** Words that say nothing about a topic: "AI agents for science" matched any paper with "agents" and "for". */
@@ -131,7 +133,7 @@ export async function score(items, ctx) {
       author: hit.length ? round(W.followedAuthor * Math.max(...hit)) : 0,
       journal: venue != null ? round(W.watchedJournal * venue) : 0,
       topic: round(matched.reduce((sum, t) => sum + W.topicMatch * t.weight, 0)),
-      negative: round(-W.negativePenalty * Math.max(0, s.negative - WEIGHTS.negativeStart) / (1 - WEIGHTS.negativeStart)) || 0,
+      negative: round(-W.negativePenalty * Math.max(0, s.negative - W.negativeStart) / (1 - W.negativeStart)) || 0,
       ...(learnedHit ? { learned: learnedHit.text } : {}),
       ...(String(it.abstract ?? '').trim() ? {} : { titleOnly: -WEIGHTS.titleOnly }),
     };

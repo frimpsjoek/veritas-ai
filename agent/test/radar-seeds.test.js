@@ -329,6 +329,43 @@ test('the lower bar never goes below where unrelated papers end', async () => {
   assert.deepEqual(lib.calls.fulltext.flatMap((q) => q.items.map((i) => i.arxiv)), ['2610.41002'], '0.03 is past 0.06 - the margin, but not past 0.04');
 });
 
+test('what the user liked reaches the server as a seed for both passes, and its label reads as the title; the calibration is left alone', async () => {
+  const items = [{ id: '2610.42001', title: 'Close to a liked paper', summary: 'liked words' }];
+  const lib = seedLibrary({ abstractSim: () => 0.2, wholeSim: () => 0.1 });
+  const asked = [];
+  const score = lib.radarScore;
+  lib.radarScore = async (q) => { asked.push(q); const out = await score(q); return Object.fromEntries(Object.entries(out).map(([id, v]) => [id, { ...v, seed_best: 'liked:An invented liked paper' }])); };
+  lib.radarCalibrate = async () => { throw new Error('a like must not recalibrate'); };
+  const state = emptyState();
+  const text = 'An invented liked paper. Its abstract.';
+  state.examples.positive.push({ id: 'doi:10.1/liked', text, at: NOW }, { id: 'doi:10.1/later', text: 'Read later. Abstract.', at: NOW });
+  state.seen['doi:10.1/liked'] = { at: NOW, verdict: 'liked' };
+  state.seen['doi:10.1/later'] = { at: NOW, verdict: 'later' };
+  state.shown['doi:10.1/liked'] = { keys: ['doi:10.1/liked'], title: 'An invented liked paper', text, authors: [], venue: '', sources: [] };
+  const fetch = routedFetch({ [arxivCategoryFeed('cond-mat.mtrl-sci')]: res(200, arxivFeed(items)) });
+  const threshold = { abstract: 0.1, full: 0.05, calibration: { baseline: { labels: ['zotero/K1'], abstract: [0.5], full: [0.6] }, version: CALIBRATION_VERSION, seedsKey: seedsKey(seeds()) } };
+  const config = validateRadar({ scope: { kind: 'library' }, profile: profile({ topics: [] }), sources: [{ id: 'database:arxiv', on: true, kind: 'database', db: 'arxiv' }], size: { fresh: 5, older: 0, discover: 0 }, seeds: seeds(), threshold });
+  const judged = [];
+  const out = await collectRadar({ config, since: '2026-09-01', now: NOW, fetch, library: lib, state, judge: async (pool, prof) => { judged.push(prof); return { off: new Set(), error: null }; } });
+  const taught = [{ title: 'An invented liked paper', text }];
+  assert.deepEqual(asked.at(-1).seeds.taught, taught);
+  assert.deepEqual(lib.calls.fulltext[0].seeds.taught, taught);
+  assert.equal(out.threshold, null, 'the seeds that were calibrated did not change');
+  assert.deepEqual(judged[0].liked, ['An invented liked paper'], 'and the profile check hears of it');
+});
+
+test('on a seed radar, Not relevant sinks the papers close to it', async () => {
+  const lib = seedLibrary({ abstractSim: () => 0.2, wholeSim: () => null });
+  const closeness = { 'Like the dismissed one': 0.8, 'Ordinary': 0.69 };
+  const score = lib.radarScore;
+  lib.radarScore = async (q) => { const out = await score(q); return Object.fromEntries(Object.entries(out).map(([id, v]) => [id, { ...v, negative: closeness[q.items.find((i) => i.id === id).text.split('. ')[0]] }])); };
+  const out = await wholeRun([{ id: '2610.43001', title: 'Like the dismissed one', summary: 'a' }, { id: '2610.43002', title: 'Ordinary', summary: 'b' }], lib);
+  const by = Object.fromEntries(out.picked.map((r) => [r.title, r]));
+  assert.equal(by.Ordinary.why.negative, 0, 'on the labelled rows the closest to a dismissed paper was 0.74: most of a field costs nothing');
+  assert.ok(by['Like the dismissed one'].why.negative <= -0.08, 'more than most papers are past the bar');
+  assert.deepEqual(out.picked.map((r) => r.title), ['Ordinary', 'Like the dismissed one']);
+});
+
 test('a calibrated run leaves out what one broad seed alone holds up, and keeps what a second seed or a topic agrees with', async () => {
   const items = [{ id: '2610.40001', title: 'Harness for invented agents', summary: 'software' }, { id: '2610.40002', title: 'Two seeds agree here', summary: 'both' }, { id: '2610.40003', title: 'Topic in the text', summary: 'sleep spindle' }];
   const lib = seedLibrary({ abstractSim: () => 0.2, wholeSim: () => 0.1 });

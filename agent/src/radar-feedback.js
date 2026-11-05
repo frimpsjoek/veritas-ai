@@ -27,6 +27,20 @@ const TOPIC_FLOOR = 0.1;
 
 const round = (/** @type {number} */ n) => Math.round(n * 1000) / 1000;
 
+/** Liked or added papers a seed radar compares new ones with, newest kept. */
+export const MAX_TAUGHT = 30;
+
+/**
+ * What Like and Add to Zotero teach a seed radar: each such paper's stored text becomes a seed of lower weight for that
+ * radar's next run (radar_api._with_taught). It is read from the examples and the verdicts, so a cap, a change of mind and
+ * Undo all hold without a list of its own, and the seeds that were calibrated stay as they are.
+ * @param {RadarState} state @returns {{ title: string, text: string }[]}
+ */
+export function taughtSeeds(state) {
+  return state.examples.positive.filter((e) => ['liked', 'added'].includes(state.seen[e.id]?.verdict ?? '')).slice(-MAX_TAUGHT)
+    .map((e) => ({ title: state.shown[e.id]?.title ?? e.text.split('. ')[0].slice(0, 200), text: e.text }));
+}
+
 /** @param {RadarState} state @param {string} key */
 const keysFor = (state, key) => state.shown[key]?.keys ?? [key];
 

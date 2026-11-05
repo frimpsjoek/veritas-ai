@@ -94,7 +94,9 @@ export interface LibraryItem { key: string; doi: string | null; title: string; y
 
 export type ScoreScope = { collections: string[] | null };
 /** What the server needs to know the seeds by (radar_api.seed_matrix). */
-export interface SeedBody { keys: string[]; collections: string[]; texts: { title: string; text: string }[] }
+export interface SeedBody { keys: string[]; collections: string[]; texts: { title: string; text: string }[];
+  /** Papers the user liked or added (radar-feedback.js taughtSeeds), compared at a lower weight; never calibrated. */
+  taught?: { title: string; text: string }[] }
 export interface ScoreRequest { scope: ScoreScope; positives: string[]; negatives: string[]; items: { id: string; text: string }[]; seeds?: SeedBody; baseline?: SeedBaseline | null }
 /** `seed_max`: the margin over the closest seed's baseline (what thresholds compare); `seed_raw`: its plain similarity (what is shown). */
 export interface SeedScore { similarity: number; negative: number; seed_max?: number; seed_best?: string | null; seed_raw?: number; seed_second?: number | null; seed_lonely?: boolean }

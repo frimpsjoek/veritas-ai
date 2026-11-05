@@ -1233,7 +1233,7 @@ export async function createLocalRuntime(deps) {
     let out;
     const noTools = { scope: { kind: /** @type {const} */ ('library') }, web: /** @type {const} */ ('off'), sources: { papers: false, notes: false, scholarly: false, web: false }, audit: `radar-why:${routine.id}`, none: true };
     // The profile check reads the best-ranked candidates and drops those outside the user's field before New is picked.
-    const judge = (/** @type {import("./radar-types").RadarItem[]} */ pool, /** @type {{ topics: string[], seeds: string[], rejected: string[] }} */ profile) =>
+    const judge = (/** @type {import("./radar-types").RadarItem[]} */ pool, /** @type {{ topics: string[], seeds: string[], rejected: string[], liked?: string[] }} */ profile) =>
       judgeFit(pool, { ...profile, turn: (prompt, schema) => runner.structured('writer', prompt, schema, { ...noTools, audit: `radar-judge:${routine.id}` }, signal) });
     try {
       out = await collectRadar({ config, since, now, fetch: net, library: deps.library, hub: deps.gateway.mcpServers, state: await radarState(routine), signal, keyed: Boolean((await settingsStore.get()).openalex.apiKey?.trim()), abstractFetch: abstractNet(net), judge });

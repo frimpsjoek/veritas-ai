@@ -417,3 +417,29 @@ def test_the_least_connected_seeds_are_lonely():
     near = np.array([[1, 0, 0], [0.99, 0.14, 0], [0.98, 0.2, 0], [0.97, 0.24, 0], [0, 0, 1]], dtype=np.float32)
     assert radar_api._lonely(np.array([radar_api._unit(v) for v in near])).tolist() == [False, False, False, False, True]
     assert radar_api._lonely(near[:1]).tolist() == [True]
+
+
+def test_a_liked_paper_is_a_seed_at_a_lower_weight_with_the_baseline_of_its_closest_seed(searcher, tmp_path, monkeypatch):
+    seeds = {"keys": ["AAA", "CCC"]}
+    baseline = {"labels": ["zotero/AAA", "zotero/CCC"], "abstract": [0.1, 0.2], "full": [0.1, 0.2]}
+    liked = {"title": "Liked paper", "text": "graphene moire superlattice flat bands"}
+    far = {"id": "new", "text": "graphene moire superlattice flat bands"}
+    body = {"scope": {"collections": None}, "positives": [], "negatives": [], "items": [far], "baseline": baseline}
+    before = radar_api.score(searcher, {**body, "seeds": seeds}, threading.Lock())["scores"]["new"]
+    after = radar_api.score(searcher, {**body, "seeds": {**seeds, "taught": [liked]}}, threading.Lock())["scores"]["new"]
+    assert before["seed_max"] < 0.1 and after["seed_best"] == "liked:Liked paper"
+    # identical text, similarity 1: its margin is the weight times (1 - the baseline of the seed it sits closest to)
+    assert 0.8 * (1 - 0.2) - 1e-3 < after["seed_max"] < radar_api.TAUGHT_WEIGHT * (1 - 0.1) + 1e-3
+    assert after["seed_max"] < 1 - 0.2, "less than the same text as a seed the user chose"
+    assert after["seed_lonely"] is True, "the two-seed rule does not hold back what the user liked"
+
+
+def test_liked_papers_count_for_whole_papers_and_never_for_the_calibration(searcher, tmp_path, monkeypatch):
+    monkeypatch.setattr(radar_api, "ARXIV_SPACING", 0.0)
+    monkeypatch.setattr(radar_api.media, "pdf_text", lambda path, max_pages=300, ocr=True: "## Page 1\n\n" + "graphene moire superlattice flat bands " * 30)
+    taught = [{"title": "Liked paper", "text": "graphene moire superlattice flat bands"}]
+    seeds = {"keys": ["AAA", "CCC"], "taught": taught}
+    out = radar_api.fulltext(searcher, {"seeds": seeds, "items": [{"id": "p", "arxiv": "2410.01234"}]}, threading.Lock(), cache_path=tmp_path / "ft.sqlite", fetch=lambda a: b"%PDF")["scores"]["p"]
+    assert out["seed_best"] == "liked:Liked paper"
+    matrix, labels, total = radar_api.seed_matrix(searcher, seeds, threading.Lock())
+    assert labels == ["zotero/AAA", "zotero/CCC"] and total == 2, "the seed list itself is what was calibrated"

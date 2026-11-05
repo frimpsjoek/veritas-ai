@@ -131,6 +131,8 @@ PLACEHOLDER = re.compile(
     r"|:\s*$", re.I)  # a title cut at its colon is a heading or a half-read PDF ("The quasi-harmonic approximation:")
 SEED_MIN_WORDS = 3  # in one library, 22% of the items titled in one or two words had a DOI, against 80% of the rest
 LONELY_SHARE = 0.2
+MAX_TAUGHT = 30
+TAUGHT_WEIGHT = 0.8
 SEED_THIN_WORDS = 6  # below this, an item with neither DOI nor abstract is too thin to stand for the user's work
 
 
@@ -188,15 +190,32 @@ def seed_matrix(searcher, seeds: dict, lock, hidden: set[str] = frozenset()) -> 
     return matrix, labels, total
 
 
-def _closest(matrix: np.ndarray, labels: list[str], vector: np.ndarray, base: np.ndarray | None = None) -> tuple[float, str | None, float, float | None]:
+def _with_taught(searcher, seeds: dict, matrix: np.ndarray, labels: list[str], base: np.ndarray | None, lock) -> tuple:
+    """The seeds, and the abstracts of papers the user liked or added (`taught`, radar-feedback.js), as (matrix, labels,
+    base, weight). A liked paper has no calibration of its own: it takes the baseline of the chosen seed it sits closest
+    to, and its margin counts TAUGHT_WEIGHT. On the labelled rows an abstract is no closer to another abstract than to a
+    whole seed (0.69 and 0.70 on average), so the two compare. The thresholds and the calibrated baselines do not change."""
+    taught = [t for t in (seeds.get("taught") or []) if str(t.get("text", "")).strip()][:MAX_TAUGHT]
+    if not len(matrix) or not taught:
+        return matrix, labels, base, None
+    vectors = np.array([_unit(v) for v in _embed(searcher, [str(t["text"])[:TEXT_CHARS] for t in taught], lock)], dtype=np.float32)
+    known = base if base is not None else np.zeros(len(labels), dtype=np.float32)
+    inherited = known[(vectors @ matrix.T - known).argmax(axis=1)]
+    return (np.vstack([matrix, vectors]), labels + [f"liked:{t.get('title', '')}" for t in taught], np.concatenate([known, inherited]),
+            np.concatenate([np.ones(len(labels), dtype=np.float32), np.full(len(taught), TAUGHT_WEIGHT, dtype=np.float32)]))
+
+
+def _closest(matrix: np.ndarray, labels: list[str], vector: np.ndarray, base: np.ndarray | None = None, weight: np.ndarray | None = None) -> tuple[float, str | None, float, float | None]:
     """(margin, label, similarity, next margin) of the closest seed. `base` (one value per seed) is subtracted first: a
     seed that is close to everything in the field (a long methods paper, say) would otherwise be the closest seed of
     almost every paper. The margin is what thresholds compare; the plain similarity is what people read; the next seed's
-    margin says whether more than one seed finds the paper close. None with a single seed."""
+    margin says whether more than one seed finds the paper close. None with a single seed. `weight`: see _with_taught."""
     if not len(matrix):
         return 0.0, None, 0.0, None
     raw = matrix @ vector.astype(np.float32)
     sims = raw - base if base is not None else raw
+    if weight is not None:
+        sims = sims * weight
     best = int(sims.argmax())
     second = float(np.delete(sims, best).max()) if len(sims) > 1 else None
     return float(sims[best]), labels[best], float(raw[best]), second
@@ -247,13 +266,15 @@ def score(searcher, body: dict, lock, hidden: set[str] = frozenset()) -> dict:
         *seeds, total = seed_matrix(searcher, body["seeds"], lock, hidden)
     base = _baseline(body, seeds[1], "abstract") if seeds is not None else None
     lonely = dict(zip(seeds[1], _lonely(seeds[0]).tolist())) if seeds is not None else {}
+    if seeds is not None:
+        seeds[0], seeds[1], base, weight = _with_taught(searcher, body["seeds"], seeds[0], seeds[1], base, lock)
     scores = {}
     for item, vector in zip(batch, vectors):
         similarity = float(vector @ centroid) if centroid is not None else 0.0
         negative = float((negative_vectors @ vector).max()) if negative_vectors is not None else 0.0
         scores[str(item["id"])] = {"similarity": similarity, "negative": negative}
         if seeds is not None:
-            near, label, raw, second = _closest(*seeds, _unit(vector), base)
+            near, label, raw, second = _closest(*seeds, _unit(vector), base, weight)
             scores[str(item["id"])].update(seed_max=near, seed_best=label, seed_raw=raw, seed_second=second, seed_lonely=lonely.get(label, True))
     # How many seeds were compared, of how many the radar names (the rest is over MAX_SEEDS).
     return {"scores": scores, **({"seeds": {"used": len(seeds[1]), "of": total}} if seeds is not None else {})}
@@ -330,6 +351,7 @@ def fulltext(searcher, body: dict, lock, hidden: set[str] = frozenset(), cache_p
     *seeds, _ = seed_matrix(searcher, body.get("seeds") or {}, lock, hidden)
     base = _baseline(body, seeds[1], "full")
     lonely = dict(zip(seeds[1], _lonely(seeds[0]).tolist()))
+    seeds[0], seeds[1], base, weight = _with_taught(searcher, body.get("seeds") or {}, seeds[0], seeds[1], base, lock)
     cache_path = cache_path or kb.data_dir() / "radar-fulltext.sqlite"
     scores = {}
     for item in batch:
@@ -347,7 +369,7 @@ def fulltext(searcher, body: dict, lock, hidden: set[str] = frozenset(), cache_p
         if vector is None:
             scores[key] = {"error": "no text in the PDF"}
             continue
-        near, label, raw, second = _closest(*seeds, vector, base)
+        near, label, raw, second = _closest(*seeds, vector, base, weight)
         scores[key] = {"seed_max": near, "seed_best": label, "seed_raw": raw, "seed_second": second, "seed_lonely": lonely.get(label, True), "chars": len(text)}
     return {"scores": scores}
 

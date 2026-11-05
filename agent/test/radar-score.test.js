@@ -123,8 +123,8 @@ test('a calibrated seed radar sizes the bonuses to the margin past its bar', asy
   const prof = profile({ topics: [{ text: 'sleep spindle', weight: 1, origin: 'user' }], authors: [{ name: 'Jane Doe', openalexId: null, weight: 1, origin: 'user' }], journals: [{ name: 'Journal of Invented Results', openalexId: null, weight: 1, origin: 'user' }] });
   const it = item(1, { authors: ['Jane Doe'], venue: 'Journal of Invented Results', title: 'Sleep spindle dynamics', abstract: 'spindle' });
   const [row] = await score([it], ctx(backend, { profile: prof, seeds: { keys: ['S1'], collections: [], texts: [] }, cut: 0.1, baseline: { labels: ['zotero/S1'], abstract: [0.6], full: [0.6] }, rankBar: 0.1 }));
-  assert.deepEqual([row.why.author, row.why.journal, row.why.topic, row.why.negative], [BAR_WEIGHTS.followedAuthor, BAR_WEIGHTS.watchedJournal, BAR_WEIGHTS.topicMatch, -0.05]);
-  assert.ok(Math.abs(row.score - (0.05 + 0.02 + 0.01 + 0.01 - 0.05)) < 1e-9);
+  assert.deepEqual([row.why.author, row.why.journal, row.why.topic, row.why.negative], [BAR_WEIGHTS.followedAuthor, BAR_WEIGHTS.watchedJournal, BAR_WEIGHTS.topicMatch, -0.193]);
+  assert.ok(Math.abs(row.score - (0.05 + 0.02 + 0.01 + 0.01 - 0.193)) < 1e-9);
 });
 
 test('a paper only one seed likes is a broad seed winning by default, unless a topic says so or that seed stands alone', () => {
