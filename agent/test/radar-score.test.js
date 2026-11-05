@@ -96,3 +96,33 @@ test('a seed radar keeps a title-only paper only when its margin clears the cut 
   assert.deepEqual(out.map((r) => r.doi), ['10.9999/inv.1']);
   assert.equal((await score([item(2, { abstract: '' })], ctx(backend, { seeds, cut: 0.7 })))[0].why.titleOnly, -WEIGHTS.titleOnly);
 });
+
+test('a followed author with a full given name is not any namesake with the same initial; an initial-only side still matches', async () => {
+  const { sameName } = await import('../src/radar-score.js');
+  assert.ok(sameName('Zhen-Fei Liu', 'Z. Liu'));
+  assert.ok(sameName('Liu, Zhen-Fei', 'Zhen-Fei Liu'));
+  assert.ok(!sameName('Zhen-Fei Liu', 'Zhao Liu'));
+  assert.ok(!sameName('Zhen-Fei Liu', 'Zhen Liu'));
+  const lib = radarLibrary({ sim: () => 0.9 });
+  const prof = profile({ topics: [], authors: [{ name: 'Zhen-Fei Liu', openalexId: null, weight: 1, origin: 'user' }] });
+  const by = Object.fromEntries((await score([item(1, { authors: ['Zhao Liu'] }), item(2, { authors: ['Z. Liu'] })], ctx(lib, { profile: prof }))).map((r) => [r.doi, r.why.author]));
+  assert.equal(by['10.9999/inv.1'], 0, 'a namesake with another given name');
+  assert.equal(by['10.9999/inv.2'], WEIGHTS.followedAuthor, 'an initial still matches');
+});
+
+test('a topic matches on its content words, not on "for" or "and"', async () => {
+  const prof = profile({ topics: [{ text: 'AI agents for science', weight: 1, origin: 'user' }] });
+  const by = Object.fromEntries((await score([item(1, { title: 'Agents for software engineering', abstract: 'agents for code' }), item(2, { title: 'AI agents for science labs', abstract: 'agents run science experiments' })], ctx(radarLibrary({ sim: () => 0.9 }), { profile: prof }))).map((r) => [r.doi, r.why.topic]));
+  assert.equal(by['10.9999/inv.1'], 0, '"agents" and "for" alone are not the topic');
+  assert.equal(by['10.9999/inv.2'], WEIGHTS.topicMatch);
+});
+
+test('a calibrated seed radar sizes the bonuses to the margin past its bar', async () => {
+  const { BAR_WEIGHTS } = await import('../src/radar-score.js');
+  const backend = { async radarScore(q) { return Object.fromEntries(q.items.map((i) => [i.id, { similarity: 0, negative: 0.9, seed_max: 0.15, seed_raw: 0.8, seed_best: 'zotero/S1' }])); } };
+  const prof = profile({ topics: [{ text: 'sleep spindle', weight: 1, origin: 'user' }], authors: [{ name: 'Jane Doe', openalexId: null, weight: 1, origin: 'user' }], journals: [{ name: 'Journal of Invented Results', openalexId: null, weight: 1, origin: 'user' }] });
+  const it = item(1, { authors: ['Jane Doe'], venue: 'Journal of Invented Results', title: 'Sleep spindle dynamics', abstract: 'spindle' });
+  const [row] = await score([it], ctx(backend, { profile: prof, seeds: { keys: ['S1'], collections: [], texts: [] }, cut: 0.1, baseline: { labels: ['zotero/S1'], abstract: [0.6], full: [0.6] }, rankBar: 0.1 }));
+  assert.deepEqual([row.why.author, row.why.journal, row.why.topic, row.why.negative], [BAR_WEIGHTS.followedAuthor, BAR_WEIGHTS.watchedJournal, BAR_WEIGHTS.topicMatch, -0.05]);
+  assert.ok(Math.abs(row.score - (0.05 + 0.02 + 0.01 + 0.01 - 0.05)) < 1e-9);
+});

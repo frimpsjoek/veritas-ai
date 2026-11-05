@@ -30,17 +30,38 @@ export const WEIGHTS = {
   exampleCap: 50,
 };
 
+/** On a calibrated seed radar the score is the margin past the bar (0.00-0.10 on 2026-11-03), so the bonuses that
+ *  were sized for plain similarity would decide the ranking on their own; these are the same bonuses at that scale. */
+export const BAR_WEIGHTS = { followedAuthor: 0.02, watchedJournal: 0.01, topicMatch: 0.01, negativePenalty: 0.1 };
+
 const fold = (/** @type {string} */ s) => s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
-const words = (/** @type {string} */ s) => fold(s).replace(/[^\p{L}\p{N}\s-]/gu, ' ').split(/\s+/).filter((w) => w.length > 2);
+/** Words that say nothing about a topic: "AI agents for science" matched any paper with "agents" and "for". */
+const STOP = new Set('the and for with from into of in on to by at an as is be or not via using towards toward their its'.split(' '));
+const words = (/** @type {string} */ s) => fold(s).replace(/[^\p{L}\p{N}\s-]/gu, ' ').split(/\s+/).filter((w) => w.length > 1 && !STOP.has(w));
 
 /** "Jane Q. Smith", "Smith, J." and "J Smith" all become "smith j". @param {string} name */
 export function nameKey(name) {
+  const { last, given } = nameParts(name);
+  return last ? `${last} ${given[0] ?? ''}`.trim() : '';
+}
+
+/** @param {string} name @returns {{ last: string, given: string }} the first given name whole ("zhen-fei"), or its initial */
+function nameParts(name) {
   const clean = fold(name).replace(/[.]/g, ' ').replace(/\s+/g, ' ').trim();
-  if (!clean) return '';
+  if (!clean) return { last: '', given: '' };
   const parts = clean.includes(',') ? clean.split(',').map((p) => p.trim()) : null;
-  const last = parts ? parts[0] : clean.split(' ').at(-1);
-  const given = parts ? parts[1] ?? '' : clean.split(' ').slice(0, -1).join(' ');
-  return `${last} ${given[0] ?? ''}`.trim();
+  const last = parts ? parts[0] : clean.split(' ').at(-1) ?? '';
+  const given = (parts ? parts[1] ?? '' : clean.split(' ').slice(0, -1).join(' ')).split(' ')[0] ?? '';
+  return { last, given };
+}
+
+/** The same person: the last names agree, and so do the given names when both are written out ("Zhen-Fei Liu" is not
+ *  "Zhao Liu"); a side that gives only an initial matches on it. @param {string} a @param {string} b */
+export function sameName(a, b) {
+  const x = nameParts(a), y = nameParts(b);
+  if (!x.last || x.last !== y.last) return false;
+  if (x.given.length <= 1 || y.given.length <= 1) return (x.given[0] ?? '') === (y.given[0] ?? '');
+  return x.given === y.given;
 }
 
 export const venueKey = (/** @type {string} */ v) => fold(v).replace(/[^a-z0-9]+/g, ' ').trim();
@@ -82,21 +103,21 @@ export async function score(items, ctx) {
     Object.assign(scores, part);
   }
 
-  /** @type {Map<string, number>} */
-  const authors = new Map();
+  /** @type {{ name: string, weight: number }[]} */
+  const authors = [];
   /** @type {Map<string, number>} */
   const journals = new Map();
-  for (const a of ctx.profile.authors) authors.set(nameKey(a.name), a.weight);
-  for (const n of ctx.watched?.authors ?? []) if (!authors.has(nameKey(n))) authors.set(nameKey(n), 1);
+  for (const a of ctx.profile.authors) if (nameKey(a.name)) authors.push({ name: a.name, weight: a.weight });
+  for (const n of ctx.watched?.authors ?? []) if (nameKey(n) && !authors.some((a) => sameName(a.name, n))) authors.push({ name: n, weight: 1 });
   for (const j of ctx.profile.journals) journals.set(venueKey(j.name), j.weight);
   for (const n of ctx.watched?.journals ?? []) if (!journals.has(venueKey(n))) journals.set(venueKey(n), 1);
-  authors.delete('');
   journals.delete('');
   const topics = ctx.profile.topics.map((t) => ({ text: t.text, learned: t.origin === 'learned', words: [...new Set(words(t.text))], weight: t.weight })).filter((t) => t.words.length);
+  const W = ctx.rankBar != null ? { ...WEIGHTS, ...BAR_WEIGHTS } : WEIGHTS;
 
   const out = items.map((it) => {
     const s = scores[it.id] ?? { similarity: 0, negative: 0 };
-    const hit = it.authors.map((a) => authors.get(nameKey(a))).filter((w) => w != null);
+    const hit = it.authors.flatMap((a) => authors.filter((f) => sameName(f.name, a)).map((f) => f.weight));
     const venue = journals.get(venueKey(it.venue));
     const bag = new Set(words(`${it.title} ${it.abstract}`));
     const hits = topics.filter((t) => t.words.filter((w) => bag.has(w)).length / t.words.length >= WEIGHTS.topicWords);
@@ -107,10 +128,10 @@ export async function score(items, ctx) {
     const why = {
       similarity: round(ctx.seeds ? s.seed_raw ?? s.seed_max ?? 0 : s.similarity),
       ...(seed ? { seed } : {}),
-      author: hit.length ? round(WEIGHTS.followedAuthor * Math.max(...hit)) : 0,
-      journal: venue != null ? round(WEIGHTS.watchedJournal * venue) : 0,
-      topic: round(matched.reduce((sum, t) => sum + WEIGHTS.topicMatch * t.weight, 0)),
-      negative: round(-WEIGHTS.negativePenalty * Math.max(0, s.negative - WEIGHTS.negativeStart) / (1 - WEIGHTS.negativeStart)) || 0,
+      author: hit.length ? round(W.followedAuthor * Math.max(...hit)) : 0,
+      journal: venue != null ? round(W.watchedJournal * venue) : 0,
+      topic: round(matched.reduce((sum, t) => sum + W.topicMatch * t.weight, 0)),
+      negative: round(-W.negativePenalty * Math.max(0, s.negative - WEIGHTS.negativeStart) / (1 - WEIGHTS.negativeStart)) || 0,
       ...(learnedHit ? { learned: learnedHit.text } : {}),
       ...(String(it.abstract ?? '').trim() ? {} : { titleOnly: -WEIGHTS.titleOnly }),
     };
