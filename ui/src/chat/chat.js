@@ -1093,30 +1093,37 @@ export class ChatView {
     row.dataset.id = conversation.search ? conversation.search.id : conversation.id;
     row.dataset.session = conversation.id;
     if (conversation.search) row.classList.add('is-find');
-    const text = this.el('div', 'sb-ai-conv-text');
-    const titleRow = this.el('div', 'sb-ai-conv-titlerow');
-    titleRow.append(this.el('div', 'sb-ai-conv-title', conversation.title), ...this.newsBadge(conversation));
-    text.append(titleRow, this.el('div', 'sb-ai-conv-date', this.when(conversation.updated)));
-    const remove = this.el('button', 'sb-ai-conv-x', '×');
-    remove.title = conversation.search ? 'Delete this search' : 'Delete this chat';
-    remove.addEventListener('click', (event) => { event.stopPropagation(); this.remove(conversation); });
-    row.append(this.icon(SESSION_KIND_ICON[conversation.search ? 'find' : conversation.kind ?? 'chat'] ?? 'chat'), text);
+    const meta = [this.el('span', 'sb-ai-conv-date', this.when(conversation.updated)), ...this.newsBadge(conversation)];
     if (conversation.routine) {
       const made = this.icon('clock', 'sb-ai-icon sb-ai-conv-routine');
       made.append(Object.assign(this.doc.createElementNS(SVG_NS, 'title'), { textContent: 'Made by a routine' }));
-      row.append(made);
+      meta.push(made);
     }
     if (conversation.artifacts > 0) {
       const count = this.el('span', 'sb-ai-conv-count', String(conversation.artifacts));
       count.title = artifactsWord(conversation.artifacts);
-      row.append(count);
+      meta.push(count);
     }
-    row.append(this.el('span', 'sb-ai-conv-dot'), ...this.moreButton({ kind: 'chat', conversation }, row), remove);
+    row.append(this.rowOpener(SESSION_KIND_ICON[conversation.search ? 'find' : conversation.kind ?? 'chat'] ?? 'chat', conversation.title, meta),
+      this.el('span', 'sb-ai-conv-dot'), ...this.moreButton({ kind: 'chat', conversation }, row));
     row.addEventListener('contextmenu', (event) => { event.preventDefault(); openRowMenu(this, { kind: 'chat', conversation }, row); });
     row.addEventListener('click', () => this.openSession(conversation));
     row.addEventListener('dblclick', () => this.rename(conversation));
     row.title = 'Double-click to rename';
     return row;
+  }
+
+  /** A row's one real control: its icon and text as a button, so Tab and Enter reach it. A click bubbles to the row's
+   *  own listener, which also takes clicks on the row's padding. @param {string} iconName @param {string} title @param {Node[]} meta */
+  rowOpener(iconName, title, meta) {
+    const open = this.el('button', 'sb-ai-conv-open');
+    open.setAttribute('type', 'button');
+    const text = this.el('span', 'sb-ai-conv-text');
+    const line = this.el('span', 'sb-ai-conv-meta');
+    line.append(...meta);
+    text.append(this.el('span', 'sb-ai-conv-title', title), line);
+    open.append(this.icon(iconName), text);
+    return open;
   }
 
   /** The small "N new" badge for a session a routine added papers to since it was last opened ([] when there is none). */
@@ -1166,11 +1173,9 @@ export class ChatView {
   reportRow(progress) {
     const row = this.el('div', `sb-ai-conv is-report is-${progress.status.state}`);
     row.dataset.id = progress.id;
-    const text = this.el('div', 'sb-ai-conv-text');
     const date = progress.started ? ` · ${this.when(progress.started)}` : '';
-    text.append(this.el('div', 'sb-ai-conv-title', progress.question || 'Research report'),
-      this.el('div', 'sb-ai-conv-date', ReportView.statusLine(progress) + date));
-    row.append(this.icon('report'), text, ...this.moreButton({ kind: 'report', progress }, row));
+    row.append(this.rowOpener('report', progress.question || 'Research report', [this.el('span', 'sb-ai-conv-date', ReportView.statusLine(progress) + date)]),
+      ...this.moreButton({ kind: 'report', progress }, row));
     row.addEventListener('contextmenu', (event) => { event.preventDefault(); openRowMenu(this, { kind: 'report', progress }, row); });
     row.addEventListener('click', () => this.openReport(progress.id, progress.question));
     return row;
@@ -1179,29 +1184,33 @@ export class ChatView {
   findRow(search) {
     const row = this.el('div', 'sb-ai-conv is-find');
     row.dataset.id = search.id;
-    const text = this.el('div', 'sb-ai-conv-text');
-    text.append(this.el('div', 'sb-ai-conv-title', search.query), this.el('div', 'sb-ai-conv-date', `${search.count} papers · ${this.when(search.at)}`));
-    const remove = this.el('button', 'sb-ai-conv-x', '×');
-    remove.title = 'Delete this search';
-    remove.addEventListener('click', async (event) => {
-      event.stopPropagation();
-      if (!(await this.host.confirm(`Delete "${search.query}"? This can't be undone.`, { title: 'Delete search' }))) return;
-      try { // its stored result goes with it, or the session would stay behind, unlisted
-        const session = (await FindView.load(this.host, search.id)).session;
-        if (session) await (await this.host.ai()).conversations.remove(session);
-      } catch (error) { this.host.logError(error); }
-      await FindView.remove(this.host, search.id);
-      if (this.findID === search.id) this.setMode('find');
-      ChatView.refreshAll();
-    });
-    row.append(this.icon('find'), text, remove);
+    row.append(this.rowOpener('find', search.query, [this.el('span', 'sb-ai-conv-date', `${search.count} papers · ${this.when(search.at)}`)]),
+      ...this.moreButton({ kind: 'find', search }, row));
+    row.addEventListener('contextmenu', (event) => { event.preventDefault(); openRowMenu(this, { kind: 'find', search }, row); });
     row.addEventListener('click', () => this.openFind(search.id));
     return row;
   }
 
+  /** @param {{ id: string, query: string }} search a saved search with no session in the list */
+  async removeFind(search) {
+    if (!(await this.host.confirm(`Delete "${search.query}"? This can't be undone.`, { title: 'Delete search' }))) return;
+    try { // its stored result goes with it, or the session would stay behind, unlisted
+      const session = (await FindView.load(this.host, search.id)).session;
+      if (session) await (await this.host.ai()).conversations.remove(session);
+    } catch (error) { this.host.logError(error); }
+    await FindView.remove(this.host, search.id);
+    if (this.findID === search.id) this.setMode('find');
+    ChatView.refreshAll();
+  }
+
   markSelected() {
     const open = new Set([this.conversationID, this.reviewID, this.findID, this.sessionID].filter(Boolean));
-    for (const row of this.list?.children ?? []) row.classList.toggle('is-selected', open.has(row.dataset.id) || open.has(row.dataset.session));
+    for (const row of this.list?.children ?? []) {
+      const selected = open.has(row.dataset.id) || open.has(row.dataset.session);
+      row.classList.toggle('is-selected', selected);
+      const opener = row.querySelector(':scope > .sb-ai-conv-open');
+      if (selected) opener?.setAttribute('aria-current', 'true'); else opener?.removeAttribute('aria-current');
+    }
   }
 
   /** The quiet dot on the open session's row while one of its steps runs. */
@@ -1258,7 +1267,8 @@ export class ChatView {
     const more = this.el('button', 'sb-ai-conv-more');
     more.setAttribute('type', 'button');
     more.title = 'More';
-    more.setAttribute('aria-label', 'More');
+    more.setAttribute('aria-label', `More for ${entryTitle(entry)}`);
+    more.setAttribute('aria-haspopup', 'menu');
     more.append(this.icon('more'));
     more.addEventListener('click', (event) => { event.stopPropagation(); openRowMenu(this, entry, more); });
     return [more];
@@ -1300,7 +1310,10 @@ export class ChatView {
 
   renameEntry(entry) { if (entry.kind === 'chat') this.rename(entry.conversation); }
 
-  deleteEntry(entry) { if (entry.kind === 'chat') this.remove(entry.conversation); }
+  deleteEntry(entry) {
+    if (entry.kind === 'chat') this.remove(entry.conversation);
+    else if (entry.kind === 'find') void this.removeFind(entry.search);
+  }
 
   async remove(conversation) {
     if (!(await this.host.confirm(`Delete "${conversation.title}"? This can't be undone.`, { title: conversation.search ? 'Delete search' : 'Delete chat' }))) return;
@@ -2700,21 +2713,27 @@ tab-content:has(> .sb-ai) { display: flex; }
 .sb-ai .sb-ai-list-retry { height: auto; min-height: 0; padding: 3px 10px; border: 1px solid var(--sb-ui-line); border-radius: 999px; background: transparent; box-shadow: none; color: var(--sb-ui-text); font: inherit; font-size: 12px; cursor: pointer; }
 .sb-ai .sb-ai-list-retry:hover { background: var(--sb-ui-hover); }
 .sb-ai-conv { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 6px; }
-.sb-ai-conv > .sb-ai-icon { width: 14px; height: 14px; opacity: .6; }
+.sb-ai-conv { cursor: pointer; }
+/* .sb-ai in front: Obsidian's button rule would otherwise give this a fill, a shadow and a fixed height */
+.sb-ai .sb-ai-conv-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; height: auto; min-height: 0; padding: 0; border: none; border-radius: 4px; background: transparent; box-shadow: none; color: inherit; font: inherit; text-align: start; cursor: pointer; white-space: normal; }
+.sb-ai .sb-ai-conv-open:focus-visible { outline: 2px solid var(--sb-ui-accent); outline-offset: 2px; }
+.sb-ai-conv-open > .sb-ai-icon { width: 14px; height: 14px; opacity: .6; }
 .sb-ai-conv:hover { background: var(--sb-ui-hover); }
-.sb-ai-conv.is-selected { background: var(--sb-ui-accent); color: var(--sb-ui-on-accent); }
-.sb-ai-conv-text { flex: 1; min-width: 0; }
-.sb-ai-conv-titlerow { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.sb-ai-conv-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.sb-ai-conv.is-selected { background: var(--sb-ui-accent-tint); }
+.sb-ai-conv-text { flex: 1; min-width: 0; display: block; }
+.sb-ai-conv-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.sb-ai-conv.is-selected .sb-ai-conv-title { font-weight: 600; }
+.sb-ai-conv-meta { display: flex; align-items: center; gap: 6px; min-width: 0; margin-top: 1px; }
+.sb-ai .sb-ai-conv-meta .sb-ai-conv-count, .sb-ai .sb-ai-conv-meta .sb-ai-conv-routine { margin-inline-start: 0; }
+.sb-ai .sb-ai-conv-meta .sb-ai-icon { width: 12px; height: 12px; }
 .sb-ai .sb-ai-news { flex: none; padding: 0 6px; border-radius: 8px; font-size: 10.5px; line-height: 16px; font-weight: 600; white-space: nowrap; background: var(--sb-ui-accent); color: var(--sb-ui-on-accent); }
-.sb-ai-conv.is-selected .sb-ai-news { background: var(--sb-ui-on-accent); color: var(--sb-ui-accent); }
-.sb-ai-conv-date { font-size: 11.5px; opacity: .7; }
+.sb-ai-conv-date { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; opacity: .7; }
 /* .sb-ai in front: Obsidian's button rule (button:not(.clickable-icon)) would otherwise give these a grey box that is always shown */
-.sb-ai .sb-ai-conv-x, .sb-ai .sb-ai-conv-more, .sb-ai .sb-ai-chip-x { border: none; background: none; box-shadow: none; height: auto; min-height: 0; color: inherit; font: inherit; cursor: pointer; opacity: 0; padding: 0 4px; }
-/* At rest the row actions take no width, so a title gets the whole row; they open on hover or keyboard focus. */
-.sb-ai .sb-ai-conv .sb-ai-conv-x, .sb-ai .sb-ai-conv .sb-ai-conv-more { max-width: 0; padding: 0; overflow: hidden; flex: none; }
-.sb-ai .sb-ai-conv:hover .sb-ai-conv-x, .sb-ai .sb-ai-conv:hover .sb-ai-conv-more,
-.sb-ai .sb-ai-conv:focus-within .sb-ai-conv-x, .sb-ai .sb-ai-conv:focus-within .sb-ai-conv-more { opacity: .7; max-width: 24px; padding: 0 4px; }
+.sb-ai .sb-ai-conv-more, .sb-ai .sb-ai-chip-x { border: none; background: none; box-shadow: none; height: auto; min-height: 0; color: inherit; font: inherit; cursor: pointer; opacity: 0; padding: 0 4px; }
+/* At rest the row's "..." takes no width, so a title gets the whole row; it opens on hover or keyboard focus, and stays on a touch screen. */
+.sb-ai .sb-ai-conv .sb-ai-conv-more { max-width: 0; padding: 0; overflow: hidden; flex: none; }
+.sb-ai .sb-ai-conv:hover .sb-ai-conv-more, .sb-ai .sb-ai-conv:focus-within .sb-ai-conv-more { opacity: .7; max-width: 24px; padding: 0 4px; }
+@media (hover: none) { .sb-ai .sb-ai-conv .sb-ai-conv-more { opacity: .7; max-width: 24px; padding: 0 4px; } }
 .sb-ai-conv-more .sb-ai-icon { width: 14px; height: 14px; }
 .sb-ai-side { position: relative; }
 /* Projects (spec 011 U5): one quiet switcher row; the actions sit behind menus */
