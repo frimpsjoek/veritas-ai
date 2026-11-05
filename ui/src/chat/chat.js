@@ -28,7 +28,8 @@ import { ArtifactCard } from './artifact-card.js';
 import { ArtifactPanel, downloadResult } from './artifact-panel.js';
 import { openPopover, menuItem } from './popover.js';
 import { buildSwitcher, paintSwitcher, openRowMenu } from './projects-menu.js';
-import { filterEntries, emptyLine } from './projects-data.js';
+import { filterEntries, emptyLine, projectOf } from './projects-data.js';
+import { whereLabel } from './history-data.js';
 import { newsLabel, newsTitle } from './routines-data.js';
 import { KIND_NAME, KIND_ICON, hasGaps } from './artifact-data.js';
 import { describeOn, turnsOn } from './papers-chat-data.js';
@@ -201,20 +202,29 @@ export class ChatView {
     this.projectId = this.host.prefs.get('chatProject') || null;
     this.switcher = buildSwitcher(this);
     this.switcher.hidden = true; // shown once the engine says it has projects (an older server has none)
+    this.listEntries = [];
     this.side.append(this.switcher, newChat, this.list);
 
     const main = this.el('div', 'sb-ai-main');
     const head = this.head = this.el('div', 'sb-ai-head');
     this.historyToggle = this.el('button', 'sb-ai-history-toggle');
+    this.historyToggle.setAttribute('type', 'button');
+    this.historyToggle.append(this.icon('panelLeft'));
     this.historyToggle.addEventListener('click', () => this.setHistoryCollapsed(!this.historyCollapsed));
     this.historyNewChat = button(this.doc, 'New chat', () => this.newChat());
     this.historyNewChat.className = 'sb-ai-history-newchat';
+    // the open session's name and, when it is in a project, "in <project>"; always shown, so the thread has a heading
     this.headerTitle = this.el('span', 'sb-ai-head-title');
+    this.headerName = this.el('span', 'sb-ai-head-name');
+    this.headerCrumb = this.el('span', 'sb-ai-head-crumb');
+    this.headerTitle.append(this.headerName, this.headerCrumb);
     this.where = this.el('span', 'sb-ai-where');
+    this.whereText = this.el('span', 'sb-ai-where-label');
+    this.where.append(this.el('span', 'sb-ai-where-dot'), this.whereText);
     this.artifactsButton = this.el('button', 'sb-ai-artifacts-button');
     this.artifactsButton.hidden = true;
     this.artifactsButton.addEventListener('click', (event) => { event.stopPropagation(); this.openArtifactList(); });
-    head.append(this.historyToggle, this.historyNewChat, this.headerTitle, this.where, this.artifactsButton);
+    head.append(this.historyToggle, this.historyNewChat, this.headerTitle, this.artifactsButton);
     if (this.host.openInTab) {
       const openInTab = this.el('button', 'sb-ai-open-tab', '⤢');
       openInTab.title = 'Open this chat in its own tab';
@@ -304,7 +314,8 @@ export class ChatView {
     this.send.addEventListener('click', () => (this.running ? this.stop() : this.submit()));
     this.box = box;
     this.localMenu = new LocalMenu(this);
-    row.append(modeWrap, this.sourceGroup, this.optionsButton, this.localMenu.button, this.el('span', 'sb-ed-spacer'), ...(this.skillsButton ? [this.skillsButton] : []), this.attachButton);
+    // "On this computer" sits here as a small dot and label, out of the header
+    row.append(modeWrap, this.sourceGroup, this.optionsButton, this.localMenu.button, this.el('span', 'sb-ed-spacer'), this.where, ...(this.skillsButton ? [this.skillsButton] : []), this.attachButton);
     // The send button lives beside the message box, never in the controls row: those wrap (a narrow pane, a wide
     // monospace font) and a wrapped send would take a row of its own.
     const inputRow = this.el('div', 'sb-ai-inputrow');
@@ -698,13 +709,10 @@ export class ChatView {
     this.root.classList.toggle('is-history-open', !collapsed);
     this.side.hidden = collapsed;
     this.historyNewChat.hidden = !collapsed;
-    this.headerTitle.hidden = !collapsed;
-    this.headerTitle.textContent = this.currentTitle;
     const label = collapsed ? 'Show chat history' : 'Hide chat history';
     this.historyToggle.title = label;
     this.historyToggle.setAttribute('aria-label', label);
     this.historyToggle.setAttribute('aria-expanded', String(!collapsed));
-    this.historyToggle.textContent = collapsed ? '▶' : '◀';
     this.applyArtifactLayout();
   }
 
@@ -722,7 +730,27 @@ export class ChatView {
 
   setHeaderTitle(title) {
     this.currentTitle = title || 'New chat';
-    if (this.historyCollapsed) this.headerTitle.textContent = this.currentTitle;
+    this.headerName.textContent = this.currentTitle;
+    this.paintHeaderCrumb();
+  }
+
+  /** "in <project>" after the title when the open chat or report belongs to one. */
+  paintHeaderCrumb() {
+    const entry = this.listEntries.find((e) => (e.kind === 'chat' && e.conversation.id === this.sessionID) || (e.kind === 'report' && e.progress.id === this.reviewID));
+    const id = entry ? projectOf(entry.kind === 'chat' ? entry.conversation : entry.progress, this.projects.map((p) => p.id)) : null;
+    const project = this.projects.find((p) => p.id === id);
+    this.headerCrumb.textContent = project ? `in ${project.name}` : '';
+    this.headerCrumb.hidden = !project;
+  }
+
+  /** The dot and label in the composer row. `where` null: no answer from the engine, so the dot says so and the last label stays.
+   *  @param {string | null} where */
+  paintWhere(where) {
+    if (where) this.whereKind = where;
+    const label = this.whereKind ? whereLabel(this.whereKind) : 'Not connected';
+    this.whereText.textContent = label;
+    this.where.classList.toggle('is-off', !where);
+    this.where.title = where ? label : "Can't reach the server";
   }
 
   get modeInfo() {
@@ -964,11 +992,12 @@ export class ChatView {
       ai = await this.host.ai();
     } catch (error) {
       this.host.logError(error);
+      this.paintWhere(null);
       return;
     }
+    this.paintWhere(ai.where);
     this.engineCanFill = Boolean(ai.sessions?.run && ai.sessions?.estimate && ai.sessions?.events);
     this.engineCanReport = Boolean(ai.reviews?.answer); // pipeline 2 (spec 007 E7): clarify cards and reports written from a table
-    this.where.textContent = ai.where === 'server' ? 'Runs on the Veritas server' : 'Runs on this computer';
     this.canProject = Boolean(ai.projects);
     const [conversations, reviews, searches, projects] = await Promise.all([ai.conversations.list().catch(() => []),
       Promise.resolve().then(() => ai.reviews.list()).catch(() => []), FindView.list(this.host).catch(() => []),
@@ -987,6 +1016,8 @@ export class ChatView {
       ...shown.searches.map((search) => ({ kind: 'find', at: search.at, search })),
     ].sort((a, b) => (a.at < b.at ? 1 : -1));
     const known = projects.map((p) => p.id);
+    this.listEntries = all;
+    this.paintHeaderCrumb();
     const entries = filterEntries(all, this.projectId, known);
     this.recent = this.recent.filter((c) => entries.some((e) => e.kind === 'chat' && e.conversation.id === c.id));
     this.list.replaceChildren();
@@ -1583,7 +1614,7 @@ export class ChatView {
       this.renderActivities(turn);
     } else if (event.type === 'notice' && event.kind === 'rate_limit') {
       if (!this.reportOptions.hidden) void this.refreshUsage();
-      if (primary) this.where.textContent = `${this.where.textContent.split(' · ')[0]} · ${event.text}`;
+      if (primary) { this.whereText.textContent = `${this.whereText.textContent.split(' · ')[0]} · ${event.text}`; this.where.title = event.text; }
     } else if (event.type === 'notice') {
       turn.notice.textContent = event.text;
     } else if (event.type === 'result') {
@@ -2649,12 +2680,17 @@ tab-content:has(> .sb-ai) { display: flex; }
 .sb-ai .sb-ai-chip-x, .sb-ai .sb-ai-picker-item, .sb-ai .sb-ai-picker-more { background: transparent; }
 .sb-ai-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .sb-ai-head { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--sb-ui-line); }
-.sb-ai-history-toggle { border: none; background: transparent; color: var(--sb-ui-muted); font: inherit; font-size: 13px;
-	line-height: 1; padding: 4px 6px; border-radius: 5px; cursor: pointer; }
-.sb-ai-history-toggle:hover { background: var(--sb-ui-hover); color: var(--sb-ui-text); }
-.sb-ai-history-newchat[hidden], .sb-ai-head-title[hidden] { display: none; }
-.sb-ai-head-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--sb-ui-muted); font-size: 12px; max-width: 220px; }
-.sb-ai-where { margin-inline-start: auto; font-size: 11px; color: var(--sb-ui-muted); }
+.sb-ai .sb-ai-history-toggle { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; min-height: 0; padding: 0; border: none; border-radius: 6px;
+	background: transparent; box-shadow: none; color: var(--sb-ui-muted); cursor: pointer; }
+.sb-ai .sb-ai-history-toggle:hover { background: var(--sb-ui-hover); color: var(--sb-ui-text); }
+.sb-ai-history-newchat[hidden] { display: none; }
+.sb-ai-head-title { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; white-space: nowrap; }
+.sb-ai-head-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.sb-ai-head-crumb { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; color: var(--sb-ui-muted); font-size: 12px; }
+.sb-ai-where { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 240px; font-size: 11px; color: var(--sb-ui-muted); white-space: nowrap; }
+.sb-ai-where-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sb-ai-where-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--sb-ui-ok); }
+.sb-ai-where.is-off .sb-ai-where-dot { box-sizing: border-box; background: transparent; border: 1.5px solid var(--sb-ui-danger); }
 .sb-ai-scroll { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
 .sb-ai-thread { flex: 1 0 auto; box-sizing: border-box; width: 100%; max-width: 760px; margin: 0 auto; padding: 20px 24px 12px;
 	display: flex; flex-direction: column; gap: 14px; }
@@ -2742,7 +2778,8 @@ tab-content:has(> .sb-ai) { display: flex; }
 .sb-ai-modewrap { position: relative; display: inline-flex; align-items: center; }
 .sb-ai-modeicon { position: absolute; inset-inline-start: 9px; display: flex; pointer-events: none; color: var(--sb-ui-text); }
 .sb-ai-modeicon > .sb-ai-icon { width: 14px; height: 14px; }
-.sb-ai-modepick { appearance: none; font: inherit; font-weight: 600; color: var(--sb-ui-text); cursor: pointer;
+/* as wide as the chosen mode, not the longest one, so the controls stay on one line (a browser without field-sizing keeps the old width) */
+.sb-ai-modepick { appearance: none; field-sizing: content; font: inherit; font-weight: 600; color: var(--sb-ui-text); cursor: pointer;
 	padding: 4px 22px 4px 28px; border-radius: 999px; border: 1px solid var(--sb-ui-line); background-color: var(--sb-ui-line);
 	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%23888'/%3E%3C/svg%3E");
 	background-repeat: no-repeat; background-position: right 8px center; }
@@ -2841,7 +2878,7 @@ tab-content:has(> .sb-ai) { display: flex; }
 .sb-ai.is-narrow .sb-ai-side { position: absolute; inset: 0 auto auto 0; width: min(320px, 85%); max-height: 70%; z-index: 3;
 	box-shadow: var(--sb-ui-shadow); border-inline-end: none; border-bottom: 1px solid var(--sb-ui-line); }
 .sb-ai.is-narrow .sb-ai-head { gap: 4px; padding: 6px 8px; }
-.sb-ai.is-narrow .sb-ai-head-title { flex: 1; min-width: 0; max-width: none; }
+.sb-ai.is-narrow .sb-ai-where-label { display: none; }
 .sb-ai.is-narrow .sb-ai-history-newchat { min-width: 26px; padding: 2px 6px; font-size: 15px; line-height: 1; }
 .sb-ai.is-narrow .sb-ai-open-tab { margin-inline-start: auto; }
 .sb-ai.is-narrow .sb-ai-thread { padding: 12px 12px 8px; gap: 10px; }
