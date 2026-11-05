@@ -488,7 +488,9 @@ class _Reader(html.parser.HTMLParser):
     subtrees and hidden ones, and keeps one copy per <article>/<main> so the main text can be chosen over the whole
     body. A skipped subtree ends at its own closing tag, so unclosed tags inside it (real pages have many) cannot
     swallow the page. Text outside any kept block (a <div> of text) is wrapped in <p>, so every piece of the page is a
-    block the pruning can weigh. A <math> becomes $TeX$ from its alttext (or TeX annotation) for the client to draw."""
+    block the pruning can weigh. A <math> becomes $TeX$ from its alttext (or TeX annotation) for the client to draw, or
+    $$TeX$$ for a display one. LaTeXML lays out a numbered equation as a table: each of its rows becomes one paragraph,
+    "$$TeX$$ (15)", which the client draws as an equation with its number rather than as a table."""
 
     def __init__(self, base: str) -> None:
         super().__init__(convert_charrefs=True)
@@ -504,6 +506,8 @@ class _Reader(html.parser.HTMLParser):
         self.blocks: list[str] = []  # kept block tags open now
         self.loose: list[str] = []  # inline text waiting for its paragraph
         self.math: dict | None = None
+        self.equation: dict | None = None  # the row being read of a LaTeXML equation table
+        self.in_equation = False
         self.has_math = False
 
     def _write(self, text: str) -> None:
@@ -561,7 +565,14 @@ class _Reader(html.parser.HTMLParser):
             self.skip_tag, self.skip_n = tag, 1
             return
         if tag == "math":
-            self.math = {"tex": a.get("alttext", "").strip(), "buf": [], "in_tex": False}
+            self.math = {"tex": a.get("alttext", "").strip(), "buf": [], "in_tex": False, "display": a.get("display") == "block"}
+            return
+        if tag == "table" and "ltx_eqn_table" in a.get("class", "").split():
+            self.in_equation = True
+            return
+        if self.in_equation:
+            if tag == "tr":
+                self.equation = {"tex": [], "number": []}
             return
         if tag in BOUNDARY:
             if not self.blocks:
@@ -588,11 +599,28 @@ class _Reader(html.parser.HTMLParser):
             if tag == "annotation":
                 self.math["in_tex"] = False
             elif tag == "math":
-                tex = self.math["tex"] or "".join(self.math["buf"]).strip()
+                tex = " ".join((self.math["tex"] or "".join(self.math["buf"])).split())  # the client's $ does not cross lines
+                display = self.math["display"]
                 self.math = None
                 if tex:
                     self.has_math = True
-                    self._emit(html.escape(f"${tex}$", quote=False))
+                    if self.equation is not None:
+                        self.equation["tex"].append(tex)
+                    else:
+                        mark = "$$" if display else "$"
+                        self._emit(html.escape(f"{mark}{tex}{mark}", quote=False))
+            return
+        if self.in_equation:
+            if tag == "table":
+                self.in_equation = False
+                self.equation = None
+            elif tag == "tr" and self.equation is not None:
+                row, self.equation = self.equation, None
+                if row["tex"]:
+                    number = " ".join("".join(row["number"]).split())
+                    self._open("p")
+                    self._emit(html.escape(f"$${' '.join(row['tex'])}$$" + (f" {number}" if number else ""), quote=False))
+                    self._close("p")
             return
         if tag in BOUNDARY:
             if not self.blocks:
@@ -614,6 +642,10 @@ class _Reader(html.parser.HTMLParser):
         if self.math is not None:
             if self.math["in_tex"]:
                 self.math["buf"].append(data)
+            return
+        if self.in_equation:
+            if self.equation is not None and not self.skip_n:
+                self.equation["number"].append(data)
             return
         if not self.skip_n:
             self._emit(html.escape(data, quote=False))

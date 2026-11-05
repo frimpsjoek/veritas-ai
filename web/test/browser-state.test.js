@@ -128,6 +128,16 @@ test('TeX in a math answer is found even glued to a word (PtSe$_2$), and money s
   assert.deepEqual(mathParts('the operator \\(\\Delta(\\omega)\\) here'), [{ text: 'the operator ' }, { tex: '\\Delta(\\omega)' }, { text: ' here' }]);
   assert.deepEqual(mathParts('Tickets cost $5 and $10.'), [{ text: 'Tickets cost $5 and $10.' }]);
   assert.deepEqual(mathParts('no math'), [{ text: 'no math' }]);
+  assert.deepEqual(mathParts('$$a=b$$'), [{ tex: 'a=b', display: true }]);
+  assert.deepEqual(mathParts('$a=b$'), [{ tex: 'a=b' }]);
+  const { equationOf, displayTex } = await import('../src/browser-state.js');
+  assert.deepEqual(equationOf('$$a=b$$ (15)'), { tex: 'a=b', number: '(15)' });
+  assert.deepEqual(equationOf('$$a=b$$'), { tex: 'a=b', number: '' });
+  assert.equal(equationOf('$a=b$ (15)'), null, 'inline math in a sentence is not an equation');
+  assert.equal(equationOf('$$a=b$$ and then a sentence goes on from here'), null);
+  assert.equal(displayTex('a=b'), 'a=b');
+  assert.equal(displayTex('a\\\\b'), '\\begin{gathered}a\\\\b\\end{gathered}');
+  assert.equal(displayTex('\\begin{bmatrix}a\\\\b\\end{bmatrix}'), '\\begin{bmatrix}a\\\\b\\end{bmatrix}', 'an environment already breaks its own lines');
 });
 
 test('← shows the page before, and on the first page closes the panel (back to where the link was clicked)', async () => {

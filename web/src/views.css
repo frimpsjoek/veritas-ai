@@ -276,6 +276,13 @@ p.sbw-prose { margin: 0 0 var(--sbw-s3); max-width: var(--measure); }
 .sbw-browser-article.is-wide .sbw-reader-figure { float: right; width: 46%; max-width: 520px; margin: 0 0 var(--sbw-s3) var(--sbw-s4); }
 .sbw-browser-article.is-wide .sbw-reader-figure img { max-height: none; width: 100%; }
 @media (max-width: 760px) { .sbw-browser-article.is-wide .sbw-reader-figure { float: none; width: auto; max-width: 100%; margin: 0 0 var(--sbw-s4); } }
+/* A paper with equations needs a wider column than prose does; a long equation scrolls on its own, the page never does */
+.sbw-browser-article.is-math { --measure: 720px; max-width: 900px; }
+.sbw-browser-article.is-math :is(.sbw-reader-head, .sbw-note-body) { max-width: none; }
+.sbw-browser-article.is-math .sbw-note-body { font-size: 17px; }
+.sbw-note-body > p.sbw-eq { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--sbw-s3); max-width: none; margin: var(--sbw-s3) 0; }
+.sbw-eq .sb-math-block { min-width: 0; overflow-x: auto; text-align: center; font-size: 1.08em; padding-block: 2px; }
+.sbw-eq-number { color: var(--sb-ui-muted); font-size: 0.9em; white-space: nowrap; }
 .sbw-browser-article img { max-width: 100%; height: auto; }
 .sbw-browser-article .sbw-note-body a { overflow-wrap: anywhere; }
 /* One family for the whole reader (2026-10-29): the title and byline in the note's prose font, the title larger; the

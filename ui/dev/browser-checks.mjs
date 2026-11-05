@@ -156,6 +156,17 @@ export async function runBrowserChecks(browser, port, outDir) {
     await page.screenshot({ path: join(outDir, `browser-arxiv-${width}.png`) });
     await page.click('.sbw-reader-links button:last-child');
     await page.waitForFunction(() => document.querySelector('.sbw-browser-title')?.textContent === 'The other article');
+    await open('https://reader.example/equations');
+    await page.waitForSelector('.sbw-eq');
+    const maths = await page.evaluate(() => {
+      const eqs = [...document.querySelectorAll('.sbw-eq')];
+      const article = document.querySelector('.sbw-browser-article');
+      return { count: eqs.length, numbers: eqs.map((e) => e.querySelector('.sbw-eq-number')?.textContent).join(), drawn: eqs.every((e) => e.querySelector('math[display="block"]')), raw: article.textContent.includes('\\begin') || article.textContent.includes('$'), rawBox: document.querySelectorAll('.sb-math.is-raw').length, tables: article.querySelectorAll('table').length, inline: article.querySelectorAll('p:not(.sbw-eq) math').length, sideways: document.scrollingElement.scrollWidth > innerWidth };
+    });
+    check(`${tag} equations are display math with their numbers, no raw TeX and no boxes`, maths.count === 5 && maths.numbers === '(13),(14),(15),(16),(17)' && maths.drawn && !maths.raw && !maths.rawBox && !maths.tables && maths.inline === 5 && !maths.sideways, maths);
+    await page.screenshot({ path: join(outDir, `browser-math-${width}.png`) });
+    await open('https://reader.example/other');
+    await page.waitForFunction(() => document.querySelector('.sbw-browser-title')?.textContent === 'The other article');
     check(`${tag} "Full text" opens in the panel`, (await panel()).open);
     await open('https://shop.example/tickets');
     await page.waitForFunction(() => document.querySelector('.sbw-browser-title')?.textContent === 'Tickets');

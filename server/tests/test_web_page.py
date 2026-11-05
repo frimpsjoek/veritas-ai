@@ -489,3 +489,18 @@ def test_at_most_three_listed_copies_are_tried(web):
     answer = web_page.page(f"https://doi.org/{DOI}", get=get)
     assert answer["mode"] == "reader"
     assert [u for u in calls if u in urls] == urls[:3]
+
+
+def test_an_equation_table_becomes_display_math_with_its_number():
+    words = "Words about the method go here, enough to keep as text. " * 8
+    page = (f"<article><p>{words}</p>"
+            '<table class="ltx_equation ltx_eqn_table"><tbody><tr class="ltx_equation ltx_eqn_row"><td class="ltx_eqn_cell"></td>'
+            '<td class="ltx_eqn_cell"><math alttext="a=b\\\\\n=c" display="block"><mi>a</mi></math></td>'
+            '<td class="ltx_eqn_cell ltx_eqn_eqno"><span class="ltx_tag">(15)</span></td></tr></tbody></table>'
+            '<p>And <math alttext="x" display="inline"><mi>x</mi></math> follows.</p>'
+            '<table><tr><td>Plain</td><td>table</td></tr></table></article>')
+    read = web_page.reader("https://arxiv.org/html/1", f"<html><body>{page}</body></html>".encode())
+    assert "<p>$$a=b\\\\ =c$$ (15)</p>" in read["html"], "one line, display, with its number"
+    assert "$x$ follows" in read["html"]
+    assert read["html"].count("<table>") == 1, "an ordinary table stays a table"
+    assert read["math"] is True

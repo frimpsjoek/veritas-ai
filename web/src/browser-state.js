@@ -153,15 +153,37 @@ export function paperToAdd(answer) {
 // after the closing one), so "$5 and $10" is still text.
 const TEX = /\\\((.+?)\\\)|\\\[(.+?)\\\]|\$\$(.+?)\$\$|(?<![\\$])\$(?=[^\s$])((?:[^$\n]|\\\$)*?[^\s$\\])\$(?![\d$])/g;
 
-/** A text split into plain runs and TeX. @param {string} text @returns {({ text: string } | { tex: string })[]} */
+/** A text split into plain runs and TeX. @param {string} text @returns {({ text: string } | { tex: string, display?: boolean })[]} */
 export function mathParts(text) {
-  /** @type {({ text: string } | { tex: string })[]} */ const out = [];
+  /** @type {({ text: string } | { tex: string, display?: boolean })[]} */ const out = [];
   let at = 0;
   for (const m of String(text).matchAll(TEX)) {
     if ((m.index ?? 0) > at) out.push({ text: text.slice(at, m.index) });
-    out.push({ tex: (m[1] ?? m[2] ?? m[3] ?? m[4]).trim() });
+    out.push({ tex: (m[1] ?? m[2] ?? m[3] ?? m[4]).trim(), ...(m[2] != null || m[3] != null ? { display: true } : {}) });
     at = (m.index ?? 0) + m[0].length;
   }
   if (at < text.length || !out.length) out.push({ text: text.slice(at) });
   return out;
+}
+
+/**
+ * A paragraph that is one display equation and at most its number: "$$a=b$$ (15)". Null for anything else.
+ * @param {string} text @returns {{ tex: string, number: string } | null}
+ */
+export function equationOf(text) {
+  const parts = mathParts(text.trim());
+  const [first, rest] = parts;
+  if (!first || !('tex' in first) || !first.display || parts.length > 2) return null;
+  const number = rest && 'text' in rest ? rest.text.trim() : '';
+  if (rest && !/^\(?[\w.\-–]{1,12}\)?$/.test(number)) return null;
+  return { tex: first.tex, number };
+}
+
+/**
+ * TeX for a display equation: lines broken with \\ outside any environment get one, as KaTeX draws them only inside one.
+ * @param {string} tex
+ */
+export function displayTex(tex) {
+  const outside = tex.replace(/\\begin\{([a-z*]+)\}[\s\S]*?\\end\{\1\}/g, '');
+  return outside.includes('\\\\') ? `\\begin{gathered}${tex}\\end{gathered}` : tex;
 }

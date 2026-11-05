@@ -12,7 +12,7 @@ import { lucide } from '../../ui/src/icons.js';
 import { actionList, settledLabel } from '../../ui/src/chat/radar-digest-data.js';
 import { PdfViewer } from './pdf-viewer.js';
 import { mathNode } from '../../ui/src/chat/markdown.js';
-import { addressOf, blockedReason, createHistory, fileNameOf, firstPrefer, mathParts, pageQuery, paperToAdd, readerPlan, sourceOf, stepBack } from './browser-state.js';
+import { addressOf, blockedReason, createHistory, fileNameOf, displayTex, equationOf, firstPrefer, mathParts, pageQuery, paperToAdd, readerPlan, sourceOf, stepBack } from './browser-state.js';
 
 const FRAME_SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox';
 
@@ -140,7 +140,7 @@ export function createBrowserPanel({ host, doc, win, into }) {
     // inline TeX ($…$, \(…\)) drawn as MathML, only for answers the server marked as having math
     const words = (/** @type {string} */ value) => plan.math ? withMath(value) : doc.createTextNode(value);
     // A paper's page has no long text to keep narrow: it takes the width, with the figure beside the abstract.
-    const article = h(doc, 'article', `${plan.articleClass}${plan.html ? '' : ' is-wide'}`);
+    const article = h(doc, 'article', `${plan.articleClass}${plan.html ? (plan.math ? ' is-math' : '') : ' is-wide'}`);
     const top = h(doc, 'header', 'sbw-reader-head');
     const heading = h(doc, 'h1', 'sbw-reader-title');
     heading.append(words(plan.title));
@@ -360,13 +360,19 @@ export function createBrowserPanel({ host, doc, win, into }) {
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       if (/[$\\]/.test(node.nodeValue ?? '') && !node.parentElement?.closest('code, pre')) found.push(/** @type {Text} */ (node));
     }
-    for (const node of found) node.replaceWith(withMath(node.nodeValue ?? ''));
+    for (const node of found) {
+      const paragraph = node.parentElement;
+      const equation = paragraph?.tagName === 'P' && paragraph.childNodes.length === 1 ? equationOf(node.nodeValue ?? '') : null;
+      if (!equation) { node.replaceWith(withMath(node.nodeValue ?? '')); continue; }
+      paragraph?.classList.add('sbw-eq');
+      paragraph?.replaceChildren(mathNode(doc, displayTex(equation.tex), true), ...(equation.number ? [h(doc, 'span', 'sbw-eq-number', equation.number)] : []));
+    }
   }
 
   /** A text with its TeX drawn as MathML (KaTeX, as in chat). @param {string} text */
   function withMath(text) {
     const out = doc.createDocumentFragment();
-    for (const part of mathParts(text)) out.append('tex' in part ? mathNode(doc, part.tex, false) : part.text);
+    for (const part of mathParts(text)) out.append('tex' in part ? mathNode(doc, part.display ? displayTex(part.tex) : part.tex, Boolean(part.display)) : part.text);
     return out;
   }
 
