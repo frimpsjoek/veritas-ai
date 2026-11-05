@@ -89,6 +89,32 @@ export function ancestorsOf(nodes, key) {
   return out;
 }
 
+/** The crumb's path: the root first, the chosen collection last. A key the tree does not know is shown as itself.
+ *  @param {CollectionNode[]} nodes @param {string | null} key @returns {{ key: string, name: string }[]} */
+export function crumbPath(nodes, key) {
+  if (!key) return [];
+  const byKey = new Map(nodes.map((n) => [n.key, n]));
+  const self = byKey.get(key);
+  if (!self) return [{ key, name: key }];
+  return [...ancestorsOf(nodes, key).reverse(), key].map((k) => ({ key: k, name: byKey.get(k)?.name ?? k }));
+}
+
+/** The status line of a finished search. @param {{ query: string, count: number, limit: number, collectionName?: string }} o */
+export function searchLine({ query, count, limit, collectionName }) {
+  const where = collectionName ? ` in ${collectionName}` : '';
+  if (!count) return `No papers match “${query}”${where}.`;
+  return `${count}${count >= limit ? '+' : ''} ${count === 1 ? 'paper' : 'papers'} for “${query}”${where}`;
+}
+
+/** The banner over rows kept in this browser while the server does not answer. @param {string | null} at when they were stored @param {Date} [now] */
+export function staleLine(at, now = new Date()) {
+  const date = at ? new Date(at) : null;
+  if (!date || Number.isNaN(date.getTime())) return "Showing a saved copy; the server isn't answering.";
+  const sameDay = date.toDateString() === now.toDateString();
+  const when = sameDay ? `at ${date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : `on ${date.toLocaleDateString([], { month: 'short', day: 'numeric' })}`;
+  return `Showing the copy saved ${when}; the server isn't answering.`;
+}
+
 /** A short label for a chat chip: "Chen 2022". @param {LibRow} row */
 export function chipLabel(row) {
   const first = row.authors[0]?.split(' ').pop() ?? '';
