@@ -88,6 +88,8 @@ export interface RadarItem {
   score?: number; why?: RadarWhy;
   /** Worth reading rows: OpenAlex citation count and the plain-language reason shown on the row. */
   cites?: number; reason?: string;
+  /** Under the bar, shown to fill a short day (radar-run.js FILL_TO); read by the profile check, not a hub or judge reject. */
+  nearBar?: boolean;
 }
 
 export interface LibraryItem { key: string; doi: string | null; title: string; year: number | null; citekey: string | null; authors?: string[]; venue?: string; abstract?: string }
@@ -141,6 +143,8 @@ export interface UndoRecord {
   /** Spec 017: what the click taught or took back (absent on records made before it). */
   phrases?: PhraseDelta[];
 }
+/** What a run cut near the bar, and at which stage: under the `bar`, the `judge` (profile check) or the `hub gap` (hubOnly). */
+export interface NearBarLedger { at: string; rows: { title: string; seed: string; margin: number; stage: "bar" | "judge" | "hub gap" }[] }
 export type FeedbackVerdict = "added" | "later" | "liked" | "dismissed" | "undo";
 export interface RadarState {
   seen: Record<PaperId, { at: string; verdict: Verdict }>;
@@ -160,6 +164,8 @@ export interface RadarState {
   abstracts?: Record<string, { text: string; at: number }>;
   /** When a run last tried to calibrate a seed radar that had no calibration (ISO); a failed try waits a day. */
   calibrateTried?: string;
+  /** The last run's near-bar ledger; absent until a calibrated seed radar cut something near it. */
+  nearBar?: NearBarLedger;
 }
 
 /** A journal OpenAlex knows, as the setup sheet offers it. */

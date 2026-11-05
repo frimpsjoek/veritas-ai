@@ -1272,7 +1272,9 @@ export async function createLocalRuntime(deps) {
     const earlier = new Map();
     for (const [title, r] of before) earlier.set(title, /** @type {any} */ (await store.readResult(sessionId, r.ref.id, r.ref.version))?.rows ?? []);
     const screened = out.offProfile ? `; ${out.offProfile} outside your field left out` : out.judgeProblem ? `; profile check skipped (${out.judgeProblem})` : '';
-    const change = `Radar: ${out.picked.length} new ${out.picked.length === 1 ? 'paper' : 'papers'} from ${out.sourcesAnswered} ${out.sourcesAnswered === 1 ? 'source' : 'sources'}${screened}${failures}`;
+    const under = out.picked.filter((it) => it.nearBar).length;
+    const filled = under ? `; ${under} just under the bar` : '';
+    const change = `Radar: ${out.picked.length} new ${out.picked.length === 1 ? 'paper' : 'papers'} from ${out.sourcesAnswered} ${out.sourcesAnswered === 1 ? 'source' : 'sources'}${filled}${screened}${failures}`;
     const taken = new Set([...earlier.values()].flat().map((r) => r.id));
     const rowsOf = (/** @type {import("./radar-types").RadarItem[]} */ items) => items.map((it, i) => {
       let id = rowIdFor(it, i);
@@ -1282,7 +1284,7 @@ export async function createLocalRuntime(deps) {
         id, ref: { kind: 'web', url: it.url }, inLibrary: false, title: it.title, authors: it.authors, year: it.year, venue: it.venue,
         doi: it.doi, url: it.url, abstract: it.abstract, abstractStatus: it.abstract ? 'source' : 'none', citations: it.cites ?? null, fullText: false,
         pdfUrl: it.arxiv ? `https://arxiv.org/pdf/${it.arxiv}` : null, studyType: null, foundBy: it.sources.map((id) => sourceLabel(id, config)),
-        radar: { key: it.id, score: it.score ?? 0, why: /** @type {any} */ (it.why), links: it.links, sources: it.sources, date: it.date, ...(it.reason ? { reason: it.reason } : {}), ...(why.lines.get(it.id) ? { why_line: why.lines.get(it.id) } : {}) },
+        radar: { key: it.id, score: it.score ?? 0, why: /** @type {any} */ (it.why), links: it.links, sources: it.sources, date: it.date, ...(it.reason ? { reason: it.reason } : {}), ...(it.nearBar ? { nearBar: true } : {}), ...(why.lines.get(it.id) ? { why_line: why.lines.get(it.id) } : {}) },
       });
     });
     /** @type {import("./domain").ResultRef[]} */

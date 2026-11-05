@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { validateRadar, seedBody, seedsKey, MIN_SEEDS } from '../src/radar.js';
-import { collectRadar, SEED_WINDOW_DAYS, WHOLE_PAPERS, WHOLE_SEED_SHARE } from '../src/radar-run.js';
+import { collectRadar, SEED_WINDOW_DAYS, WHOLE_PAPERS, WHOLE_SEED_SHARE, FILL_TO, NEAR_BAR_STAGE } from '../src/radar-run.js';
 import { politeFetch } from '../src/radar-sources.js';
 import { arxivQuery, arxivCategoryFeed } from '../src/scholarly.js';
 import { myPapers, calibrateRadar, CALIBRATION_VERSION } from '../src/radar-seeds.js';
@@ -364,6 +364,71 @@ test('on a seed radar, Not relevant sinks the papers close to it', async () => {
   assert.equal(by.Ordinary.why.negative, 0, 'on the labelled rows the closest to a dismissed paper was 0.74: most of a field costs nothing');
   assert.ok(by['Like the dismissed one'].why.negative <= -0.08, 'more than most papers are past the bar');
   assert.deepEqual(out.picked.map((r) => r.title), ['Ordinary', 'Like the dismissed one']);
+});
+
+/** Whole-paper margins by title; every paper is past the lower bar on its abstract. `second` defaults to close behind. */
+const nearRun = async (papers, judge, over = {}) => {
+  const items = papers.map((p, i) => ({ id: `2610.${50000 + i}`, title: p.title, summary: 'invented' }));
+  const byId = Object.fromEntries(items.map((it, i) => [it.id, papers[i]]));
+  const lib = seedLibrary({ abstractSim: () => 0.08, wholeSim: () => 0 });
+  // closest to different seeds on the abstract, so all of them are read whole
+  lib.radarScore = async (q) => Object.fromEntries(q.items.map((it, i) => [it.id, { similarity: 0.5, negative: 0, seed_max: 0.08, seed_best: `zotero/K${i % 5}`, seed_raw: 0.6 }]));
+  lib.radarFulltext = async (q) => Object.fromEntries(q.items.map((i) => { const p = byId[i.arxiv]; return [i.id, { seed_max: p.margin, seed_best: 'zotero/K1', seed_raw: 0.7, seed_second: p.second ?? p.margin - 0.01 }]; }));
+  const fetch = routedFetch({ [arxivCategoryFeed('cond-mat.mtrl-sci')]: res(200, arxivFeed(items)) });
+  const threshold = { abstract: 0.1, full: 0.05, calibration: { abstract: { unrelated: { p95: 0.0 } }, full: { unrelated: { p95: 0.01 } }, baseline: { labels: ['zotero/K1'], abstract: [0.5], full: [0.6] }, version: CALIBRATION_VERSION, seedsKey: seedsKey(seeds()) } };
+  const config = validateRadar({ scope: { kind: 'library' }, profile: profile({ topics: [] }), sources: [{ id: 'database:arxiv', on: true, kind: 'database', db: 'arxiv' }], size: { fresh: 30, older: 0, discover: 0 }, seeds: seeds(), threshold, ...over });
+  return collectRadar({ config, since: '2026-09-01', now: NOW, fetch, library: lib, state: emptyState(), judge });
+};
+const passAll = async () => ({ off: new Set(), error: null });
+
+test('fewer than 25 hits: the closest under the bar fill them, marked, never a hub or judge reject, and the ledger says what was cut where', async () => {
+  const above = Array.from({ length: 10 }, (_, i) => ({ title: `Invented paper above ${i}`, margin: 0.06 + i / 1000 }));
+  const under = Array.from({ length: 22 }, (_, i) => ({ title: `Invented paper under ${i}`, margin: 0.049 - i / 1000 }));
+  const hub = { title: 'Invented hub paper', margin: 0.2, second: 0.02 };
+  const nearHub = { title: 'Invented hub paper under the bar', margin: 0.048, second: 0.0 };
+  const reject = { title: 'Invented rejected paper', margin: 0.0495 };
+  const tooFar = { title: 'Invented paper far under', margin: 0.005 };
+  const judge = async (pool) => ({ off: new Set(pool.filter((p) => p.title === reject.title).map((p) => p.id)), error: null });
+  const out = await nearRun([...above, ...under, hub, nearHub, reject, tooFar], judge);
+  assert.equal(out.picked.length, FILL_TO);
+  const filled = out.picked.filter((r) => r.nearBar);
+  assert.equal(filled.length, FILL_TO - 10);
+  assert.ok(out.picked.slice(0, 10).every((r) => !r.nearBar), 'what passed comes first, unmarked');
+  assert.deepEqual(filled.map((r) => r.title), under.slice(0, FILL_TO - 10).map((p) => p.title), 'closest to the bar first');
+  const stage = Object.fromEntries(out.state.nearBar.rows.map((r) => [r.title, r]));
+  assert.equal(stage[hub.title].stage, 'hub gap');
+  assert.equal(stage[nearHub.title].stage, 'hub gap');
+  assert.equal(stage[reject.title].stage, 'judge');
+  assert.equal(stage['Invented paper under 20'].stage, 'bar');
+  assert.equal(stage[tooFar.title], undefined, 'not near the bar');
+  assert.equal(stage[hub.title].seed, 'Band gaps of frameworks');
+  assert.equal(stage[hub.title].margin, 0.2);
+  assert.equal(out.state.nearBar.at, NOW);
+  assert.ok(!out.picked.some((r) => [hub.title, nearHub.title, reject.title, tooFar.title].includes(r.title)));
+});
+
+test('the near-bar ledger is bounded by stage', async () => {
+  const hubs = Array.from({ length: NEAR_BAR_STAGE + 7 }, (_, i) => ({ title: `Invented hub ${i}`, margin: 0.2, second: 0.01 }));
+  const out = await nearRun(hubs, passAll);
+  assert.equal(out.state.nearBar.rows.length, NEAR_BAR_STAGE);
+});
+
+test('25 hits past the bar need no fill; a failed profile check fills with nothing it could not vet', async () => {
+  const above = Array.from({ length: FILL_TO }, (_, i) => ({ title: `Invented paper above ${i}`, margin: 0.06 + i / 1000 }));
+  const under = [{ title: 'Invented paper under', margin: 0.049 }];
+  const full = await nearRun([...above, ...under], passAll);
+  assert.equal(full.picked.length, FILL_TO);
+  assert.ok(!full.picked.some((r) => r.nearBar));
+  const failed = await nearRun([...above.slice(0, 3), ...under], async () => ({ off: new Set(), error: 'rate limited' }));
+  assert.equal(failed.picked.length, 3);
+  assert.equal(failed.judgeProblem, 'rate limited');
+  const smaller = await nearRun([...above.slice(0, 3), ...under], passAll, { size: { fresh: 3, older: 0, discover: 0 } });
+  assert.equal(smaller.picked.length, 3, 'never past the size the radar asks for');
+});
+
+test('a day with nothing past the bar can still fill from just under it', async () => {
+  const out = await nearRun([{ title: 'Invented paper just under', margin: 0.049 }], passAll);
+  assert.deepEqual(out.picked.map((r) => [r.title, r.nearBar]), [['Invented paper just under', true]]);
 });
 
 test('a calibrated run leaves out what one broad seed alone holds up, and keeps what a second seed or a topic agrees with', async () => {

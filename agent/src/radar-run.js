@@ -32,6 +32,13 @@ export const ABSTRACT_MARGIN = 0.03;
 const lowerBar = (threshold) => Math.max(threshold.abstract - ABSTRACT_MARGIN, threshold.calibration?.abstract?.unrelated?.p95 ?? -Infinity);
 /** Until a radar is calibrated, the 2026-10-11 floor stands in. */
 const DEFAULT_CUT = 0.7;
+/** A day with fewer New rows than this fills them from just under the bar, so there are enough to rate and teach it. */
+export const FILL_TO = 25;
+/** How far under its bar a paper still counts as near it, and how many are kept per stage in the radar's near-bar ledger. */
+const NEAR_WINDOW = 0.03;
+export const NEAR_BAR_STAGE = 20;
+/** Candidates from under the bar the profile check reads beside the rest, more when the rest are few. */
+const NEAR_JUDGED = 10;
 const HISTORY_DAYS = 7;
 /** A run that tried to calibrate and failed tries again after this long. */
 const CALIBRATE_RETRY_MS = 86_400_000;
@@ -116,24 +123,45 @@ export async function collectRadar(run) {
     for (const it of fresh) it.abstract = found.get(it.id) ?? it.abstract;
   }
   const readable = readableItems(fresh, active, Boolean(run.abstractFetch));
-  let ranked = await score(readable, scoring);
-  if (seeds) ranked = await decideWhole(ranked, { library, seeds, threshold, seedTitle, baseline });
-  // The gap means something only between margins over calibrated baselines.
-  if (baseline) ranked = ranked.filter((it) => !hubOnly(it, config.profile.topics));
+  let ranked = /** @type {RadarItem[]} */ ([]);
+  /** @type {{ it: RadarItem, stage: 'bar' | 'judge' | 'hub gap' }[]} */
+  let cuts = [];
+  /** Under the bar, closest first; papers read whole and not, each against its own bar. @type {RadarItem[]} */
+  let under = [];
+  if (seeds && baseline && threshold) {
+    const all = await score(readable, { ...scoring, cut: -Infinity });
+    const decided = await decideWhole(all.filter((it) => seedBar(it) >= /** @type {number} */ (cut)), { library, seeds, threshold, seedTitle, baseline });
+    const unread = all.filter((it) => seedBar(it) < /** @type {number} */ (cut)).map((it) => ({ it, gap: seedBar(it) - threshold.abstract }));
+    const near = [...decided.under, ...unread].filter((u) => u.gap >= -NEAR_WINDOW && seedBar(u.it) >= unrelatedEnd(threshold, u.it));
+    const hubs = (/** @type {RadarItem} */ it) => hubOnly(it, config.profile.topics);
+    ranked = decided.kept.filter((it) => !hubs(it));
+    under = near.sort((a, b) => b.gap - a.gap).map((u) => u.it).filter((it) => !hubs(it));
+    cuts = [...decided.kept.filter(hubs), ...near.map((u) => u.it).filter(hubs)].map((it) => ({ it, stage: /** @type {const} */ ('hub gap') }));
+  } else {
+    ranked = await score(readable, scoring);
+    if (seeds) ranked = (await decideWhole(ranked, { library, seeds, threshold, seedTitle, baseline })).kept;
+  }
   let top = pickTop(ranked, config.size.fresh);
   /** @type {RadarItem[]} */
   let off = [];
   let judgeProblem = /** @type {string | null} */ (null);
-  if (run.judge && top.length) {
-    const pool = pickTop(ranked, judgePool(config.size.fresh));
+  if (run.judge && (top.length || under.length)) {
+    const best = pickTop(ranked, judgePool(config.size.fresh));
+    const pool = [...best, ...under.slice(0, Math.max(NEAR_JUDGED, judgePool(config.size.fresh) - best.length))];
     const seedTitles = [...(config.seeds?.mine ?? []).map((m) => m.title), ...(config.seeds?.papers ?? []).map((k) => seedTitle(`zotero/${k}`))].filter((t) => t && !t.startsWith('zotero/'));
     const rejected = state.examples.negative.slice(-12).map((e) => e.text.split('. ')[0].slice(0, 200));
     const judged = await run.judge(pool, { topics: config.profile.topics.map((t) => t.text), seeds: seedTitles, rejected, liked: taught.map((t) => t.title) });
     judgeProblem = judged.error;
     // Only what was read is decided: a rejected paper is left out, the rest keep their rank.
     off = pool.filter((it) => judged.off.has(it.id));
-    top = pool.filter((it) => !judged.off.has(it.id)).slice(0, config.size.fresh);
+    top = best.filter((it) => !judged.off.has(it.id)).slice(0, config.size.fresh);
+    cuts.push(...off.map((it) => ({ it, stage: /** @type {const} */ ('judge') })));
+    // Only what the profile check read and let through; when the check failed, nothing has been vetted.
+    const room = Math.min(FILL_TO, config.size.fresh) - top.length;
+    if (!judged.error && room > 0) top = [...top, ...pool.slice(best.length).filter((it) => !judged.off.has(it.id)).slice(0, room).map((it) => ({ ...it, nearBar: true }))];
   }
+  const shownNow = new Set(top.map((it) => it.id));
+  cuts.push(...under.filter((it) => !shownNow.has(it.id) && !off.includes(it)).map((it) => ({ it, stage: /** @type {const} */ ('bar') })));
 
   const missing = run.abstractFetch ? [] : top.filter((it) => !it.abstract && it.doi);
   if (missing.length) {
@@ -164,7 +192,7 @@ export async function collectRadar(run) {
   } else if (wantsDiscover && run.keyed === false) discoverNote = 'Might interest you skipped (no OpenAlex key)';
 
   /** @type {RadarState} */
-  const next = { ...state, refs, abstracts, ...(calibrateTried ? { calibrateTried } : {}), phrases: { ...state.phrases, rotation: state.phrases.rotation + 1, announce: [] }, seen: { ...state.seen }, sourceStatus: { ...state.sourceStatus }, feedCache: { ...state.feedCache }, shown: { ...state.shown } };
+  const next = { ...state, refs, abstracts, ...(cuts.length ? { nearBar: nearBarLedger(cuts, run.now) } : {}), ...(calibrateTried ? { calibrateTried } : {}), phrases: { ...state.phrases, rotation: state.phrases.rotation + 1, announce: [] }, seen: { ...state.seen }, sourceStatus: { ...state.sourceStatus }, feedCache: { ...state.feedCache }, shown: { ...state.shown } };
   // Per source, how many items it gave and how many made the digest, over the last week (spec 021 G2b).
   const keptBy = new Map();
   for (const it of top) for (const id of it.sources) keptBy.set(id, (keptBy.get(id) ?? 0) + 1);
@@ -184,6 +212,25 @@ export async function collectRadar(run) {
   }
   return { picked: top, older, olderNote, discover, discoverNote, announced: state.phrases.announce, state: next, failed, sourcesAnswered: answered, offProfile: off.length, judgeProblem, requests: fetched.requests + olderRequests + discoverRequests, threshold: calibrated };
 }
+
+/** The radar's ledger of what was cut near the bar on its last run, and where: per stage, the closest first (they come in that order).
+ *  @param {{ it: RadarItem, stage: 'bar' | 'judge' | 'hub gap' }[]} cuts @param {string} at @returns {import("./radar-types").NearBarLedger} */
+function nearBarLedger(cuts, at) {
+  /** @type {Map<string, number>} */
+  const counts = new Map();
+  const rows = [];
+  for (const { it, stage } of cuts) {
+    const n = counts.get(stage) ?? 0;
+    if (n >= NEAR_BAR_STAGE) continue;
+    counts.set(stage, n + 1);
+    rows.push({ title: it.title, seed: it.why?.seed?.title ?? '', margin: it.why?.seed?.margin ?? 0, stage });
+  }
+  return { at, rows };
+}
+
+/** Where the unrelated fields end for this paper's kind of text; nothing from there on is near the user's interests.
+ *  @param {import("./radar-types").RadarThreshold} threshold @param {RadarItem} it */
+const unrelatedEnd = (threshold, it) => (it.why?.seed?.whole ? threshold.calibration?.full : threshold.calibration?.abstract)?.unrelated?.p95 ?? -Infinity;
 
 /**
  * The candidates worth ranking. A book or book chapter, and a paper only a database search found that still has no
@@ -247,6 +294,7 @@ function wholeList(ranked) {
  * through the whole-paper one: on a calibrated radar it is judged at the bar that gets a preprint read, and ranks from there.
  * @param {RadarItem[]} ranked best first, each with why.similarity to its closest seed
  * @param {{ library: import("./tools").LibraryBackend, seeds: import("./radar-types").SeedBody, threshold: import("./radar-types").RadarThreshold | null, seedTitle: (label: string) => string, baseline?: import("./radar-types").SeedBaseline | null }} ctx
+ * @returns {Promise<{ kept: RadarItem[], under: { it: RadarItem, gap: number }[] }>} `gap`: how far past (under: below) the bar that paper had to clear
  */
 async function decideWhole(ranked, ctx) {
   const abstractCut = ctx.threshold?.abstract ?? DEFAULT_CUT;
@@ -261,12 +309,16 @@ async function decideWhole(ranked, ctx) {
     }
   }
   const noCopy = ctx.baseline && ctx.threshold ? ctx.threshold.abstract - lowerBar(ctx.threshold) : 0;
-  const out = [];
+  const out = [], under = [];
   for (const it of ranked) {
     const w = whole[it.id];
     if (w && typeof w.seed_max === 'number' && w.seed_best) {
-      if (w.seed_max >= /** @type {number} */ (wholeCut)) out.push(rescoreWhole(it, w.seed_raw ?? w.seed_max, { label: w.seed_best, title: ctx.seedTitle(w.seed_best), margin: Math.round(w.seed_max * 1000) / 1000, ...neighbour(w) }, ctx.baseline ? wholeCut : null));
-    } else if (it.arxiv ? seedBar(it) >= abstractCut : seedBar(it) >= abstractCut - noCopy) out.push(it.arxiv ? it : { ...it, score: Math.round(((it.score ?? 0) + noCopy) * 1000) / 1000 });
+      const read = rescoreWhole(it, w.seed_raw ?? w.seed_max, { label: w.seed_best, title: ctx.seedTitle(w.seed_best), margin: Math.round(w.seed_max * 1000) / 1000, ...neighbour(w) }, ctx.baseline ? wholeCut : null);
+      if (w.seed_max >= /** @type {number} */ (wholeCut)) out.push(read); else under.push({ it: read, gap: w.seed_max - /** @type {number} */ (wholeCut) });
+    } else {
+      const bar = it.arxiv ? abstractCut : abstractCut - noCopy;
+      if (seedBar(it) >= bar) out.push(it.arxiv ? it : { ...it, score: Math.round(((it.score ?? 0) + noCopy) * 1000) / 1000 }); else under.push({ it, gap: seedBar(it) - bar });
+    }
   }
-  return out.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+  return { kept: out.sort((a, b) => (b.score ?? 0) - (a.score ?? 0)), under };
 }

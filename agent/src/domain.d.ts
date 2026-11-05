@@ -28,7 +28,7 @@ export interface PaperRow {
   title: string; authors: string[]; year: number | null; venue: string;
   doi: string | null; url: string | null; abstract: string;
   /** spec 012: set on a reading radar's rows, so "why is this here" has an answer. */
-  radar?: { key: string; score: number; why: import("./radar-types").RadarWhy; links: string[]; sources: string[]; date: string | null; reason?: string; /** One model line from the abstract (R4); absent when the model failed or there was no abstract. */ why_line?: string };
+  radar?: { key: string; score: number; why: import("./radar-types").RadarWhy; links: string[]; sources: string[]; date: string | null; reason?: string; /** Under the bar, shown to fill a short day. */ nearBar?: boolean; /** One model line from the abstract (R4); absent when the model failed or there was no abstract. */ why_line?: string };
   /** Where `abstract` came from, set by a review's search stage: "library" = read from the library itself; "unverified" =
    *  an outside paper's abstract as the researcher model transcribed it, never checked; "none" = nothing was returned.
    *  Missing on rows older than this field and on rows built elsewhere (Find papers, chat tables). */
