@@ -120,7 +120,7 @@ export function createShell({ host, doc = document, win = /** @type {Window} */ 
   root.append(rail, main, light.root);
   // Spec 015: web links open in a panel over the content area (the host decides inside or outside).
   const browser = createBrowserPanel({ host, doc, win, into: main });
-  host.setBrowser((url) => browser.open(url));
+  host.setBrowser((url, radar) => browser.open(url, radar));
 
   /** @type {ReturnType<typeof createLibraryView> | null} */ let library = null;
   /** @type {ChatView | null} */ let chat = null;

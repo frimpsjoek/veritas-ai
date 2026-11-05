@@ -2,7 +2,8 @@
 // ui-src/src/web/browser-state.js. Spec 015 B3: the in-app browser panel's pure parts, kept apart from the DOM so they
 // can be tested: its back stack and how a link is first asked for.
 
-/** @typedef {{ url: string, prefer?: 'reader', fell?: true }} Entry `fell`: a PDF link that was not one, now asked for as a page (once) */
+/** @typedef {{ url: string, prefer?: 'reader', fell?: true, radar?: import('../../ui/src/host').RadarLink | null }} Entry `fell`: a PDF link that was not one, now asked for as a page (once);
+ *  `radar`: the paper was opened from a radar issue */
 
 /** The panel's own history. A framed page's history is the site's and cannot be reached from here, so "back" steps
  *  through the pages the panel was asked to show. */
@@ -145,29 +146,6 @@ export function paperToAdd(answer) {
     pdf: answer.mode === 'pdf' ? String(answer.url ?? '') : links.find((/** @type {any} */ l) => l?.kind === 'pdf')?.url,
     type: answer.source === 'arxiv' ? 'preprint' : undefined,
   };
-}
-
-/** The Zotero collections as a picker lists them: each under its parent, by name, indented.
- *  @param {{ key: string, name: string, parent?: string | null }[]} collections @returns {{ key: string, label: string }[]} */
-export function collectionOptions(collections) {
-  const list = Array.isArray(collections) ? collections : [];
-  const keys = new Set(list.map((c) => c.key));
-  /** @type {Map<string | null, typeof list>} */
-  const under = new Map();
-  for (const c of list) {
-    const parent = c.parent && keys.has(c.parent) ? c.parent : null;
-    under.set(parent, [...(under.get(parent) ?? []), c]);
-  }
-  /** @type {{ key: string, label: string }[]} */
-  const out = [];
-  const walk = (/** @type {string | null} */ parent, /** @type {number} */ depth) => {
-    for (const c of [...(under.get(parent) ?? [])].sort((a, b) => a.name.localeCompare(b.name))) {
-      out.push({ key: c.key, label: `${'\u00A0\u00A0'.repeat(depth)}${c.name}` }); // an <option> drops plain spaces
-      walk(c.key, depth + 1);
-    }
-  };
-  walk(null, 0);
-  return out;
 }
 
 // Inline TeX in an answer the server marked as math: \(…\), \[…\], $$…$$ and $…$. Unlike titleNodes (chat/markdown.js),

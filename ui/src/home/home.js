@@ -4,11 +4,13 @@
 // router (web/pages.js); Zotero and Obsidian mount HomeView in a tab and a view. Links go through HomeLinks
 // (links.js), so the same page works with hash routes and with a plugin's own way of opening things.
 import { h } from '../dom.js';
-import { nextRunText, runNowLine } from '../chat/routines-data.js';
+import { lucide } from '../icons.js';
+import { nextRunText, runNowLine, runStatus } from '../chat/routines-data.js';
 import { apiOf } from '../sources/view-kit.js';
 import { mountSources } from '../sources/sources-view.js';
 import { linkTo } from './links.js';
 import { RadarDigest, markViewed } from '../chat/radar-digest.js';
+import { whyChips, openLinks, judgedLine, keyAction, actionList } from '../chat/radar-digest-data.js';
 import { arxivAuthors, plainName } from '../../../agent/src/paper-names.js';
 
 /** @typedef {import('./links.js').HomeTarget} HomeTarget */
@@ -118,19 +120,59 @@ function viewing(el, onView) {
   if (el.getAttribute('href') === null) el.addEventListener('keydown', (event) => { if (/** @type {KeyboardEvent} */ (event).key === 'Enter') onView(); });
 }
 
+/** Each way into a paper's entry has its line icon. */
+const OPEN_ICON = /** @type {const} */ ({ full: 'bookOpen', pdf: 'fileText', abstract: 'text', publisher: 'externalLink' });
+
+/** The row of ways into a paper, the best first and bold. All but the publisher's page open in the reader, which then
+ *  knows the paper's issue; the publisher's page goes outside (publishers refuse to load in the panel).
+ *  @param {Document} doc @param {import('../chat/radar-digest-data.js').OpenLink[]} ways @param {HomeLinks} links
+ *  @param {import('../host').RadarLink | null} radar @param {(() => void) | undefined} onView @param {any} host */
+function openRow(doc, ways, links, radar, onView, host) {
+  const row = h(doc, 'p', 'sbw-paper-open');
+  ways.forEach((way, at) => {
+    const a = h(doc, 'a', at === 0 ? 'is-lead' : '');
+    a.append(lucide(doc, OPEN_ICON[way.kind], 14), h(doc, 'span', '', way.label));
+    if (way.outside && host?.openLink && 'href' in links) {
+      a.setAttribute('href', way.url);
+      a.setAttribute('rel', 'noopener noreferrer');
+      a.addEventListener('click', (event) => { event.preventDefault(); host.openLink(way.url, { outside: true }); });
+    } else linkTo(a, { to: 'url', url: way.url, radar: way.outside ? null : radar }, links);
+    viewing(a, onView);
+    row.append(a);
+  });
+  return row;
+}
+
+/** Why the radar matched a paper, as a quiet line of facts. Display only.
+ *  @param {Document} doc @param {import('../chat/radar-digest-data.js').WhyChip[]} chips */
+function whyRow(doc, chips) {
+  const row = h(doc, 'p', 'sbw-paper-chips');
+  const facts = chips.some((chip) => chip.kind !== 'via');
+  if (facts) row.append(h(doc, 'span', '', 'Why:'));
+  for (const chip of chips) {
+    const el = h(doc, 'span', chip.kind === 'via' ? 'sbw-why-via' : `sbw-why-chip is-${chip.kind}`, chip.kind === 'via' && facts ? `\u00B7 ${chip.text}` : chip.text);
+    el.title = chip.hint;
+    row.append(el);
+  }
+  return row;
+}
+
 /** A paper of today's issue in abstract form: its graphical abstract on the right when the publisher has one, then the
- *  title (to the paper), who and where, why read it, where it was found, and the full abstract behind "Read the abstract".
- *  Under it, the radar's actions (Add to Zotero, Read later, Like, Dislike), which teach the radar what to show.
+ *  title (to the paper), who and where, why read it, and the full abstract behind "Read the abstract"; then the ways in
+ *  (the open row, the best one bold), why it matched and where it was found (display only). Under it, the radar's
+ *  actions (Add to Zotero, Read later, Like, Not for me), which teach the radar what to show.
  *  @param {Document} doc @param {any} row @param {HomeLinks} links @param {(route: string, params?: any) => Promise<any>} [api]
  *  @param {RadarDigest | null} [digest] the issue's radar, for the row actions
  *  @param {'summary' | 'abstract'} [show] what the line under the title is: the AI's summary, or the paper's abstract
- *  @param {() => void} [onView] the paper was opened (its link, its figure, or its abstract): it is no longer news */
-function paperEntry(doc, row, links, api, digest, show = 'summary', onView) {
+ *  @param {() => void} [onView] the paper was opened (its link, its figure, or its abstract): it is no longer news
+ *  @param {any} [host] opens a publisher's page outside */
+function paperEntry(doc, row, links, api, digest, show = 'summary', onView, host) {
   const entry = h(doc, 'article', 'sbw-paper');
   const text = h(doc, 'div', 'sbw-paper-text');
   const url = row.doi ? `https://doi.org/${row.doi}` : row.url;
   const title = h(doc, url ? 'a' : 'span', 'sbw-paper-title', row.title);
-  if (url) viewing(linkTo(title, { to: 'url', url }, links), onView);
+  const radar = digest?.readerLink(row) ?? null;
+  if (url) viewing(linkTo(title, { to: 'url', url, radar }, links), onView);
   // Issues written before 2026-11-02 hold arXiv's authors as one string of TeX.
   const authors = row.venue === 'arXiv' ? arxivAuthors(row.authors) : (row.authors ?? []).map(plainName);
   const who = authors.length > 3 ? `${authors.slice(0, 3).join(', ')} +${authors.length - 3}` : authors.join(', ');
@@ -146,18 +188,26 @@ function paperEntry(doc, row, links, api, digest, show = 'summary', onView) {
   else if (abstract) text.append(h(doc, 'p', 'sbw-paper-why', abstract));
   if (abstract && (why || abstract.length > 320)) {
     const more = /** @type {HTMLDetailsElement} */ (h(doc, 'details', 'sbw-paper-more'));
-    const label = h(doc, 'summary', '', why ? 'Read the abstract' : 'Read more');
+    const label = h(doc, 'summary');
+    const labelText = h(doc, 'span', '', why ? 'Read the abstract' : 'Read more');
+    label.append(labelText, lucide(doc, 'chevronDown', 14));
     more.append(label, h(doc, 'p', 'sbw-paper-abstract', abstract));
     // Without a why line the clamped preview above is the abstract itself; opening shows it in full instead.
     more.addEventListener('toggle', () => {
       if (more.open) onView?.();
-      label.textContent = more.open ? 'Show less' : why ? 'Read the abstract' : 'Read more';
+      labelText.textContent = more.open ? 'Show less' : why ? 'Read the abstract' : 'Read more';
       if (!why) text.querySelector('.sbw-paper-why')?.toggleAttribute('hidden', more.open);
     });
     text.append(more);
   }
-  const via = (row.foundBy ?? []).filter(Boolean);
-  if (via.length) text.append(h(doc, 'p', 'sbw-paper-source', `Found via ${via.join(', ')}`));
+  const ways = openLinks(row);
+  if (ways.length) text.append(openRow(doc, ways, links, radar, onView, host));
+  const chips = whyChips(row);
+  if (chips.length) text.append(whyRow(doc, chips));
+  else {
+    const via = (row.foundBy ?? []).filter(Boolean);
+    if (via.length) text.append(h(doc, 'p', 'sbw-paper-source', `Found via ${via.join(', ')}`));
+  }
   if (digest) { text.append(digest.actions(row)); digest.mark(entry, row); }
   entry.append(text);
   const arxiv = /arxiv\.org\/(?:abs|pdf)\/(\d{4}\.\d{4,5})/.exec(`${row.pdfUrl ?? ''} ${row.url ?? ''}`)?.[1];
@@ -172,7 +222,7 @@ function paperEntry(doc, row, links, api, digest, show = 'summary', onView) {
       img.addEventListener('error', () => img.remove(), { once: true });
       img.src = found.image;
       const link = h(doc, url ? 'a' : 'span', 'sbw-paper-figure-box');
-      if (url) { viewing(linkTo(link, { to: 'url', url }, links), onView); link.tabIndex = -1; }
+      if (url) { viewing(linkTo(link, { to: 'url', url, radar }, links), onView); link.tabIndex = -1; }
       link.append(img);
       entry.append(link);
     }, () => {});
@@ -180,67 +230,145 @@ function paperEntry(doc, row, links, api, digest, show = 'summary', onView) {
   return entry;
 }
 
-/** A long issue comes in steps, so rating papers stays a choice. */
+/** A long issue comes in steps, so rating papers stays a choice; Worth reading starts shorter than New. */
 const PAPER_STEP = 8;
+const WORTH_READING = 'Worth reading';
+const WORTH_STEP = 3;
 
-/** "Show 8 more (22 left)" @param {number} left */
-export const moreLabel = (left) => `Show ${Math.min(left, PAPER_STEP)} more${left > PAPER_STEP ? ` (${left} left)` : ''}`;
+/** "Show 8 more (22 left)" @param {number} left @param {number} [step] */
+export const moreLabel = (left, step = PAPER_STEP) => `Show ${Math.min(left, step)} more${left > step ? ` (${left} left)` : ''}`;
 
-/** How often Home looks at a running radar, and how long before it stops looking and offers Run now again. */
+/** How often Home looks at a running radar: every few seconds at first, then less often, for as long as Home is open.
+ *  A run has no time limit and no way to read how far it got, so Home never decides by itself that one has stopped: only
+ *  the server saying nothing is running, a few times over, ends the wait. */
 const RUN_POLL_MS = 5000;
 const RUN_POLL_TIMES = 120;
+const RUN_POLL_SLOW_MS = 30000;
+const RUN_GONE_TIMES = 3;
 const REFUSAL_MS = 4000;
 
 /**
- * "Run now" in the today bar: starts the radar through the routines service, reads "Running…" while it runs (also when
- * it was already running as Home painted, as on a radar's first run), shows a refusal in its own place for a moment,
- * and calls `onRan` once the run is recorded. Home is painted once, so it asks the routines list every few seconds.
- * "Redo today" is the same link calling `routines.redo`: today's issue built again with today's rules.
+ * The radar's run, in two places: the line under the banner (running, a run that did not finish and why, or when the
+ * issue came and when the next will), with Run again or Redo today in it; and "Run now" in the today bar, which reads
+ * "Running…" while it runs (also when it was already running as Home painted, as on a radar's first run). A refusal shows
+ * in the button's own place for a moment. `onRan` is called once a run is recorded: Home is painted once, so it asks the
+ * routines list. No Stop: the routines service has no way to stop one run, and no stage to show.
  * @param {Document} doc @param {any} ai @param {any} routine @param {HTMLElement} block @param {() => void} onRan
- * @param {{ label: string, start: (id: string) => Promise<any>, watch?: boolean }} [how] `watch`: also show a run already going
  */
-function runNowLink(doc, ai, routine, block, onRan, how = { label: 'Run now', start: (id) => ai.routines.runNow(id), watch: true }) {
-  const run = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sbw-quiet sbw-today-run'));
-  run.type = 'button';
-  const idle = () => { run.textContent = how.label; run.disabled = false; run.removeAttribute('title'); };
+function runControls(doc, ai, routine, block, onRan) {
+  const line = h(doc, 'div', 'sbw-run');
+  line.setAttribute('role', 'status');
+  const text = h(doc, 'span', 'sbw-run-text');
+  const act = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sbw-quiet sbw-run-act'));
+  act.type = 'button';
+  line.append(h(doc, 'span', 'sbw-run-dot'), text, act);
+  const canRun = typeof ai.routines?.runNow === 'function';
+  const canRedo = typeof ai.routines?.redo === 'function';
+  const runNow = canRun ? /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sbw-quiet sbw-today-run')) : null;
+  if (runNow) runNow.type = 'button';
+
+  let seen = routine;
+  let running = Boolean(routine.running);
+  /** @type {number | null} */ let startedAt = null;
+  /** @type {number | null} */ let seenAt = running ? Date.now() : null;
+  let unanswered = false;
+  let starting = false;
+  /** @type {{ on: HTMLButtonElement, text: string } | null} */ let refusal = null;
+
+  /** Says a button's words, or its refusal. @param {HTMLButtonElement} b @param {string} words */
+  const say = (b, words) => {
+    if (refusal?.on === b) { b.textContent = refusal.text; b.setAttribute('title', refusal.text); return; }
+    b.textContent = words;
+    b.removeAttribute('title');
+  };
+  const paint = () => {
+    const status = runStatus({ ...seen, running }, { startedAt, seenAt, unanswered });
+    line.classList.toggle('is-running', status.kind === 'running');
+    line.classList.toggle('is-failed', status.kind === 'failed');
+    text.replaceChildren(...(status.lead ? [h(doc, 'strong', '', status.lead)] : []), ...(status.detail ? [h(doc, 'span', '', `${status.lead ? ' \u00B7 ' : ''}${status.detail}`)] : []));
+    if (runNow) {
+      say(runNow, running ? 'Running\u2026' : 'Run now');
+      runNow.disabled = running || starting || refusal?.on === runNow;
+    }
+    const again = status.action === 'again' && canRun;
+    const redo = status.action === 'redo' && canRedo;
+    act.hidden = !again && !redo;
+    if (again || redo) {
+      say(act, again ? 'Run again' : 'Redo today');
+      if (again && refusal?.on !== act) act.prepend?.(lucide(doc, 'refreshCw', 14));
+    }
+    act.disabled = starting || refusal?.on === act;
+  };
+
+  let polling = false;
+  let polls = 0;
+  let gone = 0;
   /** @param {string | null} lastAt the lastRun.at before this run */
-  const wait = (lastAt, left = RUN_POLL_TIMES) => {
-    run.textContent = 'Running…';
-    run.disabled = true;
-    setTimeout(async () => {
+  const watch = (lastAt) => {
+    if (polling) return;
+    polling = true;
+    gone = 0;
+    const look = () => setTimeout(async () => {
       if (!block.isConnected) return; // Home was left or repainted
-      const now = await ai.routines.list().then((/** @type {any[]} */ all) => all.find((r) => r.id === routine.id), () => undefined);
-      if (now && !now.running && (now.lastRun?.at ?? null) !== lastAt) onRan();
-      else if (left > 1) wait(lastAt, left - 1);
-      else idle();
-    }, RUN_POLL_MS);
+      polls += 1;
+      /** @type {any} */ let all = null;
+      try { all = await ai.routines.list(); unanswered = false; } catch { unanswered = true; }
+      const now = all?.find((/** @type {any} */ r) => r.id === routine.id);
+      if (now) seen = now;
+      if (now && !now.running && (now.lastRun?.at ?? null) !== lastAt) { polling = false; running = false; paint(); onRan(); return; }
+      if (all && !now?.running && ++gone >= RUN_GONE_TIMES) { polling = false; running = false; paint(); return; }
+      if (now?.running) gone = 0;
+      paint();
+      look();
+    }, polls < RUN_POLL_TIMES ? RUN_POLL_MS : RUN_POLL_SLOW_MS);
+    look();
   };
-  const refused = (/** @type {string} */ text) => {
-    run.textContent = text;
-    run.setAttribute('title', text);
-    setTimeout(idle, REFUSAL_MS);
-  };
-  run.addEventListener('click', async () => {
-    const lastAt = routine.lastRun?.at ?? null;
-    run.disabled = true;
+  /** @param {HTMLButtonElement} b @param {(id: string) => Promise<any>} start */
+  const go = async (b, start) => {
+    const lastAt = seen.lastRun?.at ?? null;
+    starting = true;
+    paint();
+    /** @type {string | null} */ let refused = null;
     try {
-      const out = await how.start(routine.id);
-      if (out.started) wait(lastAt);
-      else refused(runNowLine(out));
-    } catch (error) { refused(String(/** @type {any} */ (error)?.message ?? error)); }
-  });
-  if (routine.running && how.watch) wait(routine.lastRun?.at ?? null);
-  else idle();
-  return run;
+      const out = await start(routine.id);
+      if (out.started) { running = true; startedAt = Date.now(); seenAt = null; watch(lastAt); }
+      else refused = runNowLine(out);
+    } catch (error) { refused = String(/** @type {any} */ (error)?.message ?? error); }
+    starting = false;
+    if (refused !== null) {
+      refusal = { on: b, text: refused };
+      setTimeout(() => { refusal = null; paint(); }, REFUSAL_MS);
+    }
+    paint();
+  };
+  runNow?.addEventListener('click', () => go(runNow, (id) => ai.routines.runNow(id)));
+  act.addEventListener('click', () => go(act, (id) => (act.textContent === 'Redo today' ? ai.routines.redo(id) : ai.routines.runNow(id))));
+  if (running) watch(routine.lastRun?.at ?? null);
+  paint();
+  return { line, runNow };
+}
+
+/** A row that says something went wrong, with a way to try again.
+ *  @param {Document} doc @param {string} words @param {() => void} retry */
+function troubleRow(doc, words, retry) {
+  const row = h(doc, 'div', 'sbw-run is-failed');
+  row.setAttribute('role', 'alert');
+  const again = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sbw-quiet sbw-run-act'));
+  again.type = 'button';
+  again.append(lucide(doc, 'refreshCw', 14), h(doc, 'span', '', 'Try again'));
+  again.addEventListener('click', retry);
+  row.append(h(doc, 'span', 'sbw-run-dot'), h(doc, 'span', 'sbw-run-text', words), again);
+  return row;
 }
 
 /** Today: a radar issue across the full width, a photo banner over its papers in abstract form, with ‹ › to step
  *  back through earlier days. Today with nothing new yet says so; no radar at all offers to set one up.
  *  @param {Document} doc @param {any} ai @param {any} host @param {HomeLinks} links
- *  @param {{ issues: any[], routine: any | null, pick?: string, unknown?: boolean, onRan?: (block: HTMLElement) => void, onViewed?: (conversations: any[]) => void }} radar issues newest first; `pick` opens on that issue;
+ *  @param {{ issues: any[], routine: any | null, pick?: string, unknown?: boolean, onRan?: (block: HTMLElement) => void, onViewed?: (conversations: any[]) => void, onJudged?: (judged: number) => void }} radar issues newest first; `pick` opens on that issue;
  *  `unknown`: the routines could not be read, so whether a radar exists is not known; `onRan(block)`: a run started or
- *  watched here was recorded; `onViewed(conversations)`: a paper opened here lowered the news, read again */
-async function todayBlock(doc, ai, host, links, { issues, routine, pick, unknown, onRan, onViewed }) {
+ *  watched here was recorded; `onViewed(conversations)`: a paper opened here lowered the news, read again; `onJudged(n)`:
+ *  how many papers of the issue shown have a verdict */
+async function todayBlock(doc, ai, host, links, { issues, routine, pick, unknown, onRan, onViewed, onJudged }) {
   const block = h(doc, 'section', 'sbw-today');
   const api = apiOf(host);
   if (!routine && !issues.length && unknown) {
@@ -295,17 +423,57 @@ async function todayBlock(doc, ai, host, links, { issues, routine, pick, unknown
   // The issue reads here as a list; its chat is one step away for questions about it.
   const chat = h(doc, 'a', 'sbw-quiet sbw-today-chat', 'Chat about this issue');
   bar.append(nav, chat, sources);
-  // Hosts whose server predates runNow get no link rather than one that fails.
-  if (routine && onRan && typeof ai.routines?.runNow === 'function') bar.append(runNowLink(doc, ai, routine, block, () => onRan(block)));
-  // Redo today rebuilds the latest issue; only a radar that has one, on a server that offers it.
-  if (routine && onRan && routine.lastRun?.session && typeof ai.routines?.redo === 'function') bar.append(runNowLink(doc, ai, routine, block, () => onRan(block), { label: 'Redo today', start: (id) => ai.routines.redo(id) }));
-  bar.append(shows);
+  // Hosts whose server predates runNow or redo get no button rather than one that fails.
+  const run = routine && onRan ? runControls(doc, ai, routine, block, () => onRan(block)) : null;
+  if (run?.runNow) bar.append(run.runNow);
+  // What the keys do, where there are keys and room to say so.
+  const keysHint = h(doc, 'span', 'sbw-today-keys');
+  keysHint.hidden = true;
+  bar.append(keysHint, shows);
   nav.append(older, newer);
-  block.append(stage, bar, list);
+  block.append(stage, ...(run ? [run.line] : []), bar, list);
 
   let painting = 0;
   /** @type {Map<string, number>} */ const revealed = new Map(); // how many papers of each group are showing, kept across repaints
   /** @type {RadarDigest | null} */ let digest = null;
+  // The papers on the page, in order, for the keys; the one the keys act on is `current`.
+  /** @type {{ el: HTMLElement, row: any }[]} */ let cards = [];
+  /** @type {any} */ let current = null;
+  let keyed = false;
+  /** @type {(() => void)[]} */ let progress = [];
+  /** @param {{ el: HTMLElement, row: any } | null} card @param {boolean} [scroll] */
+  const setCurrent = (card, scroll = false) => {
+    current?.el.classList.remove('is-current');
+    current = card;
+    card?.el.classList.add('is-current');
+    if (scroll) card?.el.scrollIntoView?.({ block: 'nearest' });
+  };
+  const nextOpen = (/** @type {number} */ from = 0) => cards.slice(from).find((c) => !digest?.settled(c.row)) ?? null;
+  /** j at the last paper showing brings the next step first. */
+  const step = (/** @type {number} */ by) => {
+    let at = cards.indexOf(current) + by;
+    if (at >= cards.length) current?.el.parentElement?.querySelector('.sbw-papers-more:not([hidden])')?.click();
+    at = Math.max(0, Math.min(cards.length - 1, at));
+    setCurrent(cards[at] ?? null, true);
+  };
+  const onKey = (/** @type {KeyboardEvent} */ event) => {
+    if (!block.isConnected) { doc.removeEventListener('keydown', onKey); return; }
+    if (event.defaultPrevented || !digest || !cards.length) return;
+    // Only while Home is what is on screen: not behind the reader or a dialog, not on a hidden view. In a plugin the
+    // document holds the host's whole window, so only with the focus inside Home.
+    const view = block.closest('.sb-home-view');
+    if (view ? !view.contains(/** @type {Node} */ (event.target)) : !block.getClientRects().length || doc.querySelector('[role="dialog"]:not([hidden])')) return;
+    const action = keyAction(event);
+    if (!action) return;
+    event.preventDefault();
+    keyed = true;
+    if (action === 'next') { step(1); return; }
+    if (action === 'prev') { step(-1); return; }
+    if (!current) return;
+    digest.judgeKey(current.row, action);
+    setCurrent(nextOpen(cards.indexOf(current) + 1) ?? nextOpen(), true);
+  };
+  doc.addEventListener?.('keydown', onKey);
   /** A paper opened here is one less paper of news on its issue: tell the engine, then read the counts again so the
    *  banner and the waiting count follow without repainting Home. @param {any} issue @param {any} row */
   const viewed = async (issue, row) => {
@@ -344,7 +512,18 @@ async function todayBlock(doc, ai, host, links, { issues, routine, pick, unknown
     newer.textContent = newerAt === null ? '' : newerAt === -1 || sameDay(issues[newerAt].updated, now) ? 'Today ›' : `${shortDay(issues[newerAt].updated)} ›`;
     shows.hidden = !issue;
     list.replaceChildren();
-    if (!issue) return;
+    cards = [];
+    progress = [];
+    current = null;
+    keysHint.hidden = true;
+    if (!issue) {
+      const quiet = h(doc, 'div', 'sbw-run');
+      const done = routine?.lastRun?.status === 'done' && sameDay(routine.lastRun.at, now);
+      quiet.append(h(doc, 'span', 'sbw-run-dot'), h(doc, 'span', 'sbw-run-text', done ? 'Nothing new above the bar today.' : 'No issue yet today.'), linkTo(h(doc, 'a', 'sbw-quiet sbw-run-act', 'Sources'), { to: 'sources' }, links));
+      list.append(quiet);
+      onJudged?.(0);
+      return;
+    }
     try {
       const view = await ai.sessions.view(issue.id);
       for (const result of view.results ?? []) {
@@ -352,28 +531,69 @@ async function todayBlock(doc, ai, host, links, { issues, routine, pick, unknown
         const body = await ai.sessions.read(issue.id, result.ref);
         const rows = body?.rows ?? [];
         if (mine !== painting) return;
-        if (result.title && result.title !== 'New') list.append(h(doc, 'h3', 'sbw-papers-head', result.title));
+        const worth = result.title === WORTH_READING;
+        if (result.title && result.title !== 'New') {
+          const head = h(doc, 'h2', 'sbw-papers-head', result.title);
+          if (worth) head.append(h(doc, 'small', '', `${rows.length} today \u00B7 older papers your library keeps citing`));
+          list.append(head);
+        }
         // The same row actions as the issue's chat view, so a paper can be rated where it is read.
         const radar = body?.radar?.routine ? body.radar : null;
-        digest = radar && (digest?.routine === radar.routine ? digest : new RadarDigest(host, doc, block, { routine: radar.routine, summary: radar.summary ?? '' }));
+        digest = radar && (digest?.routine === radar.routine ? digest : new RadarDigest(host, doc, block, { routine: radar.routine, summary: radar.summary ?? '', judging: true }));
         const key = `${issue.id}/${result.ref?.id ?? result.title}`;
-        const more = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sbw-quiet sbw-papers-more'));
+        const more = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sb-button sbw-papers-more'));
         more.type = 'button';
+        // Under the group: how far the judging has got (not for Worth reading, which is a suggestion list), and the next step.
+        const foot = h(doc, 'div', 'sbw-papers-foot');
+        if (digest && !worth && rows.length) {
+          const track = h(doc, 'span', 'sbw-papers-track');
+          const fill = h(doc, 'span', 'sbw-papers-fill');
+          track.append(fill);
+          const said = h(doc, 'span', 'sbw-papers-judged');
+          foot.append(track, said);
+          const shownDigest = digest;
+          const update = () => {
+            const judged = shownDigest.judged(rows);
+            fill.style?.setProperty('width', `${Math.round((judged / rows.length) * 100)}%`);
+            said.textContent = judgedLine(judged, rows.length);
+            onJudged?.(judged);
+          };
+          update();
+          progress.push(update);
+        }
+        foot.append(more);
         // One box per group (display: contents, so its papers stay in the page's grid), so a later group stays below.
         const group = h(doc, 'div', 'sbw-papers-group');
         list.append(group);
         const reveal = (/** @type {number} */ from) => {
-          const upTo = Math.max(revealed.get(key) ?? PAPER_STEP, from + (from ? PAPER_STEP : 0));
+          const upTo = Math.max(revealed.get(key) ?? (worth ? WORTH_STEP : PAPER_STEP), from + (from ? PAPER_STEP : 0));
           revealed.set(key, upTo);
-          group.append(...rows.slice(from, upTo).map((/** @type {any} */ row) => paperEntry(doc, row, links, api, digest, textMode, () => { void viewed(issue, row); })), more);
+          const drawn = rows.slice(from, upTo).map((/** @type {any} */ row) => {
+            const el = paperEntry(doc, row, links, api, digest, textMode, () => { void viewed(issue, row); }, host);
+            cards.push({ el, row });
+            return el;
+          });
+          group.append(...drawn, foot);
           more.hidden = upTo >= rows.length;
+          foot.hidden = !foot.children.length || (worth && more.hidden);
           more.textContent = upTo < rows.length ? moreLabel(rows.length - upTo) : '';
           more.onclick = () => reveal(upTo);
         };
         reveal(0);
       }
+      if (digest) {
+        const shown = digest;
+        shown.onChange = () => {
+          for (const update of progress) update();
+          if (!keyed && (!current || shown.settled(current.row))) setCurrent(nextOpen());
+        };
+        shown.onChange();
+        const save = actionList(shown.canAdd)[0].verdict === 'added' ? 'add' : 'save';
+        keysHint.textContent = `j / k next paper \u00B7 a ${save} \u00B7 l like \u00B7 d not for me`;
+        keysHint.hidden = !cards.length;
+      }
     } catch {
-      if (mine === painting) list.replaceChildren(h(doc, 'p', 'sbw-hint', "Couldn't load this issue's papers."));
+      if (mine === painting) list.replaceChildren(troubleRow(doc, "Couldn't load this issue's papers.", () => { void paint(); }));
     }
   };
   older.addEventListener('click', () => { if (issues[at + 1]) { at += 1; void paint(); } });
@@ -470,17 +690,21 @@ export async function paintHome(into, ctx) {
     [conversations, routines] = await Promise.all([ai.conversations.list().catch(() => []), ai.routines?.list().catch((/** @type {unknown} */ error) => { routinesFailed = true; host.logError(error); return []; }) ?? []]);
   } catch (error) {
     host.logError(error);
-    content.replaceChildren(h(doc, 'p', 'sbw-hint', "Couldn't reach the Veritas server."));
+    content.replaceChildren(troubleRow(doc, "Couldn't reach the Veritas server.", () => { void paintHome(into, ctx); }));
     return;
   }
 
   const dateLine = count.textContent;
   // Also after a paper is opened on Home: the count goes down one paper at a time, back to the date at none.
+  let waiting = 0;
+  let judged = 0;
+  const sayCount = () => { count.textContent = [waiting ? `${waiting} new ${waiting === 1 ? 'paper' : 'papers'}` : dateLine, judged ? `${judged} judged` : ''].filter(Boolean).join(' \u00B7 '); };
   const showWaiting = (/** @type {any[]} */ list) => {
-    const waiting = list.reduce((/** @type {number} */ sum, /** @type {any} */ c) => sum + (Number(c.news?.papers) || 0), 0);
-    count.textContent = waiting ? `${waiting} new ${waiting === 1 ? 'paper' : 'papers'}` : dateLine;
+    waiting = list.reduce((/** @type {number} */ sum, /** @type {any} */ c) => sum + (Number(c.news?.papers) || 0), 0);
+    sayCount();
     ctx.onWaiting?.(waiting);
   };
+  const showJudged = (/** @type {number} */ n) => { judged = n; sayCount(); };
   showWaiting(conversations);
   const { radarRoutines, radars, shown, kindOf, issues } = issuesOf(conversations, routines);
   const newest = (/** @type {Shelved[]} */ list) => list.sort((a, b) => (a.at < b.at ? 1 : -1));
@@ -490,7 +714,7 @@ export async function paintHome(into, ctx) {
     try {
       const [c, r] = await Promise.all([ai.conversations.list(), ai.routines.list()]);
       const fresh = issuesOf(c, r);
-      old.replaceWith(await todayBlock(doc, ai, host, links, { issues: fresh.issues, routine: fresh.radarRoutines[0] ?? null, onRan: refreshToday, onViewed: showWaiting }));
+      old.replaceWith(await todayBlock(doc, ai, host, links, { issues: fresh.issues, routine: fresh.radarRoutines[0] ?? null, onRan: refreshToday, onViewed: showWaiting, onJudged: showJudged }));
     } catch (error) { host.logError(error); }
   };
   const today = issues[0] && sameDay(issues[0].updated, new Date().toISOString()) ? issues[0] : null;
@@ -502,7 +726,7 @@ export async function paintHome(into, ctx) {
     const slot = h(doc, 'section', 'sbw-today');
     sections.push(slot);
     void mountSources(slot, { host, doc, links }, { mode: 'intro', routines, onDone: () => { void paintHome(into, ctx); } });
-  } else sections.push(await todayBlock(doc, ai, host, links, { issues, routine: radarRoutines[0] ?? null, pick: ctx.issue, unknown: routinesFailed, onRan: refreshToday, onViewed: showWaiting }));
+  } else sections.push(await todayBlock(doc, ai, host, links, { issues, routine: radarRoutines[0] ?? null, pick: ctx.issue, unknown: routinesFailed, onRan: refreshToday, onViewed: showWaiting, onJudged: showJudged }));
   // Chats are not shelved here: the Chat page lists them.
   const reports = newest(shown.filter((/** @type {any} */ c) => kindOf(c) === 'report').map((/** @type {any} */ c) => shelved(c, radars)));
   const earlier = newest(issues.filter((/** @type {any} */ c) => c !== today).map((/** @type {any} */ c) => shelved(c, radars)));
@@ -528,12 +752,14 @@ export async function paintHome(into, ctx) {
  */
 export function HomeView(doc, host, { open }) {
   const root = h(doc, 'div', 'sb-home-view');
+  root.tabIndex = -1; // a click anywhere puts the focus here, which is what lets Home's keys work inside a host's window
   /** @type {'home' | 'sources'} */ let showing = 'home';
   let painted = 0;
   /** @type {HomeLinks} */
   const links = { open: (target) => {
     if (target.to === 'home' || target.to === 'sources') void show(target.to);
     else if (target.to === 'issue') void show('home', target.id);
+    else if (target.to === 'url') open({ to: 'url', url: target.url }); // the radar link is for the web app's reader
     else open(target);
   } };
   /** @param {'home' | 'sources'} page @param {string} [issue] an earlier radar issue to open on */

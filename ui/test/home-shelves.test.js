@@ -120,4 +120,6 @@ test('a long issue offers its next papers, and says how many are left', async ()
   assert.equal(moreLabel(22), 'Show 8 more (22 left)');
   assert.equal(moreLabel(8), 'Show 8 more');
   assert.equal(moreLabel(3), 'Show 3 more');
+  assert.equal(moreLabel(5, 3), 'Show 3 more (5 left)');
+  assert.equal(moreLabel(1, 3), 'Show 1 more');
 });

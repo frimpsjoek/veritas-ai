@@ -222,7 +222,7 @@ p.sbw-prose { margin: 0 0 var(--sbw-s3); max-width: var(--measure); }
 /* ---- the in-app browser (spec 015 B3): a panel over the content area, closed like the full-screen views */
 .sbw-browser { position: absolute; inset: 0; z-index: 20; display: flex; flex-direction: column; min-width: 0; background: var(--sb-ui-bg); }
 .sbw-browser[hidden] { display: none; }
-.sbw-browser-bar { flex: none; display: flex; align-items: center; gap: var(--sbw-s1); box-sizing: border-box; min-height: 48px; padding: 0 var(--sbw-s3); border-bottom: 1px solid var(--sb-ui-line); }
+.sbw-browser-bar { flex: none; display: flex; align-items: center; gap: var(--sbw-s1); box-sizing: border-box; min-height: 48px; padding: 0 28px 0 var(--sbw-s3); /* the right side clears the server light */ border-bottom: 1px solid var(--sb-ui-line); }
 .sbw-browser-tool { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--sb-ui-muted); cursor: pointer; }
 .sbw-browser-tool:hover:not(:disabled) { background: var(--sb-ui-hover); color: var(--sb-ui-text); }
 .sbw-browser-tool:disabled { opacity: .35; cursor: default; }
@@ -251,12 +251,17 @@ p.sbw-prose { margin: 0 0 var(--sbw-s3); max-width: var(--measure); }
 .sbw-reader-links { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sbw-s2); margin: var(--sbw-s3) 0 0; font-family: var(--sb-ui-font); }
 .sbw-reader-links .sbw-quiet { margin: 0; font-family: var(--sb-ui-font); font-size: var(--sbw-t-small); }
 .sbw-reader-action { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 var(--sbw-s3); font: inherit; font-size: var(--sbw-t-small); font-weight: 500; }
-.sbw-reader-save { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--sbw-s1); }
-.sbw-reader-collection { box-sizing: border-box; max-width: 200px; min-height: 36px; padding: 0 var(--sbw-s2); border: 1px solid var(--sb-ui-line); border-radius: var(--sbw-r1); background: var(--sb-ui-control); color: var(--sb-ui-text); font: inherit; font-size: var(--sbw-t-small); }
-.sbw-reader-collection[hidden] { display: none; }
+/* Add to Zotero, split from its collection menu */
+.sbw-reader-save { align-items: stretch; }
+.sbw-reader-save > .sbw-reader-action { border-radius: var(--sbw-r1) 0 0 var(--sbw-r1); }
+.sbw-reader-chev { padding: 0 var(--sbw-s2); border-left: 0; border-radius: 0 var(--sbw-r1) var(--sbw-r1) 0; }
+/* From a radar issue: Like and Not for me, with what was decided once it is */
+.sbw-reader-teach { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sbw-s2); margin-top: var(--sbw-s3); color: var(--sb-ui-muted); font-family: var(--sb-ui-font); font-size: var(--sbw-t-small); }
+.sbw-reader-teach-note { color: var(--sb-ui-muted); font-size: 12px; }
+.sbw-browser .sbw-pdf-bar { flex-wrap: wrap; padding: var(--sbw-s2) var(--sbw-s3) 0; }
+.sbw-pdf-bar .sbw-reader-teach { margin-top: 0; }
 .sbw-browser-save { flex: none; }
-.sbw-browser-save .sbw-reader-save { flex-wrap: nowrap; }
-.sbw-browser-save .sbw-reader-collection { max-width: 140px; }
+.sbw-browser-save .sb-coll-pop { left: auto; right: 0; }
 /* A DOI's landing page (2026-10-29): line icons for "opens outside" and the citation, a graphical abstract only when
    one was found, the DOI and the access note under the abstract in the same prose family, smaller and muted. */
 .sbw-reader-links .sbw-quiet:has(.sb-p-icon) { display: inline-flex; align-items: center; gap: 5px; }
@@ -275,9 +280,10 @@ p.sbw-prose { margin: 0 0 var(--sbw-s3); max-width: var(--measure); }
 .sbw-browser-card { box-sizing: border-box; max-width: 420px; margin: 18vh auto 0; padding: var(--sbw-s4); text-align: center; }
 .sbw-browser-card-title { margin: 0 0 var(--sbw-s2); font-size: 18px; font-weight: 600; }
 @media (max-width: 480px) {
-  .sbw-browser-bar { gap: 0; padding: 0 var(--sbw-s2); }
+  .sbw-browser-bar { gap: 0; padding: 0 24px 0 var(--sbw-s2); }
   .sbw-browser-text { padding: 6px 6px; font-size: 12px; }
-  .sbw-browser-save .sbw-reader-collection { display: none; }
+  .sbw-browser-save .sb-coll { display: none; }
+  .sbw-browser-save .sbw-reader-action { border-radius: var(--sbw-r1); }
 }
 
 /* Open in Zotero / Obsidian: the app's own logo before the words */

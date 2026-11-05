@@ -76,7 +76,7 @@ export async function runHomeChecks(browser, port, outDir) {
         label: document.querySelector('.sbw-today-banner .sbw-cover-label')?.textContent,
         line: document.querySelector('.sbw-today-banner .sbw-cover-line')?.textContent,
         papers: [...document.querySelectorAll('.sbw-paper-title')].map((p) => p.textContent),
-        heads: [...document.querySelectorAll('.sbw-papers-head')].map((x) => x.textContent),
+        heads: [...document.querySelectorAll('.sbw-papers-head')].map((x) => x.firstChild.textContent),
         shelves: [...document.querySelectorAll('.sbw-shelf')].map((sh) => [sh.querySelector('.sbw-shelf-title')?.textContent, sh.querySelector('.sbw-shelf-count')?.textContent]),
         hrefs: document.querySelectorAll('.sb-home-view a[href]').length,
         links: document.querySelectorAll('.sb-home-view a[role="link"][tabindex="0"]').length,
