@@ -112,6 +112,20 @@ test('a ping saying ready: false is "starting"; no ready field at all means read
   light.stop();
 });
 
+test('a 503 from the ping is "starting" too: a phone or another origin gets that instead of ready: false', async () => {
+  const host = fakeHost(), clock = fakeClock();
+  const answered = host.json;
+  host.json = async () => { throw Object.assign(new Error('the server is starting; try again in a moment'), { status: 503 }); };
+  const light = serverLight(/** @type {any} */ (fakeDoc()), /** @type {any} */ (host), clock);
+  await flush();
+  assert.equal(/** @type {any} */ (light.root).classList.contains('is-starting'), true);
+  host.json = answered;
+  clock.tick?.();
+  await flush();
+  assert.equal(/** @type {any} */ (light.root).classList.contains('is-up'), true);
+  light.stop();
+});
+
 test('busy comes from the routines the host can list; a host without them is simply up', async () => {
   const host = fakeHost({ routines: [{ id: 'r', name: 'Reading radar', running: true }] }), clock = fakeClock();
   const light = serverLight(/** @type {any} */ (fakeDoc()), /** @type {any} */ (host), clock);

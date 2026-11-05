@@ -93,7 +93,12 @@ export function serverLight(doc, host, clock = globalThis) {
       const answer = /** @type {any} */ (await host.json('/ping'));
       answered = now();
       ready = answer?.ready !== false;
-    } catch { return; }
+    } catch (error) {
+      if (/** @type {any} */ (error)?.status !== 503) return;
+      // Only the Mac itself gets ready: false; a phone or a listed origin is told the same by a 503.
+      answered = now();
+      ready = false;
+    }
     if (routines && ready && host.ai) {
       try {
         const list = await (await host.ai()).routines?.list();
