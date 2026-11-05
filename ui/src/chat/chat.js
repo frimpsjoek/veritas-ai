@@ -28,7 +28,8 @@ import { ArtifactCard } from './artifact-card.js';
 import { ArtifactPanel, downloadResult } from './artifact-panel.js';
 import { openPopover, menuItem } from './popover.js';
 import { buildSwitcher, paintSwitcher, openRowMenu } from './projects-menu.js';
-import { filterEntries, emptyLine } from './projects-data.js';
+import { filterEntries, emptyLine, projectOf } from './projects-data.js';
+import { whereLabel, groupEntries, findEntries, noMatchLine, entryTitle, whenLabel, panelFoldsList } from './history-data.js';
 import { newsLabel, newsTitle } from './routines-data.js';
 import { KIND_NAME, KIND_ICON, hasGaps } from './artifact-data.js';
 import { describeOn, turnsOn } from './papers-chat-data.js';
@@ -201,20 +202,40 @@ export class ChatView {
     this.projectId = this.host.prefs.get('chatProject') || null;
     this.switcher = buildSwitcher(this);
     this.switcher.hidden = true; // shown once the engine says it has projects (an older server has none)
-    this.side.append(this.switcher, newChat, this.list);
+    this.listEntries = [];
+    this.side.append(this.switcher, newChat, this.buildFind(), this.list);
 
     const main = this.el('div', 'sb-ai-main');
     const head = this.head = this.el('div', 'sb-ai-head');
     this.historyToggle = this.el('button', 'sb-ai-history-toggle');
-    this.historyToggle.addEventListener('click', () => this.setHistoryCollapsed(!this.historyCollapsed));
+    this.historyToggle.setAttribute('type', 'button');
+    this.historyToggle.append(this.icon('panelLeft'));
+    // what is on screen decides: the web shell starts a phone with the list folded, without saving that as a choice
+    this.historyToggle.addEventListener('click', () => this.setHistoryCollapsed(!this.side.hidden));
     this.historyNewChat = button(this.doc, 'New chat', () => this.newChat());
     this.historyNewChat.className = 'sb-ai-history-newchat';
+    // the open session's name and, when it is in a project, "in <project>"; always shown, so the thread has a heading
     this.headerTitle = this.el('span', 'sb-ai-head-title');
+    this.headerName = this.el('span', 'sb-ai-head-name');
+    this.headerCrumb = this.el('span', 'sb-ai-head-crumb');
+    this.headerTitle.append(this.headerName, this.headerCrumb);
     this.where = this.el('span', 'sb-ai-where');
+    this.whereText = this.el('span', 'sb-ai-where-label');
+    this.where.append(this.el('span', 'sb-ai-where-dot'), this.whereText);
     this.artifactsButton = this.el('button', 'sb-ai-artifacts-button');
     this.artifactsButton.hidden = true;
     this.artifactsButton.addEventListener('click', (event) => { event.stopPropagation(); this.openArtifactList(); });
-    head.append(this.historyToggle, this.historyNewChat, this.headerTitle, this.where, this.artifactsButton);
+    // the results panel's own toggle, beside "Artifacts (N)": opens the newest result, or closes the panel
+    this.panelToggle = this.el('button', 'sb-ai-panel-toggle');
+    this.panelToggle.setAttribute('type', 'button');
+    this.panelToggle.hidden = true;
+    this.panelToggle.append(this.icon('panelRight'));
+    this.panelToggle.addEventListener('click', () => {
+      if (this.artifactOpen) { this.closeArtifact(); return; }
+      const newest = [...this.artifacts].sort((a, b) => (a.updated < b.updated ? 1 : -1))[0];
+      if (newest) void this.openArtifact(newest.ref);
+    });
+    head.append(this.historyToggle, this.historyNewChat, this.headerTitle, this.artifactsButton, this.panelToggle);
     if (this.host.openInTab) {
       const openInTab = this.el('button', 'sb-ai-open-tab', '⤢');
       openInTab.title = 'Open this chat in its own tab';
@@ -304,7 +325,8 @@ export class ChatView {
     this.send.addEventListener('click', () => (this.running ? this.stop() : this.submit()));
     this.box = box;
     this.localMenu = new LocalMenu(this);
-    row.append(modeWrap, this.sourceGroup, this.optionsButton, this.localMenu.button, this.el('span', 'sb-ed-spacer'), ...(this.skillsButton ? [this.skillsButton] : []), this.attachButton);
+    // "On this computer" sits here as a small dot and label, out of the header
+    row.append(modeWrap, this.sourceGroup, this.optionsButton, this.localMenu.button, this.el('span', 'sb-ed-spacer'), this.where, ...(this.skillsButton ? [this.skillsButton] : []), this.attachButton);
     // The send button lives beside the message box, never in the controls row: those wrap (a narrow pane, a wide
     // monospace font) and a wrapped send would take a row of its own.
     const inputRow = this.el('div', 'sb-ai-inputrow');
@@ -342,6 +364,22 @@ export class ChatView {
     this.narrow = new this.win.ResizeObserver(() => this.applyNarrow(root.clientWidth < 560));
     this.narrow.observe(root);
     return root;
+  }
+
+  /** "Find a chat": a filter over the titles already listed, no request. */
+  buildFind() {
+    this.listQuery = '';
+    this.listFailed = '';
+    const find = this.el('label', 'sb-ai-find');
+    const input = this.findInput = /** @type {HTMLInputElement} */ (this.el('input', 'sb-ai-find-input'));
+    input.type = 'search';
+    input.placeholder = 'Find a chat';
+    input.setAttribute('aria-label', 'Find a chat');
+    const apply = () => { this.listQuery = input.value.trim(); this.paintList(); };
+    input.addEventListener('input', apply);
+    input.addEventListener('keydown', (event) => { if (event.key === 'Escape' && input.value) { input.value = ''; apply(); } });
+    find.append(this.icon('find'), input);
+    return find;
   }
 
   /** Scope, years and thoroughness for a Research report; Find papers uses only the scope. Other modes hide the row. */
@@ -690,6 +728,7 @@ export class ChatView {
    *  "New chat" gets its own header button when the side panel (which normally holds it) is hidden. */
   setHistoryCollapsed(collapsed) {
     this.historyCollapsed = collapsed;
+    this.autoFolded = false; // the user's choice: closing the results panel leaves it as it is
     this.host.prefs.set('historyCollapsed', collapsed);
     this.applyHistoryCollapsed(collapsed);
   }
@@ -698,13 +737,10 @@ export class ChatView {
     this.root.classList.toggle('is-history-open', !collapsed);
     this.side.hidden = collapsed;
     this.historyNewChat.hidden = !collapsed;
-    this.headerTitle.hidden = !collapsed;
-    this.headerTitle.textContent = this.currentTitle;
     const label = collapsed ? 'Show chat history' : 'Hide chat history';
     this.historyToggle.title = label;
     this.historyToggle.setAttribute('aria-label', label);
     this.historyToggle.setAttribute('aria-expanded', String(!collapsed));
-    this.historyToggle.textContent = collapsed ? '▶' : '◀';
     this.applyArtifactLayout();
   }
 
@@ -722,7 +758,29 @@ export class ChatView {
 
   setHeaderTitle(title) {
     this.currentTitle = title || 'New chat';
-    if (this.historyCollapsed) this.headerTitle.textContent = this.currentTitle;
+    this.headerName.textContent = this.currentTitle;
+    this.paintHeaderCrumb();
+  }
+
+  /** "in <project>" after the title when the open chat or report belongs to one. */
+  paintHeaderCrumb() {
+    const entry = this.listEntries.find((e) => (e.kind === 'chat' && e.conversation.id === this.sessionID) || (e.kind === 'report' && e.progress.id === this.reviewID));
+    // a chat opened before the list arrived (a link) gets its name here
+    if (entry?.kind === 'chat') { this.currentTitle = entry.conversation.title; this.headerName.textContent = this.currentTitle; }
+    const id = entry ? projectOf(entry.kind === 'chat' ? entry.conversation : entry.progress, this.projects.map((p) => p.id)) : null;
+    const project = this.projects.find((p) => p.id === id);
+    this.headerCrumb.textContent = project ? `in ${project.name}` : '';
+    this.headerCrumb.hidden = !project;
+  }
+
+  /** The dot and label in the composer row. `where` null: no answer from the engine, so the dot says so and the last label stays.
+   *  @param {string | null} where */
+  paintWhere(where) {
+    if (where) this.whereKind = where;
+    const label = this.whereKind ? whereLabel(this.whereKind) : 'Not connected';
+    this.whereText.textContent = label;
+    this.where.classList.toggle('is-off', !where);
+    this.where.title = where ? label : "Can't reach the server";
   }
 
   get modeInfo() {
@@ -964,15 +1022,21 @@ export class ChatView {
       ai = await this.host.ai();
     } catch (error) {
       this.host.logError(error);
+      this.listFailed = String(/** @type {any} */ (error)?.message ?? error) || 'no answer';
+      this.paintWhere(null);
+      this.paintList();
       return;
     }
     this.engineCanFill = Boolean(ai.sessions?.run && ai.sessions?.estimate && ai.sessions?.events);
     this.engineCanReport = Boolean(ai.reviews?.answer); // pipeline 2 (spec 007 E7): clarify cards and reports written from a table
-    this.where.textContent = ai.where === 'server' ? 'Runs on the Veritas server' : 'Runs on this computer';
     this.canProject = Boolean(ai.projects);
-    const [conversations, reviews, searches, projects] = await Promise.all([ai.conversations.list().catch(() => []),
+    /** @type {any} */ let failed = null; // the chats could not be listed: the list says so instead of looking empty, and keeps the ones it had
+    const [conversations, reviews, searches, projects] = await Promise.all([ai.conversations.list().catch((error) => { failed = error; return this.listedChats ?? []; }),
       Promise.resolve().then(() => ai.reviews.list()).catch(() => []), FindView.list(this.host).catch(() => []),
       this.canProject ? ai.projects.list().catch(() => this.projects) : []]);
+    this.listFailed = failed ? String(failed?.message ?? failed) || 'no answer' : '';
+    if (failed) this.host.logError(failed); else this.listedChats = conversations;
+    this.paintWhere(failed ? null : ai.where);
     this.projects = projects;
     this.newsById = new Map(conversations.filter((x) => x.news).map((x) => [x.id, x.news])); // the Routines view reads this
     if (this.projectId && !projects.some((p) => p.id === this.projectId)) this.setProject(null, { refresh: false }); // its project is gone
@@ -987,17 +1051,47 @@ export class ChatView {
       ...shown.searches.map((search) => ({ kind: 'find', at: search.at, search })),
     ].sort((a, b) => (a.at < b.at ? 1 : -1));
     const known = projects.map((p) => p.id);
+    this.listEntries = all;
+    this.paintHeaderCrumb();
     const entries = filterEntries(all, this.projectId, known);
     this.recent = this.recent.filter((c) => entries.some((e) => e.kind === 'chat' && e.conversation.id === c.id));
+    this.paintList();
+    if (this.thread.querySelector('.sb-ai-empty')) this.renderSuggestions();
+    this.renderAddStep();
+  }
+
+  /** Draws the history from what refreshList last fetched: the open project, then "Find a chat", under day headings. */
+  paintList() {
+    const known = this.projects.map((p) => p.id);
+    const entries = findEntries(filterEntries(this.listEntries, this.projectId, known), this.listQuery);
     this.list.replaceChildren();
-    if (!entries.length) this.list.append(this.el('div', 'sb-muted sb-ai-list-empty', emptyLine(projects.find((p) => p.id === this.projectId))));
-    for (const entry of entries) {
-      this.list.append(entry.kind === 'chat' ? this.chatRow(entry.conversation) : entry.kind === 'find' ? this.findRow(entry.search) : this.reportRow(entry.progress));
+    if (this.listFailed) this.list.append(this.listFailure());
+    else if (!entries.length) this.list.append(this.el('div', 'sb-muted sb-ai-list-empty', this.listQuery ? noMatchLine(this.listQuery) : emptyLine(this.projects.find((p) => p.id === this.projectId))));
+    for (const group of groupEntries(entries)) {
+      const heading = this.el('div', 'sb-ai-list-day', group.label);
+      heading.setAttribute('role', 'heading');
+      heading.setAttribute('aria-level', '3');
+      this.list.append(heading);
+      for (const entry of group.entries) {
+        this.list.append(entry.kind === 'chat' ? this.chatRow(entry.conversation) : entry.kind === 'find' ? this.findRow(entry.search) : this.reportRow(entry.progress));
+      }
     }
     this.markSelected();
-    if (this.thread.querySelector('.sb-ai-empty')) this.renderSuggestions();
     this.markRunning();
-    this.renderAddStep();
+  }
+
+  /** The list's own line when the chats can't be fetched: never "Your chats and reports appear here", which would read as none. */
+  listFailure() {
+    const box = this.el('div', 'sb-ai-list-failed');
+    box.setAttribute('role', 'alert');
+    box.title = this.listFailed;
+    const line = this.el('div', 'sb-ai-list-failed-line');
+    line.append(this.icon('alert'), this.el('span', '', "Can't reach the server"));
+    const retry = this.el('button', 'sb-ai-list-retry', 'Try again');
+    retry.setAttribute('type', 'button');
+    retry.addEventListener('click', () => this.refreshList());
+    box.append(line, retry);
+    return box;
   }
 
   /** Is this session's step running right now (the one open here)? A quiet dot, as reports have their status. */
@@ -1011,30 +1105,37 @@ export class ChatView {
     row.dataset.id = conversation.search ? conversation.search.id : conversation.id;
     row.dataset.session = conversation.id;
     if (conversation.search) row.classList.add('is-find');
-    const text = this.el('div', 'sb-ai-conv-text');
-    const titleRow = this.el('div', 'sb-ai-conv-titlerow');
-    titleRow.append(this.el('div', 'sb-ai-conv-title', conversation.title), ...this.newsBadge(conversation));
-    text.append(titleRow, this.el('div', 'sb-ai-conv-date', this.when(conversation.updated)));
-    const remove = this.el('button', 'sb-ai-conv-x', '×');
-    remove.title = conversation.search ? 'Delete this search' : 'Delete this chat';
-    remove.addEventListener('click', (event) => { event.stopPropagation(); this.remove(conversation); });
-    row.append(this.icon(SESSION_KIND_ICON[conversation.search ? 'find' : conversation.kind ?? 'chat'] ?? 'chat'), text);
+    const meta = [this.el('span', 'sb-ai-conv-date', this.when(conversation.updated)), ...this.newsBadge(conversation)];
     if (conversation.routine) {
       const made = this.icon('clock', 'sb-ai-icon sb-ai-conv-routine');
       made.append(Object.assign(this.doc.createElementNS(SVG_NS, 'title'), { textContent: 'Made by a routine' }));
-      row.append(made);
+      meta.push(made);
     }
     if (conversation.artifacts > 0) {
       const count = this.el('span', 'sb-ai-conv-count', String(conversation.artifacts));
       count.title = artifactsWord(conversation.artifacts);
-      row.append(count);
+      meta.push(count);
     }
-    row.append(this.el('span', 'sb-ai-conv-dot'), ...this.moreButton({ kind: 'chat', conversation }, row), remove);
+    row.append(this.rowOpener(SESSION_KIND_ICON[conversation.search ? 'find' : conversation.kind ?? 'chat'] ?? 'chat', conversation.title, meta),
+      this.el('span', 'sb-ai-conv-dot'), ...this.moreButton({ kind: 'chat', conversation }, row));
     row.addEventListener('contextmenu', (event) => { event.preventDefault(); openRowMenu(this, { kind: 'chat', conversation }, row); });
     row.addEventListener('click', () => this.openSession(conversation));
     row.addEventListener('dblclick', () => this.rename(conversation));
     row.title = 'Double-click to rename';
     return row;
+  }
+
+  /** A row's one real control: its icon and text as a button, so Tab and Enter reach it. A click bubbles to the row's
+   *  own listener, which also takes clicks on the row's padding. @param {string} iconName @param {string} title @param {Node[]} meta */
+  rowOpener(iconName, title, meta) {
+    const open = this.el('button', 'sb-ai-conv-open');
+    open.setAttribute('type', 'button');
+    const text = this.el('span', 'sb-ai-conv-text');
+    const line = this.el('span', 'sb-ai-conv-meta');
+    line.append(...meta);
+    text.append(this.el('span', 'sb-ai-conv-title', title), line);
+    open.append(this.icon(iconName), text);
+    return open;
   }
 
   /** The small "N new" badge for a session a routine added papers to since it was last opened ([] when there is none). */
@@ -1084,11 +1185,9 @@ export class ChatView {
   reportRow(progress) {
     const row = this.el('div', `sb-ai-conv is-report is-${progress.status.state}`);
     row.dataset.id = progress.id;
-    const text = this.el('div', 'sb-ai-conv-text');
     const date = progress.started ? ` · ${this.when(progress.started)}` : '';
-    text.append(this.el('div', 'sb-ai-conv-title', progress.question || 'Research report'),
-      this.el('div', 'sb-ai-conv-date', ReportView.statusLine(progress) + date));
-    row.append(this.icon('report'), text, ...this.moreButton({ kind: 'report', progress }, row));
+    row.append(this.rowOpener('report', progress.question || 'Research report', [this.el('span', 'sb-ai-conv-date', ReportView.statusLine(progress) + date)]),
+      ...this.moreButton({ kind: 'report', progress }, row));
     row.addEventListener('contextmenu', (event) => { event.preventDefault(); openRowMenu(this, { kind: 'report', progress }, row); });
     row.addEventListener('click', () => this.openReport(progress.id, progress.question));
     return row;
@@ -1097,29 +1196,33 @@ export class ChatView {
   findRow(search) {
     const row = this.el('div', 'sb-ai-conv is-find');
     row.dataset.id = search.id;
-    const text = this.el('div', 'sb-ai-conv-text');
-    text.append(this.el('div', 'sb-ai-conv-title', search.query), this.el('div', 'sb-ai-conv-date', `${search.count} papers · ${this.when(search.at)}`));
-    const remove = this.el('button', 'sb-ai-conv-x', '×');
-    remove.title = 'Delete this search';
-    remove.addEventListener('click', async (event) => {
-      event.stopPropagation();
-      if (!(await this.host.confirm(`Delete "${search.query}"? This can't be undone.`, { title: 'Delete search' }))) return;
-      try { // its stored result goes with it, or the session would stay behind, unlisted
-        const session = (await FindView.load(this.host, search.id)).session;
-        if (session) await (await this.host.ai()).conversations.remove(session);
-      } catch (error) { this.host.logError(error); }
-      await FindView.remove(this.host, search.id);
-      if (this.findID === search.id) this.setMode('find');
-      ChatView.refreshAll();
-    });
-    row.append(this.icon('find'), text, remove);
+    row.append(this.rowOpener('find', search.query, [this.el('span', 'sb-ai-conv-date', `${search.count} papers · ${this.when(search.at)}`)]),
+      ...this.moreButton({ kind: 'find', search }, row));
+    row.addEventListener('contextmenu', (event) => { event.preventDefault(); openRowMenu(this, { kind: 'find', search }, row); });
     row.addEventListener('click', () => this.openFind(search.id));
     return row;
   }
 
+  /** @param {{ id: string, query: string }} search a saved search with no session in the list */
+  async removeFind(search) {
+    if (!(await this.host.confirm(`Delete "${search.query}"? This can't be undone.`, { title: 'Delete search' }))) return;
+    try { // its stored result goes with it, or the session would stay behind, unlisted
+      const session = (await FindView.load(this.host, search.id)).session;
+      if (session) await (await this.host.ai()).conversations.remove(session);
+    } catch (error) { this.host.logError(error); }
+    await FindView.remove(this.host, search.id);
+    if (this.findID === search.id) this.setMode('find');
+    ChatView.refreshAll();
+  }
+
   markSelected() {
     const open = new Set([this.conversationID, this.reviewID, this.findID, this.sessionID].filter(Boolean));
-    for (const row of this.list?.children ?? []) row.classList.toggle('is-selected', open.has(row.dataset.id) || open.has(row.dataset.session));
+    for (const row of this.list?.children ?? []) {
+      const selected = open.has(row.dataset.id) || open.has(row.dataset.session);
+      row.classList.toggle('is-selected', selected);
+      const opener = row.querySelector(':scope > .sb-ai-conv-open');
+      if (selected) opener?.setAttribute('aria-current', 'true'); else opener?.removeAttribute('aria-current');
+    }
   }
 
   /** The quiet dot on the open session's row while one of its steps runs. */
@@ -1131,9 +1234,7 @@ export class ChatView {
   }
 
   when(iso) {
-    const date = new Date(iso);
-    const today = new Date().toDateString() === date.toDateString();
-    return today ? date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : date.toLocaleDateString();
+    return whenLabel(iso);
   }
 
   /** What's open, so another view can show the same thing ("Open in a tab"). */
@@ -1178,7 +1279,8 @@ export class ChatView {
     const more = this.el('button', 'sb-ai-conv-more');
     more.setAttribute('type', 'button');
     more.title = 'More';
-    more.setAttribute('aria-label', 'More');
+    more.setAttribute('aria-label', `More for ${entryTitle(entry)}`);
+    more.setAttribute('aria-haspopup', 'menu');
     more.append(this.icon('more'));
     more.addEventListener('click', (event) => { event.stopPropagation(); openRowMenu(this, entry, more); });
     return [more];
@@ -1220,7 +1322,10 @@ export class ChatView {
 
   renameEntry(entry) { if (entry.kind === 'chat') this.rename(entry.conversation); }
 
-  deleteEntry(entry) { if (entry.kind === 'chat') this.remove(entry.conversation); }
+  deleteEntry(entry) {
+    if (entry.kind === 'chat') this.remove(entry.conversation);
+    else if (entry.kind === 'find') void this.removeFind(entry.search);
+  }
 
   async remove(conversation) {
     if (!(await this.host.confirm(`Delete "${conversation.title}"? This can't be undone.`, { title: conversation.search ? 'Delete search' : 'Delete chat' }))) return;
@@ -1241,7 +1346,7 @@ export class ChatView {
     this.resetArtifacts();
     this.sessionID = id;
     this.markSeen(id);
-    this.setHeaderTitle(this.list.querySelector(`[data-id="${id}"] .sb-ai-conv-title`)?.textContent);
+    this.setHeaderTitle(entryTitle(this.listEntries.find((e) => e.kind === 'chat' && e.conversation.id === id) ?? { kind: 'chat' }));
     this.markSelected();
     const ai = await this.host.ai();
     const records = await ai.conversations.load(id);
@@ -1434,6 +1539,7 @@ export class ChatView {
     const panel = this.ensurePanel();
     if (!this.artifactOpen) this.threadScroll = this.scroller.scrollTop;
     this.artifactOpen = true;
+    this.foldListForPanel();
     this.artifactPane.hidden = false;
     this.applyArtifactLayout();
     await panel.open(`review:${review}`, { id: 'screening' }, 1);
@@ -1488,6 +1594,7 @@ export class ChatView {
     this.input.value = '';
     this.fitInput();
     this.renderSend();
+    const attached = this.attachments;
     this.attachments = [];
     this.skills = [];
     this.renderChips();
@@ -1498,7 +1605,7 @@ export class ChatView {
     const on = current?.kind === 'papers' ? { result: { id: current.ref.id, version: current.ref.version }, rows: 'all' } : null;
     const user = this.addUser(text, attachments, on ? { skills, on } : { skills });
     const turn = this.addAnswer();
-    turn.retry = { run: () => this.resendAfterSwitch(text, this.mode) };
+    turn.retry = { run: () => { this.attachments = [...attached, ...this.attachments]; this.skills = skills; this.renderChips(); return this.resendAfterSwitch(text, this.mode); } };
     this.startLive(turn);
     this.reserveSpace(user, turn.root);
     this.follower.follow();
@@ -1583,7 +1690,7 @@ export class ChatView {
       this.renderActivities(turn);
     } else if (event.type === 'notice' && event.kind === 'rate_limit') {
       if (!this.reportOptions.hidden) void this.refreshUsage();
-      if (primary) this.where.textContent = `${this.where.textContent.split(' · ')[0]} · ${event.text}`;
+      if (primary) { this.whereText.textContent = `${this.whereText.textContent.split(' · ')[0]} · ${event.text}`; this.where.title = event.text; }
     } else if (event.type === 'notice') {
       turn.notice.textContent = event.text;
     } else if (event.type === 'result') {
@@ -1948,6 +2055,15 @@ export class ChatView {
     turn.text = box;
     // The chosen AI is not installed: offer the ones that are ready. Only a turn asked just now knows its question (`retry`).
     if (error.kind === NOT_INSTALLED && turn.retry) void offerSwitch(this, box, turn.retry.run);
+    else if (turn.retry) box.append(this.tryAgainButton(turn.retry.run));
+  }
+
+  /** Asks the failed question again, once, as a new turn under this one. @param {() => any} run */
+  tryAgainButton(run) {
+    const again = /** @type {HTMLButtonElement} */ (this.el('button', 'sb-ai-error-again', 'Try again'));
+    again.setAttribute('type', 'button');
+    again.addEventListener('click', () => { again.disabled = true; void run(); });
+    return again;
   }
 
   /** `force` jumps to the end and follows from there; otherwise pins only if the thread is following. */
@@ -2001,6 +2117,7 @@ export class ChatView {
     this.artifactsButton.hidden = n === 0;
     this.artifactsButton.textContent = `Artifacts (${n})`;
     this.artifactsButton.title = 'The tables and paper sets in this chat';
+    this.paintPanelToggle();
     this.renderCurrent();
     this.renderAddStep();
   }
@@ -2078,6 +2195,7 @@ export class ChatView {
     const panel = this.ensurePanel();
     if (!this.artifactOpen) this.threadScroll = this.scroller.scrollTop;
     this.artifactOpen = true;
+    this.foldListForPanel();
     this.artifactPane.hidden = false;
     this.applyArtifactLayout();
     const latest = this.artifacts.find((a) => a.ref.id === ref.id)?.ref.version;
@@ -2089,8 +2207,26 @@ export class ChatView {
     this.artifactOpen = false;
     this.artifactExpanded = false;
     this.artifactPane.hidden = true;
+    if (this.autoFolded) { this.autoFolded = false; this.historyCollapsed = false; this.applyHistoryCollapsed(false); }
     this.applyArtifactLayout();
     if (this.threadScroll != null) this.scroller.scrollTop = this.threadScroll; // the thread was hidden, not rebuilt
+  }
+
+  /** The panel needs the history list's room when the chat is short of it. The fold is not saved: closing the panel brings
+   *  the list back, unless the user folded it themselves. */
+  foldListForPanel() {
+    if (this.historyCollapsed || !panelFoldsList(this.root.clientWidth)) return;
+    this.autoFolded = true;
+    this.historyCollapsed = true;
+    this.applyHistoryCollapsed(true);
+  }
+
+  paintPanelToggle() {
+    const label = this.artifactOpen ? 'Close the results panel' : 'Open the results panel';
+    this.panelToggle.hidden = this.artifacts.length === 0;
+    this.panelToggle.title = label;
+    this.panelToggle.setAttribute('aria-label', label);
+    this.panelToggle.setAttribute('aria-expanded', String(Boolean(this.artifactOpen)));
   }
 
   /** spec 007 §4 "Widths": side by side from 960 px, over the thread from 560, full view below. */
@@ -2106,6 +2242,7 @@ export class ChatView {
     this.root.classList.toggle('has-artifact', open);
     for (const m of ['side', 'cover', 'full']) this.root.classList.toggle(`is-art-${m}`, open && mode === m);
     this.root.classList.toggle('is-art-expanded', expanded);
+    if (this.panelToggle) this.paintPanelToggle();
     this.panel?.setLayout(mode, expanded);
     if (open && mode === 'side' && !expanded) this.artifactPane.style.width = `${this.clampArtifactWidth(this.host.prefs.get('artifactWidth'))}px`;
     else this.artifactPane.style.width = '';
@@ -2608,22 +2745,39 @@ tab-content:has(> .sb-ai) { display: flex; }
 .sb-ai-new { align-self: stretch; }
 .sb-ai-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
 .sb-ai-list-empty { padding: 4px 6px; }
+.sb-ai-find { display: flex; align-items: center; gap: 6px; padding: 0 8px; border: 1px solid var(--sb-ui-line); border-radius: 6px; background: var(--sb-ui-bg); color: var(--sb-ui-muted); }
+.sb-ai-find:focus-within { border-color: var(--sb-ui-accent); }
+.sb-ai-find > .sb-ai-icon { width: 14px; height: 14px; }
+.sb-ai .sb-ai-find-input { flex: 1; min-width: 0; height: 28px; min-height: 0; padding: 0; border: none; border-radius: 0; background: transparent; box-shadow: none; outline: none; color: var(--sb-ui-text); font: inherit; }
+.sb-ai-list-day { padding: 10px 6px 3px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--sb-ui-faint); }
+.sb-ai-list-day:first-child { padding-top: 2px; }
+.sb-ai-list-failed { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 8px; margin-bottom: 4px; border: 1px solid var(--sb-ui-line); border-radius: 6px; background: var(--sb-ui-bg); }
+.sb-ai-list-failed-line { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.sb-ai-list-failed-line > .sb-ai-icon { color: var(--sb-ui-danger); }
+.sb-ai .sb-ai-list-retry { height: auto; min-height: 0; padding: 3px 10px; border: 1px solid var(--sb-ui-line); border-radius: 999px; background: transparent; box-shadow: none; color: var(--sb-ui-text); font: inherit; font-size: 12px; cursor: pointer; }
+.sb-ai .sb-ai-list-retry:hover { background: var(--sb-ui-hover); }
 .sb-ai-conv { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 6px; }
-.sb-ai-conv > .sb-ai-icon { width: 14px; height: 14px; opacity: .6; }
+.sb-ai-conv { cursor: pointer; }
+/* .sb-ai in front: Obsidian's button rule would otherwise give this a fill, a shadow and a fixed height */
+.sb-ai .sb-ai-conv-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; height: auto; min-height: 0; padding: 0; border: none; border-radius: 4px; background: transparent; box-shadow: none; color: inherit; font: inherit; text-align: start; cursor: pointer; white-space: normal; }
+.sb-ai .sb-ai-conv-open:focus-visible { outline: 2px solid var(--sb-ui-accent); outline-offset: 2px; }
+.sb-ai-conv-open > .sb-ai-icon { width: 14px; height: 14px; opacity: .6; }
 .sb-ai-conv:hover { background: var(--sb-ui-hover); }
-.sb-ai-conv.is-selected { background: var(--sb-ui-accent); color: var(--sb-ui-on-accent); }
-.sb-ai-conv-text { flex: 1; min-width: 0; }
-.sb-ai-conv-titlerow { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.sb-ai-conv-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.sb-ai-conv.is-selected { background: var(--sb-ui-accent-tint); }
+.sb-ai-conv-text { flex: 1; min-width: 0; display: block; }
+.sb-ai-conv-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.sb-ai-conv.is-selected .sb-ai-conv-title { font-weight: 600; }
+.sb-ai-conv-meta { display: flex; align-items: center; gap: 6px; min-width: 0; margin-top: 1px; }
+.sb-ai .sb-ai-conv-meta .sb-ai-conv-count, .sb-ai .sb-ai-conv-meta .sb-ai-conv-routine { margin-inline-start: 0; }
+.sb-ai .sb-ai-conv-meta .sb-ai-icon { width: 12px; height: 12px; }
 .sb-ai .sb-ai-news { flex: none; padding: 0 6px; border-radius: 8px; font-size: 10.5px; line-height: 16px; font-weight: 600; white-space: nowrap; background: var(--sb-ui-accent); color: var(--sb-ui-on-accent); }
-.sb-ai-conv.is-selected .sb-ai-news { background: var(--sb-ui-on-accent); color: var(--sb-ui-accent); }
-.sb-ai-conv-date { font-size: 11.5px; opacity: .7; }
+.sb-ai-conv-date { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; opacity: .7; }
 /* .sb-ai in front: Obsidian's button rule (button:not(.clickable-icon)) would otherwise give these a grey box that is always shown */
-.sb-ai .sb-ai-conv-x, .sb-ai .sb-ai-conv-more, .sb-ai .sb-ai-chip-x { border: none; background: none; box-shadow: none; height: auto; min-height: 0; color: inherit; font: inherit; cursor: pointer; opacity: 0; padding: 0 4px; }
-/* At rest the row actions take no width, so a title gets the whole row; they open on hover or keyboard focus. */
-.sb-ai .sb-ai-conv .sb-ai-conv-x, .sb-ai .sb-ai-conv .sb-ai-conv-more { max-width: 0; padding: 0; overflow: hidden; flex: none; }
-.sb-ai .sb-ai-conv:hover .sb-ai-conv-x, .sb-ai .sb-ai-conv:hover .sb-ai-conv-more,
-.sb-ai .sb-ai-conv:focus-within .sb-ai-conv-x, .sb-ai .sb-ai-conv:focus-within .sb-ai-conv-more { opacity: .7; max-width: 24px; padding: 0 4px; }
+.sb-ai .sb-ai-conv-more, .sb-ai .sb-ai-chip-x { border: none; background: none; box-shadow: none; height: auto; min-height: 0; color: inherit; font: inherit; cursor: pointer; opacity: 0; padding: 0 4px; }
+/* At rest the row's "..." takes no width, so a title gets the whole row; it opens on hover or keyboard focus, and stays on a touch screen. */
+.sb-ai .sb-ai-conv .sb-ai-conv-more { max-width: 0; padding: 0; overflow: hidden; flex: none; }
+.sb-ai .sb-ai-conv:hover .sb-ai-conv-more, .sb-ai .sb-ai-conv:focus-within .sb-ai-conv-more { opacity: .7; max-width: 24px; padding: 0 4px; }
+@media (hover: none) { .sb-ai .sb-ai-conv .sb-ai-conv-more { opacity: .7; max-width: 24px; padding: 0 4px; } }
 .sb-ai-conv-more .sb-ai-icon { width: 14px; height: 14px; }
 .sb-ai-side { position: relative; }
 /* Projects (spec 011 U5): one quiet switcher row; the actions sit behind menus */
@@ -2649,12 +2803,17 @@ tab-content:has(> .sb-ai) { display: flex; }
 .sb-ai .sb-ai-chip-x, .sb-ai .sb-ai-picker-item, .sb-ai .sb-ai-picker-more { background: transparent; }
 .sb-ai-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .sb-ai-head { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--sb-ui-line); }
-.sb-ai-history-toggle { border: none; background: transparent; color: var(--sb-ui-muted); font: inherit; font-size: 13px;
-	line-height: 1; padding: 4px 6px; border-radius: 5px; cursor: pointer; }
-.sb-ai-history-toggle:hover { background: var(--sb-ui-hover); color: var(--sb-ui-text); }
-.sb-ai-history-newchat[hidden], .sb-ai-head-title[hidden] { display: none; }
-.sb-ai-head-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--sb-ui-muted); font-size: 12px; max-width: 220px; }
-.sb-ai-where { margin-inline-start: auto; font-size: 11px; color: var(--sb-ui-muted); }
+.sb-ai .sb-ai-history-toggle, .sb-ai .sb-ai-panel-toggle { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; min-height: 0; padding: 0; border: none; border-radius: 6px;
+	background: transparent; box-shadow: none; color: var(--sb-ui-muted); cursor: pointer; }
+.sb-ai .sb-ai-history-toggle:hover, .sb-ai .sb-ai-panel-toggle:hover { background: var(--sb-ui-hover); color: var(--sb-ui-text); }
+.sb-ai-history-newchat[hidden] { display: none; }
+.sb-ai-head-title { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; white-space: nowrap; }
+.sb-ai-head-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.sb-ai-head-crumb { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; color: var(--sb-ui-muted); font-size: 12px; }
+.sb-ai-where { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 240px; font-size: 11px; color: var(--sb-ui-muted); white-space: nowrap; }
+.sb-ai-where-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sb-ai-where-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--sb-ui-ok); }
+.sb-ai-where.is-off .sb-ai-where-dot { box-sizing: border-box; background: transparent; border: 1.5px solid var(--sb-ui-danger); }
 .sb-ai-scroll { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
 .sb-ai-thread { flex: 1 0 auto; box-sizing: border-box; width: 100%; max-width: 760px; margin: 0 auto; padding: 20px 24px 12px;
 	display: flex; flex-direction: column; gap: 14px; }
@@ -2723,6 +2882,9 @@ tab-content:has(> .sb-ai) { display: flex; }
 .sb-ai-badge { align-self: flex-start; font-size: 11.5px; padding: 1px 6px; border-radius: 6px; background: var(--sb-ui-line); color: var(--sb-ui-muted); }
 .sb-ai-notice { font-size: 11.5px; color: var(--sb-ui-muted); }
 .sb-ai-error { padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--sb-ui-danger) 12%, transparent); }
+.sb-ai .sb-ai-error-again { display: block; height: auto; min-height: 0; margin-top: 8px; padding: 3px 10px; border: 1px solid var(--sb-ui-line); border-radius: 999px; background: transparent; box-shadow: none; color: var(--sb-ui-text); font: inherit; font-size: 12px; cursor: pointer; }
+.sb-ai .sb-ai-error-again:hover { background: var(--sb-ui-hover); }
+.sb-ai .sb-ai-error-again[disabled] { opacity: .5; cursor: default; }
 .sb-ai-composer { padding: 4px 24px 16px; }
 .sb-ai-composer-inner { max-width: 712px; margin: 0 auto; display: flex; flex-direction: column; gap: 6px; }
 .sb-ai-box { display: flex; flex-direction: column; gap: 8px; padding: 12px 12px 10px 14px; border-radius: 18px;
@@ -2742,7 +2904,8 @@ tab-content:has(> .sb-ai) { display: flex; }
 .sb-ai-modewrap { position: relative; display: inline-flex; align-items: center; }
 .sb-ai-modeicon { position: absolute; inset-inline-start: 9px; display: flex; pointer-events: none; color: var(--sb-ui-text); }
 .sb-ai-modeicon > .sb-ai-icon { width: 14px; height: 14px; }
-.sb-ai-modepick { appearance: none; font: inherit; font-weight: 600; color: var(--sb-ui-text); cursor: pointer;
+/* as wide as the chosen mode, not the longest one, so the controls stay on one line (a browser without field-sizing keeps the old width) */
+.sb-ai-modepick { appearance: none; field-sizing: content; font: inherit; font-weight: 600; color: var(--sb-ui-text); cursor: pointer;
 	padding: 4px 22px 4px 28px; border-radius: 999px; border: 1px solid var(--sb-ui-line); background-color: var(--sb-ui-line);
 	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%23888'/%3E%3C/svg%3E");
 	background-repeat: no-repeat; background-position: right 8px center; }
@@ -2841,7 +3004,7 @@ tab-content:has(> .sb-ai) { display: flex; }
 .sb-ai.is-narrow .sb-ai-side { position: absolute; inset: 0 auto auto 0; width: min(320px, 85%); max-height: 70%; z-index: 3;
 	box-shadow: var(--sb-ui-shadow); border-inline-end: none; border-bottom: 1px solid var(--sb-ui-line); }
 .sb-ai.is-narrow .sb-ai-head { gap: 4px; padding: 6px 8px; }
-.sb-ai.is-narrow .sb-ai-head-title { flex: 1; min-width: 0; max-width: none; }
+.sb-ai.is-narrow .sb-ai-where-label { display: none; }
 .sb-ai.is-narrow .sb-ai-history-newchat { min-width: 26px; padding: 2px 6px; font-size: 15px; line-height: 1; }
 .sb-ai.is-narrow .sb-ai-open-tab { margin-inline-start: auto; }
 .sb-ai.is-narrow .sb-ai-thread { padding: 12px 12px 8px; gap: 10px; }

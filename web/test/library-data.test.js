@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { rowOfItem, rowOfHit, sortRows, nextSort, visibleRange, treeRows, ancestorsOf, chipLabel, contextOf } from '../src/library-data.js';
+import { rowOfItem, rowOfHit, sortRows, nextSort, visibleRange, treeRows, ancestorsOf, crumbPath, searchLine, searchingLine, searchPlaceholder, parseStored, staleLine, chipLabel, contextOf } from '../src/library-data.js';
 import { parseRoute, formatRoute } from '../../ui/src/sources/route.js';
 import { protectMath, readerMarkdown, withoutFrontMatter, withoutComments, linkWikiTargets, noteFragment, authorLine, routeOfPath, openRefHandler } from '../../ui/src/sources/view-kit.js';
 
@@ -60,6 +60,30 @@ test('treeRows: name sorted, children only under open nodes, orphans at the top'
 test('ancestorsOf lists the chain to the root', () => {
   assert.deepEqual(ancestorsOf(nodes, 'G'), ['C0', 'P']);
   assert.deepEqual(ancestorsOf(nodes, 'P'), []);
+});
+
+test('crumbPath: root first, the collection itself last; an unknown key is shown by its key alone', () => {
+  assert.deepEqual(crumbPath(nodes, 'G').map((n) => n.name), ['Physics', 'A child', 'Grandchild']);
+  assert.deepEqual(crumbPath(nodes, 'P').map((n) => n.key), ['P']);
+  assert.deepEqual(crumbPath(nodes, 'NOPE'), [{ key: 'NOPE', name: 'NOPE' }]);
+  assert.deepEqual(crumbPath(nodes, null), []);
+});
+
+test('searchLine: the count with its query, "+" at the limit, "in <collection>" when scoped, and the no-match line', () => {
+  assert.equal(searchLine({ query: 'voles', count: 1, limit: 100 }), '1 paper for “voles”');
+  assert.equal(searchLine({ query: 'voles', count: 100, limit: 100 }), '100+ papers for “voles”');
+  assert.equal(searchLine({ query: 'voles', count: 12, limit: 100, collectionName: '2D materials' }), '12 papers for “voles” in 2D materials');
+  assert.equal(searchLine({ query: 'zzzz', count: 0, limit: 100 }), 'No papers match “zzzz”.');
+  assert.equal(searchLine({ query: 'zzzz', count: 0, limit: 100, collectionName: 'Physics' }), 'No papers match “zzzz” in Physics.');
+});
+
+test('staleLine names the time of the stored copy, or the day when it is older', () => {
+  const now = new Date(2026, 9, 29, 15, 0);
+  const today = new Date(2026, 9, 29, 9, 40).toISOString();
+  assert.equal(staleLine(today, now), `Showing the copy saved at ${new Date(today).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}; the server isn't answering.`);
+  const earlier = new Date(2026, 9, 2, 9, 40).toISOString();
+  assert.equal(staleLine(earlier, now), `Showing the copy saved on ${new Date(earlier).toLocaleDateString([], { month: 'short', day: 'numeric' })}; the server isn't answering.`);
+  assert.equal(staleLine(null, now), "Showing a saved copy; the server isn't answering.");
 });
 
 test('ticked rows become chat context chips', () => {
@@ -147,4 +171,21 @@ test('protectMath: $$…$$ inside a sentence stays inline; on its own line it is
   const out = protectMath('variations $$|\\psi^1\\rangle$$ under a perturbation\n$$E = mc^2$$\nend');
   assert.deepEqual(out.formulas.map((f) => [f.tex, f.display]), [['|\\psi^1\\rangle', false], ['E = mc^2', true]]);
   assert.match(out.markdown, /^variations SBMATH0X under a perturbation\n\n\nSBMATH1X\n\n\nend$/);
+});
+
+test('searchingLine and searchPlaceholder name the collection when there is one', () => {
+  assert.equal(searchingLine('2D materials'), 'Searching 2D materials…');
+  assert.equal(searchingLine(''), 'Searching your library…');
+  assert.equal(searchPlaceholder('2D materials'), 'Search in 2D materials');
+  assert.equal(searchPlaceholder(''), 'Search papers');
+});
+
+test('parseStored reads rows with their time, an older bare list with none, and nothing else', () => {
+  const rows = [{ key: 'A' }];
+  assert.deepEqual(parseStored(JSON.stringify({ at: '2026-10-29T09:40:00Z', rows })), { at: '2026-10-29T09:40:00Z', rows });
+  assert.deepEqual(parseStored(JSON.stringify(rows)), { at: null, rows });
+  assert.equal(parseStored(null), null);
+  assert.equal(parseStored('not json'), null);
+  assert.equal(parseStored('{"rows":"no"}'), null);
+  assert.equal(parseStored('null'), null);
 });

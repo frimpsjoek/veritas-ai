@@ -185,6 +185,45 @@ export async function runWebChecks(browser, port, outDir) {
     check(`${tag} a chat link opens the chat on that session`, opened.hash === '#/chat?session=c1' && opened.text.includes('Seeds and roots.'), opened);
     check(`${tag} the chat history leaves out the reading radar's issues (Home reaches them)`, opened.history.includes('Foraging in voles') && !opened.history.includes('Reading radar'), opened.history);
 
+    // the history list and the header
+    if (width === 1280) {
+      const list = await page.evaluate(() => {
+        const toggle = document.querySelector('.sb-ai-history-toggle');
+        const selected = document.querySelector('.sb-ai-conv.is-selected');
+        return {
+          toggle: [toggle.textContent, Boolean(toggle.querySelector('svg')), toggle.getAttribute('aria-label'), toggle.getAttribute('aria-expanded')],
+          days: [...document.querySelectorAll('.sb-ai-list-day')].map((d) => d.textContent), openers: document.querySelectorAll('button.sb-ai-conv-open').length, rows: document.querySelectorAll('.sb-ai-conv').length, xs: document.querySelectorAll('.sb-ai-conv-x').length,
+          current: selected.querySelector('.sb-ai-conv-open').getAttribute('aria-current'), weight: getComputedStyle(selected.querySelector('.sb-ai-conv-title')).fontWeight, tint: getComputedStyle(selected).backgroundColor !== getComputedStyle(document.documentElement).getPropertyValue('--sb-ui-accent'),
+          title: document.querySelector('.sb-ai-head-name').textContent, where: document.querySelector('.sb-ai-box .sb-ai-where')?.textContent, badge: Boolean(document.querySelector('.sb-ai-conv-meta .sb-ai-news')),
+        };
+      });
+      check(`${tag} the history toggle is an icon with a name and a state`, list.toggle[0] === '' && list.toggle[1] && list.toggle[2] === 'Hide chat history' && list.toggle[3] === 'true', list.toggle);
+      check(`${tag} the history has day headings, every row opens from a real button, no hover x`, list.days.includes('Today') && list.days.includes('Earlier') && list.openers === list.rows && list.rows > 0 && list.xs === 0, list);
+      check(`${tag} the open row is tinted and bold, the header names it, where the AI runs is in the composer, badges on the meta line`, list.current === 'true' && Number(list.weight) === 600 && list.tint && list.title === 'Foraging in voles' && /computer|server/.test(list.where ?? '') && list.badge, list);
+      await page.fill('.sb-ai-find-input', 'old vole 3');
+      check(`${tag} Find a chat filters the titles`, JSON.stringify(await page.locator('.sb-ai-conv-title').allTextContents()) === '["Old vole question 3"]');
+      await page.fill('.sb-ai-find-input', 'zzzz');
+      check(`${tag} Find a chat says when nothing matches`, (await page.locator('.sb-ai-list-empty').textContent()) === 'No chats match “zzzz”.');
+      await page.fill('.sb-ai-find-input', '');
+      await page.evaluate(() => { window.__store.listFail = true; window.__host._setWhere('server'); });
+      await page.waitForSelector('.sb-ai-list-failed');
+      const down = await page.evaluate(() => ({ text: document.querySelector('.sb-ai-list-failed').textContent, empty: Boolean(document.querySelector('.sb-ai-list-empty')), rows: document.querySelectorAll('.sb-ai-conv').length, off: document.querySelector('.sb-ai-where').classList.contains('is-off') }));
+      check(`${tag} a failed list says Can't reach the server with Try again, keeps its rows and never looks empty`, down.text.includes("Can't reach the server") && down.text.includes('Try again') && !down.empty && down.rows > 0 && down.off, down);
+      await page.evaluate(() => { window.__store.listFail = false; });
+      await page.locator('.sb-ai-list-retry').click();
+      await page.waitForFunction(() => !document.querySelector('.sb-ai-list-failed') && !document.querySelector('.sb-ai-where').classList.contains('is-off'));
+      check(`${tag} Try again brings the list back`, true);
+
+      const row = page.locator('.sb-ai-conv', { hasText: 'Doorknob ergonomics' });
+      await row.locator('.sb-ai-conv-open').focus();
+      await page.keyboard.press('Tab');
+      check(`${tag} Tab reaches the row's menu button`, (await page.evaluate(() => document.activeElement.className)) === 'sb-ai-conv-more');
+      await page.keyboard.press('Enter');
+      const menu = await page.locator('.sb-ai-rowmenu').textContent();
+      check(`${tag} the row's one menu has Rename, Move and Delete`, menu.includes('Rename') && menu.includes('Move to project') && menu.includes('Delete'), menu);
+      await page.keyboard.press('Escape');
+    }
+
     // a turn through the fake engine
     if (width >= 700) {
       await page.fill('.sb-ai-input', 'Tell me about voles');
@@ -306,6 +345,30 @@ export async function runWebChecks(browser, port, outDir) {
       await page.locator('.sbw-lib-collections').click();
       const back = await page.evaluate(() => getComputedStyle(document.querySelector('.sbw-lib-tree')).display);
       check(`${tag} Library: Collections folds the column away, remembers it, and brings it back`, folded === 'none' && still === 'none' && back === 'block', { folded, still, back });
+    }
+
+    // the composer on the real web host's controls (the `+` picker holds Skills)
+    if (width === 1280) {
+      const composer = await browser.newPage({ viewport: { width, height: 800 } });
+      await useFixtures(composer);
+      await composer.goto(`${fakeUrl}&picker=1`);
+      await composer.waitForFunction(() => window.__sbWebReady === true);
+      await composer.evaluate(() => { location.hash = '#/chat?session=c1'; });
+      await composer.waitForSelector('.sb-ai-answer .sb-ai-md');
+      const line = await composer.evaluate(() => {
+        const row = document.querySelector('.sb-ai-box > .sb-ai-row:not(.sb-ai-report-options)');
+        const shown = [...row.children].filter((c) => c.getClientRects().length && c.getBoundingClientRect().width);
+        return { lines: new Set(shown.map((c) => Math.round(c.getBoundingClientRect().bottom - c.getBoundingClientRect().height / 2))).size, text: row.textContent };
+      });
+      check('1280px the composer controls fit one line, Skills behind +', line.lines === 1 && !line.text.includes('Skills'), line);
+      await composer.evaluate(() => { window.__failNext = true; });
+      await composer.fill('.sb-ai-input', 'A question that fails');
+      await composer.keyboard.press('Enter');
+      await composer.waitForSelector('.sb-ai-error');
+      await composer.locator('.sb-ai-error-again').click();
+      await composer.waitForFunction(() => document.querySelector('.sb-ai-thread').textContent.includes('Echo: A question that fails'));
+      check('1280px Try again on a failed turn asks the question again', true);
+      await composer.close();
     }
 
     // wording: the web host never names Zotero or Obsidian as the place papers and notes live

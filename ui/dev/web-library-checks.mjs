@@ -203,7 +203,7 @@ export async function runWebLibraryChecks(browser, port, outDir) {
     await page.locator('.sbw-tree-row', { hasText: 'Condensed matter' }).click();
     await page.waitForFunction(() => location.hash === '#/library?collection=COLC' && document.querySelector('.sbw-lib-status').textContent === '250 papers');
     const col = await page.evaluate(() => ({ status: document.querySelector('.sbw-lib-status').textContent, crumb: document.querySelector('.sbw-lib-crumb').textContent, selected: document.querySelector('.sbw-tree-row.is-selected .sbw-tree-name').textContent }));
-    check('choosing a collection shows its papers (children included) and marks it', col.status === '250 papers' && col.crumb === ' / Condensed matter' && col.selected === 'Condensed matter', col);
+    check('choosing a collection shows its papers (children included) and marks it', col.status === '250 papers' && col.crumb === ' / Physics / Condensed matter' && col.selected === 'Condensed matter', col);
 
     // row click opens the paper
     await page.locator('.sbw-lib-row').first().click({ position: { x: 300, y: 28 } });
@@ -260,6 +260,92 @@ export async function runWebLibraryChecks(browser, port, outDir) {
     check('360px choosing a collection closes the tree', (await page.evaluate(() => getComputedStyle(document.querySelector('.sbw-lib-tree')).display)) === 'none');
     await page.screenshot({ path: join(outDir, 'web-library-360.png') });
     await page.close();
+  }
+
+  // ------------------------------------------------------------ search states, the crumb and the twist
+  {
+    const page = await open(1280);
+    await go(page, '#/library');
+    await page.waitForSelector('.sbw-tree-row');
+    const twist = page.locator('.sbw-tree-row', { hasText: 'Physics' }).locator('.sbw-tree-twist');
+    const before = await twist.evaluate((b) => [b.tagName, b.getAttribute('aria-expanded')]);
+    await twist.focus();
+    await page.keyboard.press('Enter');
+    const after = await page.locator('.sbw-tree-row', { hasText: 'Physics' }).locator('.sbw-tree-twist').evaluate((b) => [b.getAttribute('aria-expanded'), b === document.activeElement]);
+    check('the twist is a real button: Enter opens it, aria-expanded follows, the focus stays', before[0] === 'BUTTON' && before[1] === 'false' && after[0] === 'true' && after[1], { before, after });
+    await go(page, '#/library?collection=COLC');
+    await page.waitForFunction(() => document.querySelector('.sbw-lib-status').textContent === '250 papers');
+    const crumb = await page.evaluate(() => ({ links: [...document.querySelectorAll('.sbw-lib-crumb a')].map((a) => [a.textContent, a.getAttribute('href')]), placeholder: document.querySelector('.sbw-lib-search').placeholder }));
+    check('the crumb links the ancestors and the box says where it searches', crumb.links.length === 1 && crumb.links[0][0] === 'Physics' && crumb.links[0][1].includes('collection=') && crumb.placeholder === 'Search in Condensed matter', crumb);
+    const relevance = page.locator('.sbw-lib-sortbtn', { hasText: 'Relevance' });
+    check('Relevance is hidden outside a search', await relevance.isHidden());
+
+    await page.route('**/search*', async (route) => { await new Promise((resolve) => setTimeout(resolve, 600)); await route.fallback(); });
+    await page.fill('.sbw-lib-search', 'voles');
+    const searching = await page.evaluate(() => ({ text: document.querySelector('.sbw-lib-status').textContent, spin: Boolean(document.querySelector('.sbw-lib-status svg')) }));
+    check('a running search says where it looks, with a spinner, instead of the old count', searching.text === 'Searching Condensed matter…' && searching.spin, searching);
+    await page.waitForFunction(() => document.querySelector('.sbw-lib-status').textContent.includes('in Condensed matter'));
+    check('during a search Relevance shows and is lit', (await relevance.isVisible()) && (await relevance.getAttribute('aria-pressed')) === 'true');
+    await page.unroute('**/search*');
+
+    await page.route('**/search*', (route) => route.abort('connectionrefused'));
+    await page.fill('.sbw-lib-search', 'broken');
+    await page.waitForFunction(() => document.querySelector('.sbw-lib-status').textContent.includes("Search isn't working"));
+    check('a failed search says so and is not reported as no match', !(await text(page, '.sbw-lib-status')).includes('No papers match') && (await page.locator('.sbw-lib-status button', { hasText: 'Try again' }).count()) === 1);
+    await page.unroute('**/search*');
+    await page.locator('.sbw-lib-status button', { hasText: 'Try again' }).click();
+    await page.waitForFunction(() => !document.querySelector('.sbw-lib-status').textContent.includes("isn't working"));
+    check('Try again runs the search again', true);
+
+    await page.fill('.sbw-lib-search', 'zzzz-nothing');
+    await page.waitForFunction(() => document.querySelector('.sbw-lib-status').textContent.includes('No papers match'));
+    await page.locator('.sbw-lib-status button', { hasText: 'Search all papers' }).click();
+    await page.waitForFunction(() => location.hash === '#/library' && document.querySelector('.sbw-lib-status').textContent === 'No papers match “zzzz-nothing”.');
+    check('no match in a collection offers the whole library, and takes the words along', (await page.inputValue('.sbw-lib-search')) === 'zzzz-nothing');
+    await page.close();
+  }
+
+  // ------------------------------------------------------------ a stored copy, a slow first load, the phone's sheet
+  {
+    const page = await open(1280);
+    await go(page, '#/library?collection=COLC');
+    await page.waitForFunction(() => document.querySelector('.sbw-lib-status').textContent === '250 papers');
+    await page.route('**/zotero/**', (route) => route.abort('connectionrefused'));
+    await page.reload();
+    await page.waitForFunction(() => window.__sbWebReady === true);
+    await go(page, '#/library?collection=COLC');
+    await page.waitForFunction(() => !document.querySelector('.sbw-lib-stale')?.hidden && document.querySelector('.sbw-tree-empty'));
+    const stale = await page.evaluate(() => ({ banner: document.querySelector('.sbw-lib-stale').textContent, rows: document.querySelectorAll('.sbw-lib-row').length, tree: [...document.querySelectorAll('.sbw-tree-name')].map((n) => n.textContent) }));
+    check('with the server gone: rows and tree stay, the banner gives the saved time and Try again', /saved at /.test(stale.banner) && stale.banner.includes('Try again') && stale.rows > 0 && stale.tree.includes('Physics'), stale);
+    await page.unroute('**/zotero/**');
+    await page.locator('.sbw-lib-stale button').click();
+    await page.waitForFunction(() => document.querySelector('.sbw-lib-stale').hidden && !document.querySelector('.sbw-tree-empty'));
+    check('Try again clears the banner and the tree note when the server is back', true);
+    await page.close();
+
+    const slow = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    await useFixtures(slow);
+    await slow.route('**/zotero/items*', async (route) => { await new Promise((resolve) => setTimeout(resolve, 800)); await route.fallback(); });
+    await slow.goto(fakeUrl);
+    await slow.waitForFunction(() => window.__sbWebReady === true);
+    await go(slow, '#/library');
+    await slow.waitForSelector('.sbw-lib-skel');
+    const skeleton = await slow.evaluate(() => ({ n: document.querySelectorAll('.sbw-lib-skel').length, h: document.querySelector('.sbw-lib-skel').getBoundingClientRect().height, hidden: document.querySelector('.sbw-lib-rows').getAttribute('aria-hidden') }));
+    check('a slow first load shows a skeleton of 56 px rows, hidden from screen readers', skeleton.n > 0 && skeleton.h === 56 && skeleton.hidden === 'true', skeleton);
+    await slow.waitForSelector('.sbw-lib-row');
+    check('the real rows replace the skeleton', (await slow.locator('.sbw-lib-skel').count()) === 0);
+    await slow.close();
+
+    const phone = await open(390, 844);
+    await go(phone, '#/library?collection=COLC');
+    await phone.waitForFunction(() => document.querySelector('.sbw-lib-status').textContent === '250 papers');
+    check('390px the chosen collection is a chip in the toolbar', (await text(phone, '.sbw-lib-chip')) === 'Condensed matter' && await phone.locator('.sbw-lib-chip').isVisible());
+    await phone.locator('.sbw-lib-chip').click();
+    const sheet = await phone.evaluate(() => { const r = document.querySelector('.sbw-lib-tree').getBoundingClientRect(); return { position: getComputedStyle(document.querySelector('.sbw-lib-tree')).position, h: r.height, focus: document.activeElement.getAttribute('aria-label') }; });
+    check('390px the chip opens the collections as a sheet over the list, focus on its close button', sheet.position === 'absolute' && sheet.h > 400 && sheet.focus === 'Close collections', sheet);
+    await phone.keyboard.press('Escape');
+    check('390px Escape closes the sheet', (await phone.evaluate(() => getComputedStyle(document.querySelector('.sbw-lib-tree')).display)) === 'none');
+    await phone.close();
   }
 
   // ------------------------------------------------------------ notes
