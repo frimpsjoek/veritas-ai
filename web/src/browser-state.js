@@ -2,7 +2,7 @@
 // ui-src/src/web/browser-state.js. Spec 015 B3: the in-app browser panel's pure parts, kept apart from the DOM so they
 // can be tested: its back stack and how a link is first asked for.
 
-/** @typedef {{ url: string, prefer?: 'reader' }} Entry */
+/** @typedef {{ url: string, prefer?: 'reader', fell?: true }} Entry `fell`: a PDF link that was not one, now asked for as a page (once) */
 
 /** The panel's own history. A framed page's history is the site's and cannot be reached from here, so "back" steps
  *  through the pages the panel was asked to show. */

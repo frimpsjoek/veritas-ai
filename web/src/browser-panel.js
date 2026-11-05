@@ -92,7 +92,7 @@ export function createBrowserPanel({ host, doc, win, into }) {
     if (isPdfUrl(entry.url) && !entry.prefer) {
       const name = fileNameOf(entry.url);
       head(name, entry.url);
-      return pdf(entry.url, name);
+      return pdf(entry.url, name, entry);
     }
     body.replaceChildren(h(doc, 'p', 'sbw-hint sbw-browser-status', 'Opening…'));
     /** @type {any} */ let answer = null;
@@ -316,8 +316,9 @@ export function createBrowserPanel({ host, doc, win, into }) {
     return out;
   }
 
-  /** @param {string} url @param {string} title */
-  function pdf(url, title) {
+  /** @param {string} url @param {string} title @param {import('./browser-state.js').Entry} [entry] the link as asked, for the one fallback */
+  function pdf(url, title, entry) {
+    const mine = token;
     modeButton.hidden = true;
     // /web/page already fetched this and saw a PDF, so there is no probe; PDF.js reports a later failure through `ready`
     const path = `/web/pdf?${new URLSearchParams({ url })}`;
@@ -331,7 +332,13 @@ export function createBrowserPanel({ host, doc, win, into }) {
       failed: (message) => { problem.textContent = message; problem.hidden = false; },
     });
     body.replaceChildren(viewer.el, problem);
-    viewer.ready.catch((error) => card(`PDF.js couldn't open it (${error?.message ?? error}).`, url, title));
+    viewer.ready.catch((error) => {
+      if (mine !== token) return;
+      // A link that looked like a PDF but was not one (a publisher's page behind it, 415 from /web/pdf): ask for the
+      // paper's page instead, once; `fell` keeps a second failure from asking again.
+      if (entry && !entry.fell) return void show({ url, prefer: 'reader', fell: true }, false);
+      card(`The link did not give a PDF. Publishers often answer with a web page for links that are not open access. (${error?.message ?? error})`, url, title || 'The PDF did not open here');
+    });
   }
 
   const onKey = (/** @type {KeyboardEvent} */ event) => { if (event.key === 'Escape' && !root.hidden) api.close(); };
