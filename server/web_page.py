@@ -38,6 +38,7 @@ import zotero
 
 FOLDER = "web-pages"
 TIMEOUT = 15
+MAX_PDF_COPIES = 3  # listed copies looked at before settling for the abstract: each may take TIMEOUT
 PAGE_MAX_BYTES = 3_000_000
 PDF_MAX_BYTES = 80_000_000
 OPENALEX_DAYS = 1
@@ -217,15 +218,18 @@ def oa_pdf(work: dict) -> dict | None:
 
 
 def _serves_pdf(url: str, get) -> bool:
-    """Whether a listed PDF is one. OpenAlex's pdf_url is at times a repository's web page, or a site that refuses us
-    (pymatgen's eScholarship copy, 2026-11-03); the reader would open PDF.js on it and fail. A link that says what it
-    is, and arXiv's, are taken at their word; a look at the first bytes of the others keeps the open quick."""
+    """Whether a listed PDF is one. OpenAlex's pdf_url is at times a repository's web page, a publisher's sign-in wall
+    behind a link ending .pdf, or a site that refuses us (pymatgen's eScholarship copy, 2026-11-03); the reader would
+    open PDF.js on it and fail. arXiv's are taken at their word, which keeps the open quick; a look at the first bytes
+    settles the others. A .pdf link that cannot be reached right now keeps the benefit of the doubt."""
     parts = urllib.parse.urlparse(url)
-    if parts.path.lower().endswith(".pdf") or (parts.hostname or "").endswith("arxiv.org"):
+    if (parts.hostname or "").endswith("arxiv.org"):
         return True
     try:
         answer = get(url, 8192)
-    except (OSError, Refused):
+    except OSError:
+        return parts.path.lower().endswith(".pdf")
+    except Refused:
         return False
     return answer.status < 400 and _is_pdf(answer)
 
@@ -412,7 +416,7 @@ def _paper(url: str, doi: str, get) -> dict | None:
     if not work:
         return None
     title = work.get("title") or work.get("display_name") or doi
-    pdf = next((p for p in oa_pdfs(work) if _serves_pdf(p["url"], get)), None)
+    pdf = next((p for p in oa_pdfs(work)[:MAX_PDF_COPIES] if _serves_pdf(p["url"], get)), None)
     if pdf:
         return {"mode": "pdf", "url": pdf["url"], "title": title, "source": "open access", "version": pdf["version"],
                 "where": pdf["where"], "byline": byline_of(work), "abstract": abstract_of(work), "paper": _pdf_paper(doi, work)}

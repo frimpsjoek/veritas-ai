@@ -441,3 +441,51 @@ def test_a_blocked_copy_gives_way_to_the_next_one_that_is_a_pdf(web):
     pages[REAL_PDF_URL] = Response(REAL_PDF_URL, 200, {"content-type": "application/pdf"}, b"%PDF-1.7 ...")
     answer = web_page.page(f"https://doi.org/{DOI}", get=get)
     assert answer["mode"] == "pdf" and answer["url"] == REAL_PDF_URL
+
+
+def test_a_publisher_pdf_link_that_serves_a_web_page_falls_back_to_the_abstract(web):
+    """The link says .pdf, the site answers with its sign-in wall: PDF.js would fail on it."""
+    pages, _calls, get = web
+    wall = "https://publisher.example/doi/10.1/x.pdf"
+    pages[openalex_url(DOI)] = Response("x", 200, {}, json.dumps(_copies(wall)).encode())
+    pages[wall] = Response(wall, 200, {"content-type": "text/html"}, b"<html>Sign in to read</html>")
+    answer = web_page.page(f"https://doi.org/{DOI}", get=get)
+    assert answer["mode"] == "reader" and "We show it" in answer["abstract"]
+
+
+def test_a_pdf_link_refused_by_its_site_gives_way_to_the_next_copy(web):
+    pages, _calls, get = web
+    refused, real = "https://publisher.example/x.pdf", "https://repository.example/y.pdf"
+    pages[openalex_url(DOI)] = Response("x", 200, {}, json.dumps(_copies(refused, real)).encode())
+    pages[refused] = Response(refused, 403, {"content-type": "text/html"}, b"Forbidden")
+    pages[real] = Response(real, 200, {"content-type": "application/pdf"}, b"%PDF-1.7 ...")
+    answer = web_page.page(f"https://doi.org/{DOI}", get=get)
+    assert answer["mode"] == "pdf" and answer["url"] == real
+
+
+def test_a_pdf_link_that_cannot_be_reached_now_is_still_taken_at_its_word(web):
+    """Nothing says it is not a PDF; the reader's own request may get through, and /web/pdf answers 415 if not."""
+    pages, _calls, get = web
+    away = "https://repository.example/away.pdf"
+    pages[openalex_url(DOI)] = Response("x", 200, {}, json.dumps(_copies(away)).encode())
+    answer = web_page.page(f"https://doi.org/{DOI}", get=get)
+    assert answer["mode"] == "pdf" and answer["url"] == away
+
+
+def test_arxiv_stays_trusted_without_a_request(web):
+    pages, calls, get = web
+    pages[openalex_url(DOI)] = Response("x", 200, {}, json.dumps(WORK_GREEN).encode())
+    answer = web_page.page(f"https://doi.org/{DOI}", get=get)
+    assert answer["mode"] == "pdf" and "https://arxiv.org/pdf/2301.06171" not in calls
+
+
+def test_at_most_three_listed_copies_are_tried(web):
+    pages, calls, get = web
+    urls = [f"https://repository.example/item/{n}" for n in range(5)]
+    pages[openalex_url(DOI)] = Response("x", 200, {}, json.dumps(_copies(*urls)).encode())
+    for url in urls[:4]:
+        pages[url] = Response(url, 200, {"content-type": "text/html"}, b"<html>landing page</html>")
+    pages[urls[4]] = Response(urls[4], 200, {"content-type": "application/pdf"}, b"%PDF-1.7 ...")
+    answer = web_page.page(f"https://doi.org/{DOI}", get=get)
+    assert answer["mode"] == "reader"
+    assert [u for u in calls if u in urls] == urls[:3]
