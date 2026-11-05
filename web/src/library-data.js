@@ -106,6 +106,22 @@ export function searchLine({ query, count, limit, collectionName }) {
   return `${count}${count >= limit ? '+' : ''} ${count === 1 ? 'paper' : 'papers'} for “${query}”${where}`;
 }
 
+/** The status line while a search runs. @param {string} [collectionName] */
+export const searchingLine = (collectionName) => `Searching ${collectionName || 'your library'}…`;
+
+/** The search box's hint. @param {string} [collectionName] */
+export const searchPlaceholder = (collectionName) => (collectionName ? `Search in ${collectionName}` : 'Search papers');
+
+/** What this browser kept for a collection: its rows and when they were saved. A copy from before the time was kept
+ *  is a bare list. @param {string | null} raw @returns {{ at: string | null, rows: LibRow[] } | null} */
+export function parseStored(raw) {
+  try {
+    const value = JSON.parse(raw ?? 'null');
+    if (Array.isArray(value)) return { at: null, rows: value };
+    return Array.isArray(value?.rows) ? { at: value.at ?? null, rows: value.rows } : null;
+  } catch { return null; }
+}
+
 /** The banner over rows kept in this browser while the server does not answer. @param {string | null} at when they were stored @param {Date} [now] */
 export function staleLine(at, now = new Date()) {
   const date = at ? new Date(at) : null;

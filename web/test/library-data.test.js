@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { rowOfItem, rowOfHit, sortRows, nextSort, visibleRange, treeRows, ancestorsOf, crumbPath, searchLine, staleLine, chipLabel, contextOf } from '../src/library-data.js';
+import { rowOfItem, rowOfHit, sortRows, nextSort, visibleRange, treeRows, ancestorsOf, crumbPath, searchLine, searchingLine, searchPlaceholder, parseStored, staleLine, chipLabel, contextOf } from '../src/library-data.js';
 import { parseRoute, formatRoute } from '../../ui/src/sources/route.js';
 import { protectMath, readerMarkdown, withoutFrontMatter, withoutComments, linkWikiTargets, noteFragment, authorLine, routeOfPath, openRefHandler } from '../../ui/src/sources/view-kit.js';
 
@@ -171,4 +171,21 @@ test('protectMath: $$…$$ inside a sentence stays inline; on its own line it is
   const out = protectMath('variations $$|\\psi^1\\rangle$$ under a perturbation\n$$E = mc^2$$\nend');
   assert.deepEqual(out.formulas.map((f) => [f.tex, f.display]), [['|\\psi^1\\rangle', false], ['E = mc^2', true]]);
   assert.match(out.markdown, /^variations SBMATH0X under a perturbation\n\n\nSBMATH1X\n\n\nend$/);
+});
+
+test('searchingLine and searchPlaceholder name the collection when there is one', () => {
+  assert.equal(searchingLine('2D materials'), 'Searching 2D materials…');
+  assert.equal(searchingLine(''), 'Searching your library…');
+  assert.equal(searchPlaceholder('2D materials'), 'Search in 2D materials');
+  assert.equal(searchPlaceholder(''), 'Search papers');
+});
+
+test('parseStored reads rows with their time, an older bare list with none, and nothing else', () => {
+  const rows = [{ key: 'A' }];
+  assert.deepEqual(parseStored(JSON.stringify({ at: '2026-10-29T09:40:00Z', rows })), { at: '2026-10-29T09:40:00Z', rows });
+  assert.deepEqual(parseStored(JSON.stringify(rows)), { at: null, rows });
+  assert.equal(parseStored(null), null);
+  assert.equal(parseStored('not json'), null);
+  assert.equal(parseStored('{"rows":"no"}'), null);
+  assert.equal(parseStored('null'), null);
 });

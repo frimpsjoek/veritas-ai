@@ -54,3 +54,18 @@ export function entryTitle(entry) {
   if (entry.kind === 'report') return entry.progress?.question || 'Research report';
   return entry.search?.query ?? '';
 }
+
+/** The entries whose title matches "Find a chat". @template {ListEntry} T @param {T[]} entries @param {string} query @returns {T[]} */
+export function findEntries(entries, query) {
+  return query ? entries.filter((entry) => matchesFind(entryTitle(entry), query)) : entries;
+}
+
+/** The list's line when nothing matches. @param {string} query */
+export const noMatchLine = (query) => `No chats match “${query}”.`;
+
+/** The small label in the composer row. @param {string} where */
+export const whereLabel = (where) => (where === 'server' ? 'On the Veritas server' : 'On this computer');
+
+/** Below this width the results panel takes the history list's room; from 960 it sits beside the thread (below, it covers it).
+ *  @param {number} width the chat's own width */
+export const panelFoldsList = (width) => width >= 960 && width < 1200;
