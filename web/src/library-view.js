@@ -8,7 +8,7 @@ import { icon } from '../../ui/src/icons.js';
 import { formatRoute } from '../../ui/src/sources/route.js';
 import { titleNodes } from '../../ui/src/chat/markdown.js';
 import { apiOf, authorLine } from '../../ui/src/sources/view-kit.js';
-import { ancestorsOf, contextOf, nextSort, rowOfHit, rowOfItem, sortRows, treeRows, visibleRange } from './library-data.js';
+import { ancestorsOf, contextOf, crumbPath, nextSort, rowOfHit, rowOfItem, searchingLine, searchLine, searchPlaceholder, sortRows, treeRows, visibleRange } from './library-data.js';
 
 /** @typedef {import("./library-data.js").LibRow} LibRow */
 /** @typedef {import("./library-data.js").CollectionNode} CollectionNode */
@@ -57,6 +57,9 @@ export function createLibraryView(ctx) {
   /** @type {Map<string, LibRow>} */ const ticked = new Map();
   let token = 0;
   let searchToken = 0;
+  let searching = false;
+  let searchFailed = false;
+  let pendingSearch = ''; // what "Search all papers" carries over to the whole library
   /** @type {any} */ let searchTimer = null;
   let loadError = '';
   let loading = true;
@@ -82,6 +85,12 @@ export function createLibraryView(ctx) {
   sortBox.setAttribute('role', 'group');
   sortBox.setAttribute('aria-label', 'Sort');
   sortBox.append(h(doc, 'span', 'sbw-lib-sort-label', 'Sort'));
+  // the server's order, the one a search starts in; it shows only during a search
+  const relevance = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sbw-lib-sortbtn', 'Relevance'));
+  relevance.setAttribute('type', 'button');
+  relevance.hidden = true;
+  relevance.addEventListener('click', () => { sortTouched = false; scroller.scrollTop = 0; refresh(); });
+  sortBox.append(relevance);
   /** @type {Map<"year" | "title", HTMLButtonElement>} */
   const sortButtons = new Map();
   for (const [by, label] of /** @type {["year" | "title", string][]} */ ([['year', 'Year'], ['title', 'Title']])) {
@@ -119,6 +128,9 @@ export function createLibraryView(ctx) {
   /** @returns {import("./library-data.js").SortState} */
   const effectiveSort = () => (found && !sortTouched ? { by: 'relevance', dir: 1 } : sort);
   const shown = () => sortRows(found ?? base, effectiveSort());
+  // A search still on its way shows the old rows in their old order; its button is lit from the start.
+  const litSort = () => (query && !sortTouched ? 'relevance' : sort.by);
+  const collectionName = () => crumbPath(nodes, collection).at(-1)?.name ?? '';
   /** @type {LibRow[]} */ let list = [];
   let rangeKey = '';
 
@@ -174,19 +186,30 @@ export function createLibraryView(ctx) {
     }
   }
 
+  /** @param {string} label @param {() => void} action */
+  function linkButton(label, action) {
+    const button = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sbw-link sbw-linkbtn', label));
+    button.setAttribute('type', 'button');
+    button.addEventListener('click', action);
+    return button;
+  }
+
   function paintStatus() {
     status.replaceChildren();
-    status.classList.toggle('is-error', Boolean(loadError));
+    status.classList.toggle('is-error', Boolean(loadError) || searchFailed);
     if (loadError) {
-      status.append(`Couldn't load the library: ${loadError} `);
-      const retry = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sbw-link sbw-linkbtn', 'Try again'));
-      retry.setAttribute('type', 'button');
-      retry.addEventListener('click', () => { void load(); });
-      status.append(retry);
+      status.append(`Couldn't load the library: ${loadError} `, linkButton('Try again', () => { void load(); }));
+    } else if (searchFailed) {
+      status.append("Search isn't working · ", linkButton('Try again', () => { void runSearch(); }));
+    } else if (searching) {
+      status.append(icon(doc, 'loader', 'sb-p-icon sbw-lib-spin'), searchingLine(collectionName()));
     } else if (loading) {
       status.textContent = 'Loading…';
     } else if (found) {
-      status.append(found.length ? `${found.length}${found.length >= SEARCH_LIMIT ? '+' : ''} ${found.length === 1 ? 'paper' : 'papers'} for “${query}”` : `No papers match “${query}”.`);
+      status.append(searchLine({ query, count: found.length, limit: SEARCH_LIMIT, collectionName: collectionName() }));
+      if (!found.length && collection) {
+        status.append(' ', linkButton('Search all papers', () => { pendingSearch = query; go({ view: 'library' }); }));
+      }
     } else if (!base.length) {
       status.textContent = collection ? 'No papers in this collection yet.' : 'Your library is empty.';
     } else {
@@ -195,7 +218,10 @@ export function createLibraryView(ctx) {
   }
 
   function paintSortButtons() {
-    const effective = effectiveSort().by;
+    const effective = litSort();
+    relevance.hidden = !query;
+    relevance.classList.toggle('is-on', effective === 'relevance');
+    relevance.setAttribute('aria-pressed', String(effective === 'relevance'));
     for (const [by, button] of sortButtons) {
       const on = effective === by;
       button.classList.toggle('is-on', on);
@@ -258,7 +284,11 @@ export function createLibraryView(ctx) {
     const text = search.value.trim();
     const mine = ++searchToken;
     query = text;
+    searchFailed = false;
+    searching = Boolean(text);
     if (!text) { found = null; sortTouched = false; scroller.scrollTop = 0; refresh(); return; }
+    paintStatus();
+    paintSortButtons();
     try {
       const hits = await api('/search', { q: text, source: 'zotero', limit: SEARCH_LIMIT, ...(collection ? { collections: collection } : {}) });
       if (mine !== searchToken) return;
@@ -269,8 +299,10 @@ export function createLibraryView(ctx) {
     } catch (error) {
       if (mine !== searchToken) return;
       found = [];
-      host.notice(`Search failed: ${/** @type {any} */ (error)?.message ?? error}`);
+      searchFailed = true;
+      host.logError(error);
     }
+    searching = false;
     scroller.scrollTop = 0;
     refresh();
   }
@@ -326,12 +358,19 @@ export function createLibraryView(ctx) {
   function paintCrumb() {
     const node = nodes.find((n) => n.key === collection);
     crumb.textContent = collection ? ` / ${node?.name ?? collection}` : '';
+    search.placeholder = searchPlaceholder(collectionName());
+    search.setAttribute('aria-label', search.placeholder);
   }
 
   // ---- events
   scroller.addEventListener('scroll', () => drawRows(), { passive: true });
   new (/** @type {any} */ (win)).ResizeObserver(() => drawRows(true)).observe(scroller);
-  search.addEventListener('input', () => { win.clearTimeout(searchTimer); searchTimer = win.setTimeout(() => { void runSearch(); }, SEARCH_MS); });
+  search.addEventListener('input', () => {
+    // says so at once, in place of a count that no longer holds; clearing the box waits for the timer like any other edit
+    if (search.value.trim()) { searching = true; searchFailed = false; paintStatus(); }
+    win.clearTimeout(searchTimer);
+    searchTimer = win.setTimeout(() => { void runSearch(); }, SEARCH_MS);
+  });
   search.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') { win.clearTimeout(searchTimer); void runSearch(); }
     if (event.key === 'Escape' && search.value) { search.value = ''; void runSearch(); }
@@ -378,14 +417,19 @@ export function createLibraryView(ctx) {
         const changed = next !== collection;
         collection = next;
         if (changed) {
-          search.value = '';
+          search.value = pendingSearch;
+          pendingSearch = '';
           found = null;
           query = '';
+          searching = false;
+          searchFailed = false;
+          searchToken++;
           sortTouched = false;
           scroller.scrollTop = 0;
           for (const ancestor of ancestorsOf(nodes, next ?? '')) open.add(ancestor);
         }
         void load();
+        if (changed && search.value) void runSearch();
       } else {
         refresh();
       }

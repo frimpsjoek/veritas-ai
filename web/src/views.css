@@ -50,6 +50,9 @@
 .sbw-lib-sortbtn[data-dir="-1"].is-on::after { content: " \2191"; }
 .sbw-lib-collections, .sbw-lib-clear { margin: 0; }
 .sbw-lib-status { margin: 0; padding-bottom: var(--sbw-s2); min-height: 20px; }
+.sbw-lib-status .sb-p-icon.sbw-lib-spin { width: 14px; height: 14px; margin-inline-end: 6px; vertical-align: -2px; stroke: currentColor; animation: sbw-lib-spin 0.9s linear infinite; }
+@keyframes sbw-lib-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .sbw-lib-status .sb-p-icon.sbw-lib-spin { animation: none; } }
 .sbw-lib-status.is-error { color: var(--sb-ui-danger); }
 .sbw-lib-cols { display: none; }
 
