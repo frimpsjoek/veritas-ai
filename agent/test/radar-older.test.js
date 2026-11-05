@@ -135,3 +135,17 @@ test('two OpenAlex records for one DOI: the one with references wins, whichever 
   assert.deepEqual(base.state.refs['10.1/l1'].ids, ['X', 'Y', 'Z', 'Q', 'P']);
   assert.equal(base.state.refs['10.1/l1'].id, 'W1');
 });
+
+test('the most cited candidates already shown or held do not starve the group: the next ones are looked up', async () => {
+  // 30 older works cited by three library papers: the top ones have all been shown
+  const ids = Array.from({ length: 30 }, (_, i) => `C${String(i).padStart(2, '0')}`);
+  const big = [
+    ...[1, 2, 3].map((n) => lib(n, ids)),
+    ...ids.map((id, i) => ({ id, doi: `10.1/${id.toLowerCase()}`, title: `Invented older work number ${i}`, year: 1990, refs: [] })),
+  ];
+  const three = [1, 2, 3].map((n) => ({ key: `K${n}`, doi: `10.1/l${n}`, title: `Library paper ${n} on cortical oscillations`, year: 2020 + n, citekey: null }));
+  const seenKeys = new Set(ids.slice(0, OLDER.metadataTop + 3).map((id) => `doi:10.1/${id.toLowerCase()}`));
+  const out = await worthReading({ libraryItems: three, scopeItems: three, newRows: [], state: emptyState(), fetch: openAlexGraph(big), now: NOW, size: { older: 3 }, seenKeys });
+  assert.equal(out.rows.length, 3);
+  assert.ok(out.rows.every((r) => !seenKeys.has(`doi:${r.doi}`)));
+});
