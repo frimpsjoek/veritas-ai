@@ -13,6 +13,12 @@ Zotero itself (adding a paper, saving a highlight) go through the Zotero plugin,
 - Connectors: queries go to the tools you connected (for example Valency Bond).
 - Links: Veritas fetches a page or PDF only when you open a link, and only from public websites.
 
+**Full text that is not the paper's.** Zotero keeps the text it extracted from an attachment even after the file
+was moved or replaced, so a paper's cache can hold another document. Veritas indexes, shows or serves an
+attachment's text only when its first page names the paper (DOI, title or authors); `kb.py audit-text` lists each
+decision without printing text, and `text_overrides.json` in the data folder settles a wrong one. Every install
+must run a server with this guard: an older server sharing the same index would read the texts back in.
+
 **Keys** (API keys and tokens) are stored in the macOS Keychain, not in files.
 
 **Access:** the server listens on `127.0.0.1` only. A phone reaches it through `tailscale serve` and must sign in with
