@@ -353,31 +353,37 @@ export function createLibraryView(ctx) {
   function paintTree() {
     treeBox.replaceChildren();
     treeBox.append(h(doc, 'div', 'sbw-tree-head', 'Collections'));
-    const all = /** @type {HTMLAnchorElement} */ (h(doc, 'a', `sbw-tree-row${collection === null ? ' is-selected' : ''}`));
-    all.href = formatRoute({ view: 'library' });
-    all.append(h(doc, 'span', 'sbw-tree-twist'), h(doc, 'span', 'sbw-tree-name', 'All papers'), h(doc, 'span', 'sbw-tree-count', cache.get('') ? cache.get('')?.length.toLocaleString() ?? '' : ''));
-    if (collection === null) all.setAttribute('aria-current', 'page');
+    const all = h(doc, 'div', `sbw-tree-row${collection === null ? ' is-selected' : ''}`);
+    const allLink = /** @type {HTMLAnchorElement} */ (h(doc, 'a', 'sbw-tree-link'));
+    allLink.href = formatRoute({ view: 'library' });
+    allLink.append(h(doc, 'span', 'sbw-tree-name', 'All papers'), h(doc, 'span', 'sbw-tree-count', cache.get('') ? cache.get('')?.length.toLocaleString() ?? '' : ''));
+    if (collection === null) allLink.setAttribute('aria-current', 'page');
+    all.append(h(doc, 'span', 'sbw-tree-twist'), allLink);
     treeBox.append(all);
     const list = h(doc, 'div', 'sbw-tree-list');
     for (const { node, depth, hasChildren, open: isOpen } of treeRows(nodes, open)) {
-      const row = /** @type {HTMLAnchorElement} */ (h(doc, 'a', `sbw-tree-row${node.key === collection ? ' is-selected' : ''}`));
-      row.href = formatRoute({ view: 'library', collection: node.key });
+      const row = h(doc, 'div', `sbw-tree-row${node.key === collection ? ' is-selected' : ''}`);
       row.style.paddingInlineStart = `${12 + depth * 14}px`;
-      if (node.key === collection) row.setAttribute('aria-current', 'page');
-      const twist = /** @type {HTMLElement} */ (h(doc, 'span', 'sbw-tree-twist'));
+      const link = /** @type {HTMLAnchorElement} */ (h(doc, 'a', 'sbw-tree-link'));
+      link.href = formatRoute({ view: 'library', collection: node.key });
+      if (node.key === collection) link.setAttribute('aria-current', 'page');
+      link.append(h(doc, 'span', 'sbw-tree-name', node.name), h(doc, 'span', 'sbw-tree-count', String(node.count)));
+      /** @type {HTMLElement} */ let twist = h(doc, 'span', 'sbw-tree-twist');
       if (hasChildren) {
-        twist.classList.add('has-children');
-        twist.setAttribute('role', 'button');
+        // a real button beside the link (a button inside a link is neither valid nor reachable by keyboard)
+        twist = h(doc, 'button', 'sbw-tree-twist has-children');
+        twist.setAttribute('type', 'button');
+        twist.setAttribute('aria-expanded', String(isOpen));
         twist.setAttribute('aria-label', `${isOpen ? 'Collapse' : 'Expand'} ${node.name}`);
         twist.append(icon(doc, 'chevron', `sb-p-icon${isOpen ? ' is-open' : ''}`));
-        twist.addEventListener('click', (event) => {
-          event.preventDefault();
-          event.stopPropagation();
+        twist.addEventListener('click', () => {
           if (open.has(node.key)) open.delete(node.key); else open.add(node.key);
           paintTree();
+          twistOf(node.key)?.focus(); // the redraw replaced the button that had the focus
         });
+        twist.dataset.key = node.key;
       }
-      row.append(twist, h(doc, 'span', 'sbw-tree-name', node.name), h(doc, 'span', 'sbw-tree-count', String(node.count)));
+      row.append(twist, link);
       list.append(row);
     }
     treeBox.append(list);
@@ -388,9 +394,20 @@ export function createLibraryView(ctx) {
     } else if (nodesLoaded && !nodes.length) treeBox.append(h(doc, 'p', 'sbw-hint sbw-tree-empty', 'No collections.'));
   }
 
+  /** @param {string} key */
+  const twistOf = (key) => /** @type {HTMLElement[]} */ (Array.from(treeBox.querySelectorAll('button.sbw-tree-twist'))).find((b) => b.dataset.key === key);
+
+  /** The whole path after "Library": each ancestor a link, the chosen collection plain. */
   function paintCrumb() {
-    const node = nodes.find((n) => n.key === collection);
-    crumb.textContent = collection ? ` / ${node?.name ?? collection}` : '';
+    const path = crumbPath(nodes, collection);
+    crumb.replaceChildren();
+    path.forEach((step, i) => {
+      crumb.append(' / ');
+      if (i === path.length - 1) { crumb.append(step.name); return; }
+      const link = /** @type {HTMLAnchorElement} */ (h(doc, 'a', 'sbw-lib-crumb-link', step.name));
+      link.href = formatRoute({ view: 'library', collection: step.key });
+      crumb.append(link);
+    });
     search.placeholder = searchPlaceholder(collectionName());
     search.setAttribute('aria-label', search.placeholder);
   }

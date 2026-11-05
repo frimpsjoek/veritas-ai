@@ -203,7 +203,7 @@ export async function runWebLibraryChecks(browser, port, outDir) {
     await page.locator('.sbw-tree-row', { hasText: 'Condensed matter' }).click();
     await page.waitForFunction(() => location.hash === '#/library?collection=COLC' && document.querySelector('.sbw-lib-status').textContent === '250 papers');
     const col = await page.evaluate(() => ({ status: document.querySelector('.sbw-lib-status').textContent, crumb: document.querySelector('.sbw-lib-crumb').textContent, selected: document.querySelector('.sbw-tree-row.is-selected .sbw-tree-name').textContent }));
-    check('choosing a collection shows its papers (children included) and marks it', col.status === '250 papers' && col.crumb === ' / Condensed matter' && col.selected === 'Condensed matter', col);
+    check('choosing a collection shows its papers (children included) and marks it', col.status === '250 papers' && col.crumb === ' / Physics / Condensed matter' && col.selected === 'Condensed matter', col);
 
     // row click opens the paper
     await page.locator('.sbw-lib-row').first().click({ position: { x: 300, y: 28 } });
