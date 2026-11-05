@@ -123,7 +123,8 @@ a.sbw-paper-title:hover { text-decoration: underline; text-underline-offset: 3px
 .sbw-paper.is-dismissed, .sbw-papers.is-one .sbw-paper.is-dismissed { grid-template-columns: minmax(0, 1fr); }
 .sbw-paper.is-dismissed :is(.sbw-paper-meta, .sbw-paper-why, .sbw-paper-more, .sbw-paper-open, .sbw-paper-chips, .sbw-paper-source, .sbw-paper-figure-box) { display: none !important; }
 .sbw-paper.is-dismissed .sbw-paper-title { font-size: 15px; color: var(--sb-ui-muted); }
-.sbw-today .sb-dg-toast { position: fixed; bottom: 24px; }
+.sbw-today .sb-dg-toast { position: fixed; bottom: 24px; z-index: 30; width: max-content; max-width: calc(100vw - 32px); box-sizing: border-box; }
+@media (max-width: 699px) { .sbw-today .sb-dg-toast { bottom: calc(72px + env(safe-area-inset-bottom, 0px)); } }
 .sbw-today .sb-dg-toast .sb-dg-act { color: var(--sb-ui-bg); border-color: transparent; text-decoration: underline; padding: 0; }
 /* The run line under the banner, and the rows that say a list is empty or could not load. */
 .sbw-run { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: var(--sbw-s1) var(--sbw-s3); padding: var(--sbw-s2) var(--sbw-s3); border: 1px solid var(--sb-ui-line); border-radius: var(--sbw-r1); color: var(--sb-ui-muted); font-size: var(--sbw-t-small); }

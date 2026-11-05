@@ -147,9 +147,10 @@ function openRow(doc, ways, links, radar, onView, host) {
  *  @param {Document} doc @param {import('../chat/radar-digest-data.js').WhyChip[]} chips */
 function whyRow(doc, chips) {
   const row = h(doc, 'p', 'sbw-paper-chips');
-  row.append(h(doc, 'span', '', 'Why:'));
+  const facts = chips.some((chip) => chip.kind !== 'via');
+  if (facts) row.append(h(doc, 'span', '', 'Why:'));
   for (const chip of chips) {
-    const el = h(doc, 'span', chip.kind === 'via' ? 'sbw-why-via' : `sbw-why-chip is-${chip.kind}`, chip.kind === 'via' ? `\u00B7 ${chip.text}` : chip.text);
+    const el = h(doc, 'span', chip.kind === 'via' ? 'sbw-why-via' : `sbw-why-chip is-${chip.kind}`, chip.kind === 'via' && facts ? `\u00B7 ${chip.text}` : chip.text);
     el.title = chip.hint;
     row.append(el);
   }

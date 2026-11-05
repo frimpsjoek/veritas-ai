@@ -301,7 +301,11 @@ export async function runBrowserChecks(browser, port, outDir) {
     check(`${tag} progress and steps: 8 shown of 11, 3 of 5 Worth reading, an h2`, home.judged === '0 of 11 judged \u00B7 every click teaches the radar' && home.more === 'Show 3 more' && home.worthHead === 'Worth reading' && home.worthShown === 3 && home.worthMore === 'Show 2 more', home);
     check(`${tag} the run line says when the issue came; no sideways scroll`, /Issue built at|Last issue built/.test(home.run) && /next /.test(home.run) && !home.sideways, home);
     check(`${tag} "Read the abstract" has a line icon, no arrow character`, home.summaryIcon, home);
+    await page.locator('.sbw-today').scrollIntoViewIfNeeded();
+    await page.evaluate(() => document.querySelector('.sbw-today').scrollIntoView({ block: 'start' }));
     await shot('home');
+    await page.evaluate(() => document.querySelector('h2.sbw-papers-head').scrollIntoView({ block: 'start' }));
+    await shot('worth');
 
     // the collection menu on the split button, then the pick is what Add uses
     await page.locator('.sbw-paper').first().locator('.sb-dg-chev').click();
@@ -371,7 +375,7 @@ export async function runBrowserChecks(browser, port, outDir) {
     await page.waitForSelector('.sbw-run.is-running');
     const running = await page.evaluate(() => ({ line: document.querySelector('.sbw-run').textContent, run: document.querySelector('.sbw-today-run').textContent, disabled: document.querySelector('.sbw-today-run').disabled, stop: /Stop/.test(document.querySelector('.sbw-run').textContent) }));
     check(`${tag} a run going: Running, since when, Run now disabled, no Stop (the service has none)`, /^Running \u00B7 seen running since \d\d:\d\d$/.test(running.line) && running.run === 'Running\u2026' && running.disabled && !running.stop, running);
-    await page.evaluate(() => document.querySelector('.sbw-view')?.scrollTo?.(0, 0));
+    await page.evaluate(() => document.querySelector('.sbw-run').scrollIntoView({ block: 'center' }));
     await shot('running');
     await page.evaluate(() => { const r = window.__store.routines[1]; r.running = false; r.lastRun = { at: new Date().toISOString(), slot: null, status: 'failed', reason: 'stopped' }; location.hash = '#/settings'; });
     await page.waitForTimeout(150);
@@ -379,9 +383,18 @@ export async function runBrowserChecks(browser, port, outDir) {
     await page.waitForSelector('.sbw-run.is-failed');
     const failed = await page.evaluate(() => document.querySelector('.sbw-run').textContent);
     check(`${tag} a run that failed says why in plain words, with Run again`, failed === "Today's run did not finish \u00B7 The server stopped during the run.Run again", failed);
+    await page.evaluate(() => document.querySelector('.sbw-run').scrollIntoView({ block: 'center' }));
     await shot('failed');
 
-    // the server light: a 24 px target, a popover with since when; Try now where it is down
+    // the server light: a 24 px target that covers no control in any view; a popover with since when; Try now where it is down
+    const covered = [];
+    for (const view of ['chat', 'library', 'notes', 'settings', 'home']) {
+      await page.evaluate((v) => { location.hash = `#/${v}`; }, view);
+      await page.waitForTimeout(200);
+      covered.push(...await page.evaluate(() => [...document.querySelectorAll('button, a, input, select')].filter((b) => { if (b.closest('.sbw-server-light')) return false; const r = b.getBoundingClientRect(); return r.width > 0 && r.height > 0 && (r.left + r.right) / 2 > innerWidth - 24 && (r.top + r.bottom) / 2 < 24 && getComputedStyle(b).visibility !== 'hidden' && b.closest('[hidden]') === null; }).map((b) => `${location.hash} ${b.className || b.tagName} ${b.getAttribute('aria-label') ?? b.textContent}`)));
+    }
+    check(`${tag} the light's target sits over the middle of no control in Chat, Library, Notes, Settings or Home`, covered.length === 0, covered);
+    await page.waitForSelector('.sbw-run');
     const up = await page.evaluate(() => { const b = document.querySelector('.sbw-server-button').getBoundingClientRect(); const d = document.querySelector('.sbw-server-dot').getBoundingClientRect(); return { w: b.width, h: b.height, dot: d.width }; });
     check(`${tag} the light's target is 24 px round the 9 px dot`, up.w === 24 && up.h === 24 && up.dot === 9, up);
     await page.click('.sbw-server-button');

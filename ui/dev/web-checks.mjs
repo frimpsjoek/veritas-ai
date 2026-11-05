@@ -92,7 +92,7 @@ export async function runWebChecks(browser, port, outDir) {
     });
     check(`${tag} a paper with a graphical abstract shows it on the right in a 4:3 frame; the others have none`, JSON.stringify(figures.withFigure) === '[true,false,false]' && figures.right, figures);
     check(`${tag} "Read the abstract" opens the full abstract and "Show less" closes it`, figures.before.label === 'Read the abstract' && figures.before.shown === false && figures.after.label === 'Show less' && figures.after.shown === true && figures.after.text.endsWith('The end.'), figures);
-    check(`${tag} each paper says where it was found`, home.papers[0].via === '\u00B7 via bioRxiv, Ecology feed', home.papers[0]);
+    check(`${tag} each paper says where it was found`, home.papers[0].via === 'via bioRxiv, Ecology feed', home.papers[0]);
     const stepped = await page.evaluate(async () => {
       const wait = () => new Promise((r) => setTimeout(r, 80));
       const title = () => document.querySelector('.sbw-today-banner .sbw-cover-title')?.textContent;

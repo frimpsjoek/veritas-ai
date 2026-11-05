@@ -192,6 +192,7 @@ body { background: var(--sb-ui-bg); color: var(--sb-ui-text); font: 15px/1.45 va
    round the green dot while a routine runs, an empty ring when it does not answer; 24 px to press; a popover with the words. */
 .sbw-server-light { position: fixed; z-index: 40; top: env(safe-area-inset-top, 0px); right: 0; }
 .sbw-server-button { display: flex; align-items: center; justify-content: center; box-sizing: border-box; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 50%; background: none; }
+.sbw-server-button:focus-visible { outline-offset: -2px; }
 .sbw-server-dot { position: relative; box-sizing: border-box; width: 9px; height: 9px; border: 2px solid var(--sb-ui-ok); border-radius: 50%; background: var(--sb-ui-ok); }
 .is-starting .sbw-server-dot { border-color: var(--sb-ui-warn); background: none; animation: sbw-server-pulse 1.4s ease-in-out infinite; }
 .is-down .sbw-server-dot { border-color: var(--sb-ui-danger); background: none; }
