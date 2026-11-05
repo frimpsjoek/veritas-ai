@@ -824,8 +824,9 @@ def _index_library(db: sqlite3.Connection, verbose: bool, progress: Progress, pr
         return 0
     mine = "path LIKE ? || '%'" if prefix else "path NOT LIKE '%:/%'"
     args = (prefix,) if prefix else ()
-    # abstracts found in OpenAlex (abstracts.py) change the documents too, so their file is part of the check
-    fingerprint = json.dumps([zotero.fingerprint(), abstracts.stamp()])
+    # abstracts found in OpenAlex (abstracts.py) change the documents too, so their file is part of the check, and so
+    # is the text guard's version: a stricter guard must re-read every item, or rejected text stays indexed (spec 026 R1)
+    fingerprint = json.dumps([zotero.fingerprint(), abstracts.stamp(), zotero.TEXT_GUARD_VERSION])
     row = db.execute("SELECT value FROM meta WHERE key=?", (fingerprint_key,)).fetchone()
     missing_keys = {r[0] for r in db.execute(
         f"SELECT path FROM notes WHERE source='zotero' AND {mine} AND (meta IS NULL OR json_extract(meta, '$.collection_keys') IS NULL)",
@@ -1824,6 +1825,21 @@ def sources_cli(action: str, target: str | None, name: str | None) -> None:
         print(f"{'(Veritas folder)':<20} {'main':<8} {'plain':<9} {report['main_documents']:>7}  {report['main']}")
 
 
+def audit_text_cli(only: str | None = None) -> None:
+    """`kb.py audit-text`: one line per cached attachment text of the default library (keys, decision, reason and
+    numbers), then a count per decision on stderr. No line carries text."""
+    if not zotero.available():
+        sys.exit("no Zotero library")
+    rows = zotero.audit_text()
+    counts: dict[str, int] = {}
+    for row in rows:
+        counts[row["decision"]] = counts.get(row["decision"], 0) + 1
+        if not only or row["decision"] == only:
+            print(zotero.audit_line(row))
+    print(f"audit-text: {len(rows)} cached texts, guard version {zotero.TEXT_GUARD_VERSION}: "
+          + ", ".join(f"{k}={v}" for k, v in sorted(counts.items())) + f"; overrides file {zotero.overrides_file()}", file=sys.stderr)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -1863,6 +1879,14 @@ def main() -> None:
     p.add_argument("source", nargs="?", help="the data folder to copy from")
     p.add_argument("--find", action="store_true", help="list the indexes found on this computer, as JSON")
     p.add_argument("--replace", action="store_true", help="overwrite this install's index")
+    p = sub.add_parser("audit-text", help="the text guard's decision for every Zotero attachment with cached text; "
+                                          "prints keys and numbers, never text (spec 026 R2)")
+    p.add_argument("--only", choices=["mine", "foreign", "empty"], help="print rows with this decision only")
+    p = sub.add_parser("audit-chats", help="chats whose records name a Zotero item the text guard rejects; prints "
+                                           "paths and counts, never chat text (spec 026 R22)")
+    p.add_argument("folders", nargs="*", help="chat folders (JSONL or Markdown mirrors); default: this install's "
+                                               "agent/chats and the vault's chats folder")
+    p.add_argument("--keys", help="a file with one foreign item key per line, instead of running audit-text")
     args = parser.parse_args()
     if args.cmd == "index":
         import signal
@@ -1906,6 +1930,12 @@ def main() -> None:
         import import_data
 
         import_data.cli(args.source, args.find, args.replace)
+    elif args.cmd == "audit-text":
+        audit_text_cli(args.only)
+    elif args.cmd == "audit-chats":
+        import chat_audit
+
+        chat_audit.cli(args.folders, args.keys)
     else:
         print(json.dumps(stats(), indent=2, ensure_ascii=False))
 

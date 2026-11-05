@@ -15,6 +15,7 @@ import os
 import re
 import shutil
 import sqlite3
+import sys
 import tempfile
 import time
 import unicodedata
@@ -25,6 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import abstracts
+import paths
 
 ZOTERO = Path(os.environ.get("KB_ZOTERO", Path.home() / "Zotero"))  # the default library
 # The library the functions below read, when it is not the default one (several libraries, phase 2 task 3). A context
@@ -51,7 +53,25 @@ SKIP_TYPES = ("attachment", "note", "annotation")
 HOUSEKEEPING_TAG = re.compile(r"^([#/]|linter/)|^(zotmoov|notion)$", re.I)
 _TITLE_STOPWORDS = frozenset("the and for with from into using based study their this that".split())
 MIN_TITLE_WORDS = 3  # a shorter title says too little to judge a text by
-MIN_TITLE_MATCH = 0.5  # the share of the title's words a text must contain to count as this item's
+MIN_TITLE_MATCH = 0.5  # the share of the title's words the head of a text must contain to count as this item's
+# A weaker title match still counts when the author line confirms it (the known false reject "Large scale GW
+# calculations": one of three title words, both authors on the first page, no DOI in the text).
+MIN_TITLE_WITH_AUTHORS = 0.25
+MIN_AUTHOR_MATCH = 0.5
+# Where a document names itself: its title, authors and DOI are on its first page, and a publisher's cover page adds
+# one more. 4,000 folded characters cover a dense page plus a cover (measured on the real library 2026-11-04: every
+# attachment whose own DOI or author line appears later than this was one of the doubtful cases, not a paper whose
+# front matter came late). A reference list or a CV that merely cites this paper repeats its title and DOI, but
+# much later in the text, so the whole text is no longer scanned.
+HEAD_CHARS = 4000
+MIN_TEXT_CHARS = 200  # a shorter cache holds no document worth indexing, and nothing worth hiding
+# Part of the index stamp (kb.py): a change here re-reads every library on the next ordinary index run.
+#   1: DOI or half the title's words anywhere in the text.
+#   2: DOI, title or authors in the first HEAD_CHARS only; author line as a second signal; near-empty caches dropped;
+#      overrides (text_overrides.json); highlights of a rejected attachment dropped with its text.
+TEXT_GUARD_VERSION = 2
+OVERRIDES_FILE = "text_overrides.json"  # in the data folder (paths.data_dir): {attachment key: "mine" | "foreign"}
+OVERRIDE_VALUES = ("mine", "foreign")
 
 
 def _folded(text: str) -> str:
@@ -60,20 +80,171 @@ def _folded(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", plain.encode("ascii", "ignore").decode().lower())
 
 
-def text_belongs_to_item(title: str, doi: str, text: str) -> bool:
-    """False when an attachment's cached text is plainly not this item's: no DOI, and under half the title's words.
+@dataclass(frozen=True)
+class TextDecision:
+    """Why an attachment's cached text is, or is not, taken as its item's. Carries no text."""
+    accepted: bool
+    reason: str  # override:mine, override:foreign, override:invalid, empty, doi, title, title+authors, title_short, authors, foreign
+    doi_hit: bool = False
+    title_fraction: float = 0.0  # share of the title's judged words in the head of the text
+    author_fraction: float = 0.0  # share of the authors' surnames in the head of the text
+    chars: int = 0  # folded characters in the cache
+
+    @property
+    def foreign(self) -> bool:
+        """Rejected because the text is another document's (not merely empty)."""
+        return not self.accepted and self.reason != "empty"
+
+
+def overrides_file() -> Path:
+    return paths.data_dir() / OVERRIDES_FILE
+
+
+def text_overrides() -> dict[str, str]:
+    """{attachment key: "mine" | "foreign"} from the data folder's text_overrides.json. A missing file is no
+    override; a malformed file is reported once per read and treated as no override (the heuristic still applies,
+    so nothing is admitted by the failure); an entry with any other value is kept and judged as "invalid", which
+    rejects that attachment's text, since the user meant to decide it by hand."""
+    file = overrides_file()
+    try:
+        raw = json.loads(file.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as error:
+        print(f"zotero: {file} ignored: {error}", file=sys.stderr)
+        return {}
+    if not isinstance(raw, dict):
+        print(f"zotero: {file} ignored: expected an object of attachment keys", file=sys.stderr)
+        return {}
+    return {str(k).strip(): (v.strip().lower() if isinstance(v, str) else repr(v)) for k, v in raw.items()}
+
+
+def judge_text(title: str, doi: str, text: str, authors: list[str] | tuple[str, ...] = (),
+               attachment_key: str = "", overrides: dict[str, str] | None = None) -> TextDecision:
+    """Whether an attachment's cached text is this item's document, and why.
 
     Zotero keeps an attachment's .zotero-ft-cache even after the file has moved or been replaced, so a cache can hold
     another document, including a private one. Such text must not be indexed, shown or cited under this item's name.
-    A title too short to judge by is given the benefit of the doubt.
+    Only the head of the text is read (HEAD_CHARS): a document names itself at the start, while a document that
+    merely cites this item (a reference list, a CV) does so later. Signals, in order: the item's DOI; at least half
+    the title's judged words (longer than three letters, not a stopword); a quarter of them together with half the
+    authors' surnames; for a title too short to judge by, any author surname (or the benefit of the doubt when the
+    item has no authors). A heuristic cannot be right every time: `text_overrides.json` is the backstop for both a
+    false reject and a false accept.
     """
-    body = _folded(text)
-    if doi and _folded(doi).strip() in body:
-        return True
+    override = (overrides if overrides is not None else text_overrides()).get(attachment_key) if attachment_key else None
+    if override is not None:
+        if override == "mine":
+            return TextDecision(True, "override:mine")
+        return TextDecision(False, "override:foreign" if override == "foreign" else "override:invalid")
+    body = _folded(text).strip()
+    if len(body) < MIN_TEXT_CHARS:
+        return TextDecision(False, "empty", chars=len(body))
+    head = f" {body[:HEAD_CHARS]} "
+    doi_hit = bool(doi) and _folded(doi).strip() in head
     words = [w for w in _folded(title).split() if len(w) > 3 and w not in _TITLE_STOPWORDS]
+    surnames = [s for s in (_folded(a).split()[-1] if _folded(a).split() else "" for a in authors) if len(s) > 3]
+    title_fraction = sum(f" {w} " in head for w in words) / len(words) if words else 0.0
+    author_fraction = sum(f" {s} " in head for s in surnames) / len(surnames) if surnames else 0.0
+    facts = dict(doi_hit=doi_hit, title_fraction=round(title_fraction, 3), author_fraction=round(author_fraction, 3), chars=len(body))
+    if doi_hit:
+        return TextDecision(True, "doi", **facts)
     if len(words) < MIN_TITLE_WORDS:
-        return True
-    return sum(f" {w} " in f" {body} " for w in words) / len(words) >= MIN_TITLE_MATCH
+        if not surnames:
+            return TextDecision(True, "title_short", **facts)
+        return TextDecision(author_fraction > 0, "authors" if author_fraction > 0 else "foreign", **facts)
+    if title_fraction >= MIN_TITLE_MATCH:
+        return TextDecision(True, "title", **facts)
+    if title_fraction >= MIN_TITLE_WITH_AUTHORS and surnames and author_fraction >= MIN_AUTHOR_MATCH:
+        return TextDecision(True, "title+authors", **facts)
+    return TextDecision(False, "foreign", **facts)
+
+
+def text_belongs_to_item(title: str, doi: str, text: str, authors: list[str] | tuple[str, ...] = (),
+                         attachment_key: str = "", overrides: dict[str, str] | None = None) -> bool:
+    """True when `judge_text` accepts the text (see there)."""
+    return judge_text(title, doi, text, authors, attachment_key, overrides).accepted
+
+
+def _read_cache(cache: Path) -> str:
+    return cache.read_text(encoding="utf-8", errors="replace")
+
+
+def attachment_text_decision(att_key: str) -> TextDecision | None:
+    """The guard's decision for one attachment key (for routes that hand out the attachment's file): None when the
+    attachment has no cached text to judge by, or is not in the library."""
+    try:
+        db = snapshot("reader", max_age=60)
+    except (sqlite3.Error, OSError, RuntimeError):
+        return None
+    try:
+        row = db.execute(
+            """SELECT a.parentItemID FROM itemAttachments a JOIN items i USING(itemID) WHERE i.key=?""", (att_key,)).fetchone()
+        if not row or row[0] is None:
+            return None
+        fields = {name: str(value) for name, value in db.execute(
+            """SELECT f.fieldName, v.value FROM itemData d JOIN fields f USING(fieldID) JOIN itemDataValues v USING(valueID)
+               WHERE d.itemID=?""", (row[0],))}
+        authors = [" ".join(p for p in (first, last) if p) for first, last in db.execute(
+            """SELECT c.firstName, c.lastName FROM itemCreators ic JOIN creators c USING(creatorID)
+               WHERE ic.itemID=? ORDER BY ic.orderIndex""", (row[0],))]
+    except sqlite3.Error:
+        return None  # not a Zotero database (a stand-in in tests): nothing to judge by
+    finally:
+        db.close()
+    cache = root() / "storage" / att_key / ".zotero-ft-cache"
+    if not cache.is_file():
+        return None
+    return judge_text(fields.get("title") or fields.get("shortTitle") or "", fields.get("DOI", ""), _read_cache(cache),
+                      authors, att_key)
+
+
+def audit_text() -> list[dict]:
+    """One row per attachment with a cached text, for `kb.py audit-text`: item key, attachment key, decision, reason,
+    doi_hit, title_fraction, author_fraction, chars. Never carries text. Reads its own copy of the database
+    ("audit"), so it never touches the indexer's copy."""
+    db = snapshot("audit")
+    q = lambda sql, *args: db.execute(sql, args).fetchall()  # noqa: E731
+    try:
+        deleted = {r[0] for r in q("SELECT itemID FROM deletedItems")}
+        items = q("SELECT i.itemID, i.key, t.typeName FROM items i JOIN itemTypes t USING(itemTypeID) WHERE i.libraryID = 1")
+        fields: dict[int, dict[str, str]] = {}
+        for item_id, name, value in q("""SELECT d.itemID, f.fieldName, v.value FROM itemData d JOIN fields f USING(fieldID)
+                                         JOIN itemDataValues v USING(valueID)"""):
+            fields.setdefault(item_id, {})[name] = str(value)
+        creators: dict[int, list[str]] = {}
+        for item_id, first, last in q("""SELECT ic.itemID, c.firstName, c.lastName FROM itemCreators ic
+                                        JOIN creators c USING(creatorID) ORDER BY ic.itemID, ic.orderIndex"""):
+            creators.setdefault(item_id, []).append(" ".join(p for p in (first, last) if p))
+        attachments: dict[int, list[int]] = {}
+        for item_id, parent in q("SELECT itemID, parentItemID FROM itemAttachments WHERE parentItemID IS NOT NULL"):
+            if item_id not in deleted:
+                attachments.setdefault(parent, []).append(item_id)
+        keys = {item_id: key for item_id, key, _ in items}
+    finally:
+        db.close()
+    overrides = text_overrides()
+    rows = []
+    for item_id, key, type_name in items:
+        if type_name in SKIP_TYPES or item_id in deleted:
+            continue
+        f = fields.get(item_id, {})
+        for attachment in attachments.get(item_id, []):
+            cache = root() / "storage" / keys[attachment] / ".zotero-ft-cache"
+            if not cache.is_file():
+                continue
+            d = judge_text(f.get("title") or f.get("shortTitle") or key, f.get("DOI", ""), _read_cache(cache),
+                           creators.get(item_id, []), keys[attachment], overrides)
+            rows.append({"item": key, "attachment": keys[attachment], "decision": "mine" if d.accepted else ("empty" if d.reason == "empty" else "foreign"),
+                         "reason": d.reason, "doi_hit": d.doi_hit, "title_fraction": d.title_fraction,
+                         "author_fraction": d.author_fraction, "chars": d.chars})
+    return rows
+
+
+def audit_line(row: dict) -> str:
+    """The audit's output line: keys, words, booleans and numbers only."""
+    return (f"{row['item']} {row['attachment']} {row['decision']} {row['reason']} doi={int(row['doi_hit'])} "
+            f"title={row['title_fraction']:.2f} authors={row['author_fraction']:.2f} chars={row['chars']}")
 
 
 @dataclass
@@ -215,6 +386,7 @@ def documents() -> list[ZoteroDoc]:
     if os.environ.get("KB_ABSTRACTS", "1") != "0":
         abstracts.fill([fields.get(i, {}).get("DOI", "") for i, _, t, _ in items
                         if t not in SKIP_TYPES and i not in deleted and not fields.get(i, {}).get("abstractNote")])
+    overrides = text_overrides()  # read once per pass
     docs = []
     for item_id, key, type_name, _ in items:
         if type_name in SKIP_TYPES or item_id in deleted:
@@ -241,18 +413,24 @@ def documents() -> list[ZoteroDoc]:
         full_texts = []
         for attachment in attachments.get(item_id, []):
             signature = max(signature, modified.get(attachment, 0.0))
+            marks = []
             for sort, page, text, comment, annotation in sorted(annotations.get(attachment, [])):
                 signature = max(signature, modified.get(annotation, 0.0))
                 line = f"> {text.strip()}" if text else ""
                 if comment:
                     line += ("\n" if line else "") + f"Comment: {comment.strip()}"
-                highlights.append(line + (f" (p. {page})" if page else ""))
+                marks.append(line + (f" (p. {page})" if page else ""))
             cache = root() / "storage" / keys[attachment] / ".zotero-ft-cache"
             if cache.is_file():
                 signature = max(signature, cache.stat().st_mtime)
-                cached_text = cache.read_text(encoding="utf-8", errors="replace")
-                if text_belongs_to_item(title, f.get("DOI", ""), cached_text):
+                cached_text = _read_cache(cache)
+                decision = judge_text(title, f.get("DOI", ""), cached_text, authors, keys[attachment], overrides)
+                if decision.accepted:
                     full_texts.append(cached_text)
+                elif decision.foreign:
+                    # Highlights on a foreign attachment are the user's marks on the wrong document and quote it.
+                    marks = []
+            highlights += marks
         if highlights:
             parts += ["## Highlights"] + highlights
         for text in full_texts:
@@ -328,6 +506,9 @@ def item_detail(key: str, full_text: bool = False) -> dict | None:
                WHERE n.parentItemID=? ORDER BY n.itemID""", item_id) if note_id not in deleted]
         notes = [text for _, text in note_rows]
         note_keys = [key for key, _ in note_rows]
+        overrides = text_overrides()
+        item_title = fields.get("title") or fields.get("shortTitle") or key
+        author_names = [c["name"] for c in creators]
         attachments = []
         for att_id, att_key, content_type, path, title in q(
                 """SELECT a.itemID, i.key, a.contentType, a.path,
@@ -346,18 +527,22 @@ def item_detail(key: str, full_text: bool = False) -> dict | None:
                           if annotation_id not in deleted and (text or comment or kind == 3) and annotation_key]  # 3: image selection
             cache = root() / "storage" / att_key / ".zotero-ft-cache"
             entry = {"key": att_key, "title": title or "", "content_type": content_type or "", "highlights": highlights,
-                     "has_full_text": cache.is_file(),
+                     "has_full_text": False,
                      "open_uri": f"zotero://open-pdf/library/items/{att_key}" if content_type == "application/pdf" else ""}
-            if full_text and cache.is_file():
-                cached_text = cache.read_text(encoding="utf-8", errors="replace")
-                if text_belongs_to_item(fields.get("title") or fields.get("shortTitle") or key, fields.get("DOI", ""), cached_text):
+            if cache.is_file():
+                # Judged whenever a cache exists, so has_full_text is never a claim about text the guard rejects.
+                cached_text = _read_cache(cache)
+                decision = judge_text(item_title, fields.get("DOI", ""), cached_text, author_names, att_key, overrides)
+                entry["has_full_text"] = decision.accepted
+                if decision.accepted and full_text:
                     entry["full_text"] = cached_text
-                else:
-                    entry["has_full_text"] = False
-                    entry["full_text_mismatch"] = True
+                elif decision.foreign:
+                    # The user's highlights on a foreign attachment are marks on the wrong document, and quote it.
+                    entry.update(full_text_mismatch=True, text_guard=decision.reason, highlights=[],
+                                 highlights_hidden=len(highlights))
             attachments.append(entry)
         return {
-            "key": key, "type": type_name, "title": fields.get("title") or fields.get("shortTitle") or key,
+            "key": key, "type": type_name, "title": item_title,
             # dates are stored as "2022-03-00 March 2022": the part after the space is the one people typed
             "creators": creators, "date": fields.get("date", "").split(" ", 1)[-1],
             "year": (re.search(r"\d{4}", fields.get("date", "")) or [""])[0],
