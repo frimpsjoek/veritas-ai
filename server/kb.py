@@ -19,6 +19,13 @@ CLI:
 """
 from __future__ import annotations
 
+import sys
+
+import listen_first
+
+# `kb.py serve`: the port opens before the imports below, and before the folder list is looked at (reload_layout).
+listen_first.if_serving(sys.argv)
+
 import argparse
 import ctypes
 import fnmatch
@@ -26,7 +33,6 @@ import json
 import os
 import re
 import sqlite3
-import sys
 
 if os.name == "nt":
     import msvcrt
