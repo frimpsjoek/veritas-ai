@@ -285,8 +285,10 @@ def test_a_seed_close_to_everything_stops_winning_by_default():
     labels = ["zotero/SPECIFIC", "zotero/HUB"]
     paper = np.array([0.8, 0.6], dtype=np.float32)  # specific 0.80, hub 0.96
     assert radar_api._closest(matrix, labels, paper)[1] == "zotero/HUB"
-    margin, label, raw = radar_api._closest(matrix, labels, radar_api._unit(paper), np.array([0.2, 0.6], dtype=np.float32))
+    margin, label, raw, second = radar_api._closest(matrix, labels, radar_api._unit(paper), np.array([0.2, 0.6], dtype=np.float32))
     assert label == "zotero/SPECIFIC" and abs(raw - 0.8) < 1e-5 and abs(margin - 0.6) < 1e-5, "the margin decides, the similarity is shown"
+    assert abs(second - 0.36) < 1e-5, "and the next seed's margin says whether a second seed agrees"
+    assert radar_api._closest(matrix[:1], labels[:1], paper)[3] is None, "one seed has no second"
     base = radar_api._baseline({"baseline": {"labels": labels, "abstract": [0.2, 0.6]}}, labels, "abstract")
     assert radar_api._closest(matrix, labels, paper, base)[1] == "zotero/SPECIFIC"
     assert radar_api._baseline({}, labels, "abstract") is None
@@ -402,3 +404,16 @@ def test_the_field_cut_never_raises_the_bar_past_the_seeds_own_median():
     before = low["threshold"]
     radar_api._apply_field_cut(low, before - 0.05)
     assert low["threshold"] == before, "a field cut below the separation changes nothing"
+
+
+def test_a_seed_score_says_how_close_the_next_seed_is_and_whether_the_best_stands_alone(searcher):
+    scores = _score(searcher, seeds={"keys": ["AAA", "BBB", "CCC"]})
+    assert scores["on"]["seed_second"] < scores["on"]["seed_max"]
+    assert scores["off"]["seed_best"] == "zotero/CCC" and scores["off"]["seed_lonely"] is True, "the bread seed has no neighbour among the seeds"
+    assert scores["on"]["seed_lonely"] is False
+
+
+def test_the_least_connected_seeds_are_lonely():
+    near = np.array([[1, 0, 0], [0.99, 0.14, 0], [0.98, 0.2, 0], [0.97, 0.24, 0], [0, 0, 1]], dtype=np.float32)
+    assert radar_api._lonely(np.array([radar_api._unit(v) for v in near])).tolist() == [False, False, False, False, True]
+    assert radar_api._lonely(near[:1]).tolist() == [True]

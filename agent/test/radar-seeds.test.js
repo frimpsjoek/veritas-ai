@@ -321,6 +321,14 @@ test('a journal paper cannot be read whole, so it is judged at the bar that gets
   assert.equal(by['Preprint at the whole bar'].score, 0);
 });
 
+test('a calibrated run leaves out what one broad seed alone holds up, and keeps what a second seed or a topic agrees with', async () => {
+  const items = [{ id: '2610.40001', title: 'Harness for invented agents', summary: 'software' }, { id: '2610.40002', title: 'Two seeds agree here', summary: 'both' }, { id: '2610.40003', title: 'Topic in the text', summary: 'sleep spindle' }];
+  const lib = seedLibrary({ abstractSim: () => 0.2, wholeSim: () => 0.1 });
+  lib.radarFulltext = async (q) => Object.fromEntries(q.items.map((i) => [i.id, { seed_max: 0.1, seed_best: 'zotero/K1', seed_raw: 0.7, seed_second: i.arxiv === '2610.40002' ? 0.09 : 0.02 }]));
+  const out = await wholeRun(items, lib, { profile: profile({ topics: [{ text: 'sleep spindle', weight: 1, origin: 'user' }] }) });
+  assert.deepEqual(out.picked.map((r) => r.title).sort(), ['Topic in the text', 'Two seeds agree here']);
+});
+
 test('namesakes: the one with works in the library wins; with none, the one whose work reads closest to it', async () => {
   const people = [{ id: 'https://openalex.org/A1', display_name: 'Sam Vole', works_count: 30 }, { id: 'https://openalex.org/A2', display_name: 'Sam Vole', works_count: 8 }];
   const works = { A1: [{ id: 'W1', doi: 'https://doi.org/10.1/econ', display_name: 'Exchange rates in markets', type: 'article', abstract_inverted_index: { markets: [0] } }],

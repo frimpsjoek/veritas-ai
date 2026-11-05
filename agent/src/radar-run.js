@@ -8,7 +8,7 @@ import { worthReading } from './radar-older.js';
 import { mightInterest } from './radar-discover.js';
 import { mergeItems, dropKnown, pickTop, keysOf, seedBody, seedsKey, MIN_SEEDS } from './radar.js';
 import { calibrateRadar, CALIBRATION_VERSION } from './radar-seeds.js';
-import { score, rescoreWhole, seedBar } from './radar-score.js';
+import { score, rescoreWhole, seedBar, neighbour, hubOnly } from './radar-score.js';
 import { abstractsByDoi, fillAbstracts } from './scholarly.js';
 import { judgePool } from './radar-judge.js';
 
@@ -111,6 +111,8 @@ export async function collectRadar(run) {
   const readable = readableItems(fresh, active, Boolean(run.abstractFetch));
   let ranked = await score(readable, scoring);
   if (seeds) ranked = await decideWhole(ranked, { library, seeds, threshold, seedTitle, baseline });
+  // The gap means something only between margins over calibrated baselines.
+  if (baseline) ranked = ranked.filter((it) => !hubOnly(it, config.profile.topics));
   let top = pickTop(ranked, config.size.fresh);
   /** @type {RadarItem[]} */
   let off = [];
@@ -242,7 +244,7 @@ function wholeList(ranked) {
 async function decideWhole(ranked, ctx) {
   const abstractCut = ctx.threshold?.abstract ?? DEFAULT_CUT;
   const wholeCut = ctx.threshold?.full ?? null;
-  /** @type {Record<string, { seed_max?: number, seed_best?: string | null, seed_raw?: number, error?: string }>} */
+  /** @type {Record<string, { seed_max?: number, seed_best?: string | null, seed_raw?: number, seed_second?: number | null, seed_lonely?: boolean, error?: string }>} */
   let whole = {};
   const toRead = wholeList(ranked);
   if (wholeCut != null && toRead.length && ctx.library.radarFulltext) {
@@ -256,7 +258,7 @@ async function decideWhole(ranked, ctx) {
   for (const it of ranked) {
     const w = whole[it.id];
     if (w && typeof w.seed_max === 'number' && w.seed_best) {
-      if (w.seed_max >= /** @type {number} */ (wholeCut)) out.push(rescoreWhole(it, w.seed_raw ?? w.seed_max, { label: w.seed_best, title: ctx.seedTitle(w.seed_best), margin: Math.round(w.seed_max * 1000) / 1000 }, ctx.baseline ? wholeCut : null));
+      if (w.seed_max >= /** @type {number} */ (wholeCut)) out.push(rescoreWhole(it, w.seed_raw ?? w.seed_max, { label: w.seed_best, title: ctx.seedTitle(w.seed_best), margin: Math.round(w.seed_max * 1000) / 1000, ...neighbour(w) }, ctx.baseline ? wholeCut : null));
     } else if (it.arxiv ? seedBar(it) >= abstractCut : seedBar(it) >= abstractCut - noCopy) out.push(it.arxiv ? it : { ...it, score: Math.round(((it.score ?? 0) + noCopy) * 1000) / 1000 });
   }
   return out.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));

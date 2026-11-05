@@ -70,8 +70,9 @@ export type PaperId = string; // 'doi:<lower>' | 'arxiv:<id>' | 'title:<normalis
 
 export interface RadarWhy {
   similarity: number; author: number; journal: number; topic: number; negative: number;
-  /** Spec radar-seeds: the closest seed ("zotero/KEY" or "text:<title>"), its title, and whether the paper was read whole. */
-  seed?: { label: string; title: string; whole: boolean; margin?: number };
+  /** Spec radar-seeds: the closest seed ("zotero/KEY" or "text:<title>"), its title, and whether the paper was read whole.
+   *  `second`: the next seed's margin; `lonely`: this seed stands alone among the seeds (radar-score.js hubOnly). */
+  seed?: { label: string; title: string; whole: boolean; margin?: number; second?: number; lonely?: boolean };
   /** Worth reading rows: how many library papers cite it (and up to 3 titles), and how many of this run's New rows. */
   citedBy?: { count: number; titles: string[]; newCount?: number };
   /** The learned topic this row matched (spec 017): the why-line says so. */
@@ -96,7 +97,7 @@ export type ScoreScope = { collections: string[] | null };
 export interface SeedBody { keys: string[]; collections: string[]; texts: { title: string; text: string }[] }
 export interface ScoreRequest { scope: ScoreScope; positives: string[]; negatives: string[]; items: { id: string; text: string }[]; seeds?: SeedBody; baseline?: SeedBaseline | null }
 /** `seed_max`: the margin over the closest seed's baseline (what thresholds compare); `seed_raw`: its plain similarity (what is shown). */
-export interface SeedScore { similarity: number; negative: number; seed_max?: number; seed_best?: string | null; seed_raw?: number }
+export interface SeedScore { similarity: number; negative: number; seed_max?: number; seed_best?: string | null; seed_raw?: number; seed_second?: number | null; seed_lonely?: boolean }
 export interface SeedProfile { topics: { text: string; weight: number }[]; authors: { name: string; count: number }[]; journals: { name: string; count: number }[] }
 
 /** `liked`: a thumbs-up, a positive example like `later` but nothing is saved. */

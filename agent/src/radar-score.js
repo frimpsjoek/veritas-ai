@@ -124,7 +124,7 @@ export async function score(items, ctx) {
     const matched = hits.slice(0, WEIGHTS.topicCap);
     const learnedHit = hits.find((t) => t.learned);
     // Seed radar: show the plain similarity to the closest seed; keep or drop on its margin over that seed's baseline.
-    const seed = ctx.seeds && s.seed_best ? { label: s.seed_best, title: ctx.seedTitle?.(s.seed_best) ?? s.seed_best, whole: false, margin: round(s.seed_max ?? 0) } : null;
+    const seed = ctx.seeds && s.seed_best ? { label: s.seed_best, title: ctx.seedTitle?.(s.seed_best) ?? s.seed_best, whole: false, margin: round(s.seed_max ?? 0), ...neighbour(s) } : null;
     const why = {
       similarity: round(ctx.seeds ? s.seed_raw ?? s.seed_max ?? 0 : s.similarity),
       ...(seed ? { seed } : {}),
@@ -155,9 +155,32 @@ const fit = (similarity, margin, bar) => (bar != null && margin != null ? margin
  *  @param {RadarItem} it */
 export const seedBar = (it) => (it.why?.seed?.margin ?? it.why?.similarity ?? 0) + (it.why?.titleOnly ?? 0);
 
+/** What a server says about the next seed; an older one says nothing. @param {{ seed_second?: number | null, seed_lonely?: boolean }} s */
+export const neighbour = (s) => ({ ...(typeof s.seed_second === 'number' ? { second: round(s.seed_second) } : {}), ...(s.seed_lonely ? { lonely: true } : {}) });
+
+/** A paper whose closest seed is this much past the next one has only that seed's word for it. Of the 2026-11-03/04 rows
+ *  labelled by hand, the ones over it were 17 of 21 off the owner's interests and 2 of 15 on them (in-sample). */
+export const HUB_GAP = 0.03;
+/** Share of a topic's words that say a paper is on it, whatever the seeds think: stricter than ranking's `topicWords`, where
+ *  "agents" and "science" alone would let the very papers the gap is for pass. */
+const TOPIC_HOLDS = 0.75;
+const singular = (/** @type {string} */ w) => (w.length > 3 && w.endsWith('s') && !w.endsWith('ss') ? w.slice(0, -1) : w);
+
+/**
+ * True for a paper a broad seed alone holds up: its margin is far past the next seed's, its closest seed is not one that
+ * stands alone among the seeds (an interest with one paper has no second seed to agree), and no topic is in its text.
+ * @param {RadarItem} it @param {import("./radar-types").Weighted[]} topics
+ */
+export function hubOnly(it, topics) {
+  const seed = it.why?.seed;
+  if (seed?.margin == null || seed.second == null || seed.lonely || seed.margin - seed.second <= HUB_GAP) return false;
+  const bag = new Set(words(`${it.title} ${it.abstract}`).map(singular));
+  return !topics.some((t) => { const want = [...new Set(words(t.text))].map(singular); return want.length && want.filter((w) => bag.has(w)).length / want.length >= TOPIC_HOLDS; });
+}
+
 /** The score again after the paper was read whole (spec 021 G3): the whole-paper similarity replaces the
  *  abstract's, the bonuses stay. `bar`: a calibrated radar's whole-paper threshold.
- *  @param {RadarItem} it @param {number} similarity @param {{ label: string, title: string, margin?: number }} seed @param {number | null} [bar] */
+ *  @param {RadarItem} it @param {number} similarity @param {{ label: string, title: string, margin?: number, second?: number, lonely?: boolean }} seed @param {number | null} [bar] */
 export function rescoreWhole(it, similarity, seed, bar = null) {  // seed: { label, title, margin? }
   // Read whole, the paper is no longer judged on its title.
   const { titleOnly: _read, ...rest } = /** @type {import("./radar-types").RadarWhy} */ (it.why);

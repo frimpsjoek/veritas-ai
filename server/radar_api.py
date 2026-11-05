@@ -130,6 +130,7 @@ PLACEHOLDER = re.compile(
     r"|^\s*\[?\s*https?://|^\S+/\S+$"
     r"|:\s*$", re.I)  # a title cut at its colon is a heading or a half-read PDF ("The quasi-harmonic approximation:")
 SEED_MIN_WORDS = 3  # in one library, 22% of the items titled in one or two words had a DOI, against 80% of the rest
+LONELY_SHARE = 0.2
 SEED_THIN_WORDS = 6  # below this, an item with neither DOI nor abstract is too thin to stand for the user's work
 
 
@@ -187,16 +188,29 @@ def seed_matrix(searcher, seeds: dict, lock, hidden: set[str] = frozenset()) -> 
     return matrix, labels, total
 
 
-def _closest(matrix: np.ndarray, labels: list[str], vector: np.ndarray, base: np.ndarray | None = None) -> tuple[float, str | None, float]:
-    """(margin, label, similarity) of the closest seed. `base` (one value per seed) is subtracted first: a seed that is
-    close to everything in the field (a long methods paper, say) would otherwise be the closest seed of almost every
-    paper. The margin is what thresholds compare; the plain similarity is what people read."""
+def _closest(matrix: np.ndarray, labels: list[str], vector: np.ndarray, base: np.ndarray | None = None) -> tuple[float, str | None, float, float | None]:
+    """(margin, label, similarity, next margin) of the closest seed. `base` (one value per seed) is subtracted first: a
+    seed that is close to everything in the field (a long methods paper, say) would otherwise be the closest seed of
+    almost every paper. The margin is what thresholds compare; the plain similarity is what people read; the next seed's
+    margin says whether more than one seed finds the paper close. None with a single seed."""
     if not len(matrix):
-        return 0.0, None, 0.0
+        return 0.0, None, 0.0, None
     raw = matrix @ vector.astype(np.float32)
     sims = raw - base if base is not None else raw
     best = int(sims.argmax())
-    return float(sims[best]), labels[best], float(raw[best])
+    second = float(np.delete(sims, best).max()) if len(sims) > 1 else None
+    return float(sims[best]), labels[best], float(raw[best]), second
+
+
+def _lonely(matrix: np.ndarray) -> np.ndarray:
+    """Per seed, whether it is among the fifth of the seeds furthest from any other: an interest with one paper to stand
+    for it, which no second seed can agree with. Relative, because every seed of a radar has a neighbour above 0.8."""
+    if len(matrix) < 2:
+        return np.ones(len(matrix), dtype=bool)
+    near = matrix @ matrix.T
+    np.fill_diagonal(near, -np.inf)
+    nearest = near.max(axis=1)
+    return nearest < np.quantile(nearest, LONELY_SHARE)
 
 
 def _baseline(body: dict, labels: list[str], kind: str) -> np.ndarray | None:
@@ -232,14 +246,15 @@ def score(searcher, body: dict, lock, hidden: set[str] = frozenset()) -> dict:
     if body.get("seeds"):
         *seeds, total = seed_matrix(searcher, body["seeds"], lock, hidden)
     base = _baseline(body, seeds[1], "abstract") if seeds is not None else None
+    lonely = dict(zip(seeds[1], _lonely(seeds[0]).tolist())) if seeds is not None else {}
     scores = {}
     for item, vector in zip(batch, vectors):
         similarity = float(vector @ centroid) if centroid is not None else 0.0
         negative = float((negative_vectors @ vector).max()) if negative_vectors is not None else 0.0
         scores[str(item["id"])] = {"similarity": similarity, "negative": negative}
         if seeds is not None:
-            near, label, raw = _closest(*seeds, _unit(vector), base)
-            scores[str(item["id"])].update(seed_max=near, seed_best=label, seed_raw=raw)
+            near, label, raw, second = _closest(*seeds, _unit(vector), base)
+            scores[str(item["id"])].update(seed_max=near, seed_best=label, seed_raw=raw, seed_second=second, seed_lonely=lonely.get(label, True))
     # How many seeds were compared, of how many the radar names (the rest is over MAX_SEEDS).
     return {"scores": scores, **({"seeds": {"used": len(seeds[1]), "of": total}} if seeds is not None else {})}
 
@@ -314,6 +329,7 @@ def fulltext(searcher, body: dict, lock, hidden: set[str] = frozenset(), cache_p
         raise ValueError(f"at most {FULLTEXT_MAX} papers per call")
     *seeds, _ = seed_matrix(searcher, body.get("seeds") or {}, lock, hidden)
     base = _baseline(body, seeds[1], "full")
+    lonely = dict(zip(seeds[1], _lonely(seeds[0]).tolist()))
     cache_path = cache_path or kb.data_dir() / "radar-fulltext.sqlite"
     scores = {}
     for item in batch:
@@ -331,8 +347,8 @@ def fulltext(searcher, body: dict, lock, hidden: set[str] = frozenset(), cache_p
         if vector is None:
             scores[key] = {"error": "no text in the PDF"}
             continue
-        near, label, raw = _closest(*seeds, vector, base)
-        scores[key] = {"seed_max": near, "seed_best": label, "seed_raw": raw, "chars": len(text)}
+        near, label, raw, second = _closest(*seeds, vector, base)
+        scores[key] = {"seed_max": near, "seed_best": label, "seed_raw": raw, "seed_second": second, "seed_lonely": lonely.get(label, True), "chars": len(text)}
     return {"scores": scores}
 
 

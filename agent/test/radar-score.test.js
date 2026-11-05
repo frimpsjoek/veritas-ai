@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { score, WEIGHTS, nameKey } from '../src/radar-score.js';
+import { score, hubOnly, WEIGHTS, nameKey } from '../src/radar-score.js';
 import { normalise } from '../src/radar.js';
 import { radarLibrary, profile } from './support/radar-fakes.mjs';
 
@@ -125,4 +125,17 @@ test('a calibrated seed radar sizes the bonuses to the margin past its bar', asy
   const [row] = await score([it], ctx(backend, { profile: prof, seeds: { keys: ['S1'], collections: [], texts: [] }, cut: 0.1, baseline: { labels: ['zotero/S1'], abstract: [0.6], full: [0.6] }, rankBar: 0.1 }));
   assert.deepEqual([row.why.author, row.why.journal, row.why.topic, row.why.negative], [BAR_WEIGHTS.followedAuthor, BAR_WEIGHTS.watchedJournal, BAR_WEIGHTS.topicMatch, -0.05]);
   assert.ok(Math.abs(row.score - (0.05 + 0.02 + 0.01 + 0.01 - 0.05)) < 1e-9);
+});
+
+test('a paper only one seed likes is a broad seed winning by default, unless a topic says so or that seed stands alone', () => {
+  const row = (seed, text = 'a harness for software agents') => ({ title: 'Invented paper', abstract: text, why: { seed: { label: 'zotero/S1', title: 's', whole: true, margin: 0.1, ...seed } } });
+  const topics = [{ text: 'quantum dot theory', weight: 1, origin: 'user' }, { text: 'AI agents for science', weight: 1, origin: 'user' }, { text: 'X-ray absorption spectroscopy simulation', weight: 1, origin: 'user' }];
+  assert.ok(hubOnly(row({ second: 0.06 }), topics), 'gap 0.04');
+  assert.ok(!hubOnly(row({ second: 0.08 }), topics), 'a second seed agrees');
+  assert.ok(!hubOnly(row({}), topics), 'one seed, or a server that does not say');
+  assert.ok(!hubOnly(row({ second: 0.01, lonely: true }), topics), 'a single-seed interest survives');
+  assert.ok(!hubOnly(row({ second: 0.01 }, 'theory of colloidal quantum dots'), topics), 'a topic matches, plural or not');
+  assert.ok(!hubOnly(row({ second: 0.01 }, 'simulation of x-ray absorption near the edge'), topics), 'three words of four is the topic');
+  assert.ok(!hubOnly(row({ second: 0.01 }, 'ai agents run science experiments'), topics));
+  assert.ok(hubOnly(row({ second: 0.01 }, 'agents for science, in general'), topics), 'two words of three are not');
 });
