@@ -2,7 +2,7 @@
 // Invented papers only (public repo).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyFeedback, PROFILE_STEP } from '../src/radar-feedback.js';
+import { applyFeedback, taughtSeeds, MAX_TAUGHT, PROFILE_STEP } from '../src/radar-feedback.js';
 import { emptyState } from '../src/radar-state.js';
 import { WEIGHTS } from '../src/radar-score.js';
 
@@ -171,4 +171,26 @@ test('a paper whose details were trimmed still takes a verdict, with nothing to 
   assert.equal(out.verdict, 'added');
   assert.deepEqual(out.state.examples.positive, []);
   assert.deepEqual(out.profile, profile());
+});
+
+test('Like and Add teach a seed radar, Read later and Not relevant do not, and Undo takes it back', () => {
+  const start = stateWith(4);
+  const liked = click(start, profile(), 1, 'liked');
+  const added = click(liked.state, liked.profile, 2, 'added');
+  const later = click(added.state, added.profile, 3, 'later');
+  const nope = click(later.state, later.profile, 4, 'dismissed');
+  assert.deepEqual(taughtSeeds(nope.state), [{ title: 'Invented paper number 1 on voles', text: 'Invented paper number 1 on voles. Burrows.' }, { title: 'Invented paper number 2 on voles', text: 'Invented paper number 2 on voles. Burrows.' }]);
+  const undone = click(nope.state, nope.profile, 1, 'undo');
+  assert.deepEqual(taughtSeeds(undone.state).map((t) => t.title), ['Invented paper number 2 on voles']);
+  const flipped = click(undone.state, undone.profile, 2, 'dismissed');
+  assert.deepEqual(taughtSeeds(flipped.state), [], 'a change of mind takes it back too');
+});
+
+test('the taught seeds are capped, newest kept', () => {
+  let state = stateWith(MAX_TAUGHT + 3), prof = profile();
+  for (let n = 1; n <= MAX_TAUGHT + 3; n++) ({ state, profile: prof } = click(state, prof, n, 'liked'));
+  const taught = taughtSeeds(state);
+  assert.equal(taught.length, MAX_TAUGHT);
+  assert.equal(taught.at(-1).title, `Invented paper number ${MAX_TAUGHT + 3} on voles`);
+  assert.equal(taught[0].title, 'Invented paper number 4 on voles');
 });

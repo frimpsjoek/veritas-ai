@@ -62,7 +62,7 @@ const validSince = (since) => (typeof since === 'string' && /^\d{4}-\d{2}-\d{2}$
 
 async function arxiv(fetchFn, query, limit, since = /** @type {string | null} */ (null)) {
   const STOP = new Set('the and for with from into between about over under using use how what which why when does can are was were this that these those its their our your via of in on to by at an as is be or not'.split(' '));
-  const words = query.toLowerCase().replace(/[^\p{L}\p{N}\s-]/gu, ' ').split(/\s+/).filter((w) => w.length > 2 && !STOP.has(w)).slice(0, 5);
+  const words = query.toLowerCase().replace(/[^\p{L}\p{N}\s-]/gu, ' ').split(/\s+/).filter((w) => w.length > 1 && !STOP.has(w)).slice(0, 5); // "GW" and "AI" are words here
   if (!words.length) return [];
   const range = since ? `+AND+submittedDate:[${since.replace(/-/g, '')}0000+TO+209912312359]` : '';
   const url = `https://export.arxiv.org/api/query?search_query=${words.map((w) => `all:${encodeURIComponent(w)}`).join('+AND+')}${range}&max_results=${limit}&sortBy=relevance`;
@@ -99,6 +99,7 @@ function arxivEntries(xml) {
       url: `https://arxiv.org/abs/${id}`, abstract: tag(entry, 'summary'), source: 'arXiv',
       date: /^\d{4}-\d{2}-\d{2}/.test(published) ? published.slice(0, 10) : null, openalexId: null, kind: 'preprint',
       category: entry.match(/<arxiv:primary_category[^>]*term="([^"]+)"/)?.[1] ?? null,
+      categories: [...entry.matchAll(/<category[^>]*term="([^"]+)"/g)].map((m) => m[1]),
     };
   });
 }
@@ -138,6 +139,18 @@ export async function arxivCategoryOf(fetchFn, title) {
   const hits = await arxivQuery(fetchFn, words.map((w) => `ti:${encodeURIComponent(w)}`).join('+AND+'), 3, 'relevance');
   const norm = (/** @type {string} */ t) => t.toLowerCase().replace(/[^a-z0-9]+/g, '');
   return hits.find((h) => norm(h.title) === norm(title))?.category ?? null;
+}
+
+/** Every arXiv category of a paper found by its title (primary first, then where it is cross-listed); none when it is not
+ *  there. Words joined by OR with the exact title checked: all of them in the title, as above, misses papers arXiv spells
+ *  a little differently. @param {typeof fetch} fetchFn @param {string} title @returns {Promise<string[]>} */
+export async function arxivCategoriesOf(fetchFn, title) {
+  const words = title.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter((w) => w.length > 3).slice(0, 8);
+  if (words.length < 2) return [];
+  const hits = await arxivQuery(fetchFn, words.map((w) => `all:${encodeURIComponent(w)}`).join('+OR+'), 5, 'relevance');
+  const norm = (/** @type {string} */ t) => t.toLowerCase().replace(/[^a-z0-9]+/g, '');
+  const hit = hits.find((h) => norm(h.title) === norm(title));
+  return hit ? [...new Set([hit.category, ...hit.categories].filter((c) => c != null))] : [];
 }
 
 /** Crossref gives [y, m, d] with the tail missing for a coarse date; only a full date is a date. */

@@ -3,10 +3,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { validateRadar, seedBody, seedsKey, MIN_SEEDS } from '../src/radar.js';
-import { collectRadar, SEED_WINDOW_DAYS } from '../src/radar-run.js';
+import { collectRadar, SEED_WINDOW_DAYS, WHOLE_PAPERS, WHOLE_SEED_SHARE, FILL_TO, NEAR_BAR_STAGE } from '../src/radar-run.js';
 import { politeFetch } from '../src/radar-sources.js';
 import { arxivQuery, arxivCategoryFeed } from '../src/scholarly.js';
-import { myPapers, calibrateRadar } from '../src/radar-seeds.js';
+import { myPapers, calibrateRadar, CALIBRATION_VERSION } from '../src/radar-seeds.js';
 import { emptyState } from '../src/radar-state.js';
 import { feedXml, res, routedFetch, radarLibrary, profile } from './support/radar-fakes.mjs';
 
@@ -104,7 +104,7 @@ test('a calibrated radar ranks on how far past its bar a paper is, not on plain 
     sources: [{ id: 'database:arxiv', on: true, kind: 'database', db: 'arxiv' }, { id: 'feed:j', on: true, kind: 'feed', url: feedUrl, title: 'Journal' }] });
   const out = await collectRadar({ config, since: '2026-09-01', now: NOW, fetch, library: lib, state: emptyState() });
   assert.deepEqual(out.picked.map((p) => p.title), ['Close to one seed', 'Close to the whole field', 'Read whole, barely past']);
-  assert.deepEqual(out.picked.map((p) => p.score), [0.1, 0.02, 0.01]);
+  assert.deepEqual(out.picked.map((p) => p.score), [0.13, 0.05, 0.01], 'a paper with no arXiv copy ranks from the lower bar it has to clear');
   assert.equal(out.picked[2].why?.similarity, 0.9, 'the plain similarity stays on the row');
 });
 
@@ -154,7 +154,7 @@ test('calibration fetches unrelated fields from arXiv RSS and keeps the server t
   const asked = [];
   const baseline = { labels: ['zotero/K1'], abstract: [0.6], full: [0.7] };
   const library = { async radarCalibrate(q) { asked.push(q); return { abstract: { threshold: 0.77, overlap: false, related: {}, unrelated: {}, n_related: 3, n_unrelated: 40 }, full: { threshold: 0.81, overlap: false, related: {}, unrelated: {}, n_related: 3, n_unrelated: 8 }, seeds: 3, at: 1792500000, baseline, field: { abstracts: 10, whole: 8 } }; } };
-  const out = await calibrateRadar({ fetch, library: /** @type {any} */ (library), seeds: /** @type {any} */ (seeds()) });
+  const out = await calibrateRadar({ fetch, library: /** @type {any} */ (library), seeds: /** @type {any} */ (seeds()), sleep: async () => {} });
   assert.equal(out.problem, null);
   assert.equal(out.threshold?.abstract, 0.77);
   assert.equal(out.threshold?.full, 0.81);
@@ -174,7 +174,7 @@ test('a seed radar that was never calibrated calibrates on its run, uses the bas
   const score = lib.radarScore;
   lib.radarScore = async (q) => { scored.push(q); return score(q); };
   const config = validateRadar({ scope: { kind: 'library' }, profile: profile({ topics: [] }), sources: [{ id: 'database:arxiv', on: true, kind: 'database', db: 'arxiv' }], size: { fresh: 15, older: 0 }, seeds: seeds() });
-  const out = await collectRadar({ config, since: '2026-09-01', now: NOW, fetch, library: lib, state: emptyState() });
+  const out = await collectRadar({ config, since: '2026-09-01', now: NOW, fetch, library: lib, state: emptyState(), sleep: async () => {} });
   assert.equal(asked.length, 1);
   assert.deepEqual(scored.at(-1).baseline, baseline, 'the run that calibrated scores with the new baselines');
   assert.equal(out.threshold?.abstract, 0.2);
@@ -186,7 +186,7 @@ test('a seed radar that was never calibrated calibrates on its run, uses the bas
   assert.equal(asked.length, 1, 'a calibrated radar is not calibrated again');
   assert.equal(later.threshold, null);
   const changed = { ...config, seeds: { ...config.seeds, papers: ['K2', 'K3'] }, threshold: out.threshold };
-  await collectRadar({ config: changed, since: '2026-09-01', now: NOW, fetch, library: lib, state: emptyState() });
+  await collectRadar({ config: changed, since: '2026-09-01', now: NOW, fetch, library: lib, state: emptyState(), sleep: async () => {} });
   assert.equal(asked.length, 2, 'seeds changed since the calibration: calibrate again');
 });
 
@@ -229,6 +229,214 @@ test('calibration reads the arXiv API when the daily RSS listings are empty (wee
   assert.ok(asked[0].unrelated.every((u) => u.arxiv && u.abstract));
   assert.equal(asked[0].field.length, 12, "the seeds' own category too");
   assert.ok(urls.some((u) => u.includes('search_query=cat:cond-mat.mtrl-sci')));
+});
+
+test('calibration reads all the seed categories and the ones the seeds are cross-listed in', async () => {
+  const listing = (c) => arxivFeed(Array.from({ length: 10 }, (_, i) => ({ id: `2610.${String(c.length).padStart(2, '0')}0${i}`, title: `${c} paper ${i}`, summary: `about ${c}` })));
+  const fetch = async (url) => {
+    const u = String(url);
+    if (u.startsWith('https://rss.arxiv.org/rss/')) return res(200, listing(u.split('/').at(-1)));
+    if (u.includes('search_query=all:')) {
+      const title = u.includes('all:agents') ? 'Invented lab agents paper' : u.includes('all:excitons') ? 'Excitons in dots' : null;
+      const terms = title?.includes('agents') ? ['cond-mat.mtrl-sci', 'cs.AI'] : ['physics.chem-ph'];
+      return res(200, title ? `<feed><entry><id>http://arxiv.org/abs/2610.5v1</id><title>${title}</title><summary>s</summary><published>2026-10-02T00:00:00Z</published><arxiv:primary_category term="${terms[0]}"/>${terms.map((t) => `<category term="${t}"/>`).join('')}</entry></feed>` : '<feed></feed>');
+    }
+    return res(404);
+  };
+  const asked = [];
+  const library = {
+    items: async () => [{ key: 'K2', title: 'Invented lab <i>agents</i> paper' }],
+    async radarCalibrate(q) { asked.push(q); return { abstract: { threshold: 0.6, overlap: false }, full: null, seeds: 3, at: 1792500000, baseline: null }; },
+  };
+  const out = await calibrateRadar({ fetch, library: /** @type {any} */ (library), seeds: /** @type {any} */ (seeds({ categories: ['cond-mat.mtrl-sci', 'physics.chem-ph', 'physics.comp-ph'] })), sleep: async () => {} });
+  const count = (c) => asked[0].field.filter((p) => p.category === c).length;
+  assert.deepEqual(['cond-mat.mtrl-sci', 'physics.chem-ph', 'physics.comp-ph', 'cs.AI'].map(count), [10, 10, 10, 10], 'every seed category, not the first two, and where a seed is cross-listed');
+  assert.equal(asked[0].field.length, 40, 'each once');
+  assert.equal(out.threshold?.calibration?.version, CALIBRATION_VERSION);
+});
+
+test('a radar calibrated by older logic calibrates again once; a failed try leaves its threshold standing', async () => {
+  const unrelated = Array.from({ length: 10 }, (_, i) => ({ id: `2610.2100${i}`, title: `Unrelated ${i}`, summary: 'stars and galaxies' }));
+  const fetch = async (url) => (String(url).startsWith('https://rss.arxiv.org/rss/') ? res(200, arxivFeed(unrelated)) : res(404));
+  const lib = seedLibrary({ abstractSim: () => 0.5, wholeSim: () => null });
+  let asked = 0, fail = true;
+  lib.radarCalibrate = async () => { asked += 1; if (fail) throw new Error('busy'); return { abstract: { threshold: 0.2, overlap: false }, full: null, seeds: 3, at: 1792500000, baseline: null }; };
+  const base = validateRadar({ scope: { kind: 'library' }, profile: profile({ topics: [] }), sources: [{ id: 'database:arxiv', on: true, kind: 'database', db: 'arxiv' }], size: { fresh: 15, older: 0 }, seeds: seeds() });
+  const old = { abstract: 0.3, full: null, calibration: { seedsKey: seedsKey(base.seeds), abstract: {}, full: null, seeds: 3, at: NOW } };
+  const run = (threshold, state = emptyState()) => collectRadar({ config: { ...base, threshold }, since: '2026-09-01', now: NOW, fetch, library: lib, state, sleep: async () => {} });
+  const failed = await run(old);
+  assert.equal(asked, 1, 'made before the version: calibrate again');
+  assert.equal(failed.threshold, null, 'the old threshold stands');
+  await run(old, failed.state);
+  assert.equal(asked, 1, 'and waits a day after a failed try');
+  fail = false;
+  const done = await run(old);
+  assert.equal(done.threshold?.calibration?.version, CALIBRATION_VERSION);
+  await run(done.threshold);
+  assert.equal(asked, 2, 'the current version is not calibrated again');
+});
+
+const wholeRun = (feedItems, lib, over = {}) => {
+  const fetch = routedFetch({ [arxivCategoryFeed('cond-mat.mtrl-sci')]: res(200, arxivFeed(feedItems)) });
+  const threshold = { abstract: 0.1, full: 0.05, calibration: { baseline: { labels: ['zotero/K1'], abstract: [0.5], full: [0.6] }, version: CALIBRATION_VERSION, seedsKey: seedsKey(seeds()) } };
+  const config = validateRadar({ scope: { kind: 'library' }, profile: profile({ topics: [] }), sources: [{ id: 'database:arxiv', on: true, kind: 'database', db: 'arxiv' }], size: { fresh: 50, older: 0, discover: 0 }, seeds: seeds(), threshold, ...over });
+  return collectRadar({ config, since: '2026-09-01', now: NOW, fetch, library: lib, state: emptyState() });
+};
+
+test('every arXiv paper past the lower bar is read whole, in batches the server takes, up to the total cap', async () => {
+  const items = Array.from({ length: WHOLE_PAPERS + 10 }, (_, i) => ({ id: `2610.${String(10000 + i)}`, title: `Invented paper number ${i}`, summary: 'band gap' }));
+  const lib = seedLibrary({ abstractSim: () => 0.09, wholeSim: () => 0.06 });
+  // a different closest seed per ten papers, so no seed's share is the limit here
+  lib.radarScore = async (q) => Object.fromEntries(q.items.map((it, i) => [it.id, { similarity: 0.5, negative: 0, seed_max: 0.09, seed_best: `zotero/K${i % 10}`, seed_raw: 0.6 }]));
+  await wholeRun(items, lib);
+  const read = lib.calls.fulltext.flatMap((q) => q.items);
+  assert.equal(read.length, WHOLE_PAPERS, 'not the first 40');
+  assert.ok(lib.calls.fulltext.every((q) => q.items.length <= 40), 'the server takes 40 a call');
+});
+
+test('one seed cannot fill the papers read whole', async () => {
+  const items = Array.from({ length: WHOLE_SEED_SHARE + 12 }, (_, i) => ({ id: `2610.${String(20000 + i)}`, title: `Invented paper number ${i}`, summary: i >= WHOLE_SEED_SHARE + 10 ? 'other' : 'hub' }));
+  const lib = seedLibrary({ abstractSim: (text) => (text.includes('other') ? 0.075 : 0.2), wholeSim: () => 0.06 });
+  const score = lib.radarScore;
+  lib.radarScore = async (q) => Object.fromEntries(Object.entries(await score(q)).map(([id, s]) => [id, { ...s, seed_best: q.items.find((i) => i.id === id).text.includes('other') ? 'zotero/NICHE' : 'zotero/HUB' }]));
+  await wholeRun(items, lib);
+  const read = lib.calls.fulltext.flatMap((q) => q.items.map((i) => i.arxiv));
+  assert.equal(read.length, WHOLE_SEED_SHARE + 2, "the hub's share, and both of the niche seed's papers, though they rank below all of the hub's");
+  assert.ok(read.includes(`2610.${20000 + WHOLE_SEED_SHARE + 10}`));
+});
+
+test('a journal paper cannot be read whole, so it is judged at the bar that gets an arXiv paper read, and ranks from there', async () => {
+  const journal = { id: 'journal:S1', on: true, kind: 'journal', openalexId: 'S1', name: 'J Invented', issn: null };
+  const works = { results: [{ id: 'https://openalex.org/W1', doi: 'https://doi.org/10.9/j1', display_name: 'Journal paper near the bar', type: 'article', publication_date: '2026-10-19', publication_year: 2026, primary_location: { landing_page_url: 'https://doi.org/10.9/j1', source: { display_name: 'J Invented' } }, abstract_inverted_index: { band: [0], gap: [1] }, authorships: [] }] };
+  const listing = arxivFeed([{ id: '2610.30001', title: 'Unreadable preprint near the bar', summary: 'band gap' }, { id: '2610.30002', title: 'Preprint at the whole bar', summary: 'band gap' }]);
+  const fetch = async (url) => (String(url) === arxivCategoryFeed('cond-mat.mtrl-sci') ? res(200, listing) : String(url).startsWith('https://api.openalex.org/works') ? res(200, JSON.stringify(works)) : res(404));
+  const lib = seedLibrary({ abstractSim: () => 0.08, wholeSim: (id) => (id === '2610.30002' ? 0.05 : null) });
+  const threshold = { abstract: 0.1, full: 0.05, calibration: { baseline: { labels: ['zotero/K1'], abstract: [0.5], full: [0.6] }, version: CALIBRATION_VERSION, seedsKey: seedsKey(seeds()) } };
+  const config = validateRadar({ scope: { kind: 'library' }, profile: profile({ topics: [] }), sources: [{ id: 'database:arxiv', on: true, kind: 'database', db: 'arxiv' }, journal], size: { fresh: 50, older: 0, discover: 0 }, seeds: seeds(), threshold });
+  const out = await collectRadar({ config, since: '2026-09-01', now: NOW, fetch, library: lib, state: emptyState() });
+  const by = Object.fromEntries(out.picked.map((r) => [r.title, r]));
+  assert.ok(by['Journal paper near the bar'], '0.08 clears 0.1 - the margin');
+  assert.ok(!by['Unreadable preprint near the bar'], 'a preprint that could not be read still needs the abstract bar');
+  assert.equal(by['Journal paper near the bar'].score, 0.02, '0.01 past the bar a journal paper has to clear, and 0.01 for a watched journal');
+  assert.equal(by['Preprint at the whole bar'].score, 0);
+});
+
+test('the lower bar never goes below where unrelated papers end', async () => {
+  const items = [{ id: '2610.41001', title: 'Under unrelated papers', summary: 'x' }, { id: '2610.41002', title: 'Over unrelated papers', summary: 'y' }];
+  const lib = seedLibrary({ abstractSim: (text) => (text.startsWith('Under') ? 0.03 : 0.05), wholeSim: () => 0.1 });
+  const threshold = { abstract: 0.06, full: 0.05, calibration: { abstract: { unrelated: { p95: 0.04 } }, baseline: { labels: ['zotero/K1'], abstract: [0.5], full: [0.6] }, version: CALIBRATION_VERSION, seedsKey: seedsKey(seeds()) } };
+  await wholeRun(items, lib, { threshold });
+  assert.deepEqual(lib.calls.fulltext.flatMap((q) => q.items.map((i) => i.arxiv)), ['2610.41002'], '0.03 is past 0.06 - the margin, but not past 0.04');
+});
+
+test('what the user liked reaches the server as a seed for both passes, and its label reads as the title; the calibration is left alone', async () => {
+  const items = [{ id: '2610.42001', title: 'Close to a liked paper', summary: 'liked words' }];
+  const lib = seedLibrary({ abstractSim: () => 0.2, wholeSim: () => 0.1 });
+  const asked = [];
+  const score = lib.radarScore;
+  lib.radarScore = async (q) => { asked.push(q); const out = await score(q); return Object.fromEntries(Object.entries(out).map(([id, v]) => [id, { ...v, seed_best: 'liked:An invented liked paper' }])); };
+  lib.radarCalibrate = async () => { throw new Error('a like must not recalibrate'); };
+  const state = emptyState();
+  const text = 'An invented liked paper. Its abstract.';
+  state.examples.positive.push({ id: 'doi:10.1/liked', text, at: NOW }, { id: 'doi:10.1/later', text: 'Read later. Abstract.', at: NOW });
+  state.seen['doi:10.1/liked'] = { at: NOW, verdict: 'liked' };
+  state.seen['doi:10.1/later'] = { at: NOW, verdict: 'later' };
+  state.shown['doi:10.1/liked'] = { keys: ['doi:10.1/liked'], title: 'An invented liked paper', text, authors: [], venue: '', sources: [] };
+  const fetch = routedFetch({ [arxivCategoryFeed('cond-mat.mtrl-sci')]: res(200, arxivFeed(items)) });
+  const threshold = { abstract: 0.1, full: 0.05, calibration: { baseline: { labels: ['zotero/K1'], abstract: [0.5], full: [0.6] }, version: CALIBRATION_VERSION, seedsKey: seedsKey(seeds()) } };
+  const config = validateRadar({ scope: { kind: 'library' }, profile: profile({ topics: [] }), sources: [{ id: 'database:arxiv', on: true, kind: 'database', db: 'arxiv' }], size: { fresh: 5, older: 0, discover: 0 }, seeds: seeds(), threshold });
+  const judged = [];
+  const out = await collectRadar({ config, since: '2026-09-01', now: NOW, fetch, library: lib, state, judge: async (pool, prof) => { judged.push(prof); return { off: new Set(), error: null }; } });
+  const taught = [{ title: 'An invented liked paper', text }];
+  assert.deepEqual(asked.at(-1).seeds.taught, taught);
+  assert.deepEqual(lib.calls.fulltext[0].seeds.taught, taught);
+  assert.equal(out.threshold, null, 'the seeds that were calibrated did not change');
+  assert.deepEqual(judged[0].liked, ['An invented liked paper'], 'and the profile check hears of it');
+});
+
+test('on a seed radar, Not relevant sinks the papers close to it', async () => {
+  const lib = seedLibrary({ abstractSim: () => 0.2, wholeSim: () => null });
+  const closeness = { 'Like the dismissed one': 0.8, 'Ordinary': 0.69 };
+  const score = lib.radarScore;
+  lib.radarScore = async (q) => { const out = await score(q); return Object.fromEntries(Object.entries(out).map(([id, v]) => [id, { ...v, negative: closeness[q.items.find((i) => i.id === id).text.split('. ')[0]] }])); };
+  const out = await wholeRun([{ id: '2610.43001', title: 'Like the dismissed one', summary: 'a' }, { id: '2610.43002', title: 'Ordinary', summary: 'b' }], lib);
+  const by = Object.fromEntries(out.picked.map((r) => [r.title, r]));
+  assert.equal(by.Ordinary.why.negative, 0, 'on the labelled rows the closest to a dismissed paper was 0.74: most of a field costs nothing');
+  assert.ok(by['Like the dismissed one'].why.negative <= -0.08, 'more than most papers are past the bar');
+  assert.deepEqual(out.picked.map((r) => r.title), ['Ordinary', 'Like the dismissed one']);
+});
+
+/** Whole-paper margins by title; every paper is past the lower bar on its abstract. `second` defaults to close behind. */
+const nearRun = async (papers, judge, over = {}) => {
+  const items = papers.map((p, i) => ({ id: `2610.${50000 + i}`, title: p.title, summary: 'invented' }));
+  const byId = Object.fromEntries(items.map((it, i) => [it.id, papers[i]]));
+  const lib = seedLibrary({ abstractSim: () => 0.08, wholeSim: () => 0 });
+  // closest to different seeds on the abstract, so all of them are read whole
+  lib.radarScore = async (q) => Object.fromEntries(q.items.map((it, i) => [it.id, { similarity: 0.5, negative: 0, seed_max: 0.08, seed_best: `zotero/K${i % 5}`, seed_raw: 0.6 }]));
+  lib.radarFulltext = async (q) => Object.fromEntries(q.items.map((i) => { const p = byId[i.arxiv]; return [i.id, { seed_max: p.margin, seed_best: 'zotero/K1', seed_raw: 0.7, seed_second: p.second ?? p.margin - 0.01 }]; }));
+  const fetch = routedFetch({ [arxivCategoryFeed('cond-mat.mtrl-sci')]: res(200, arxivFeed(items)) });
+  const threshold = { abstract: 0.1, full: 0.05, calibration: { abstract: { unrelated: { p95: 0.0 } }, full: { unrelated: { p95: 0.01 } }, baseline: { labels: ['zotero/K1'], abstract: [0.5], full: [0.6] }, version: CALIBRATION_VERSION, seedsKey: seedsKey(seeds()) } };
+  const config = validateRadar({ scope: { kind: 'library' }, profile: profile({ topics: [] }), sources: [{ id: 'database:arxiv', on: true, kind: 'database', db: 'arxiv' }], size: { fresh: 30, older: 0, discover: 0 }, seeds: seeds(), threshold, ...over });
+  return collectRadar({ config, since: '2026-09-01', now: NOW, fetch, library: lib, state: emptyState(), judge });
+};
+const passAll = async () => ({ off: new Set(), error: null });
+
+test('fewer than 25 hits: the closest under the bar fill them, marked, never a hub or judge reject, and the ledger says what was cut where', async () => {
+  const above = Array.from({ length: 10 }, (_, i) => ({ title: `Invented paper above ${i}`, margin: 0.06 + i / 1000 }));
+  const under = Array.from({ length: 22 }, (_, i) => ({ title: `Invented paper under ${i}`, margin: 0.049 - i / 1000 }));
+  const hub = { title: 'Invented hub paper', margin: 0.2, second: 0.02 };
+  const nearHub = { title: 'Invented hub paper under the bar', margin: 0.048, second: 0.0 };
+  const reject = { title: 'Invented rejected paper', margin: 0.0495 };
+  const tooFar = { title: 'Invented paper far under', margin: 0.005 };
+  const judge = async (pool) => ({ off: new Set(pool.filter((p) => p.title === reject.title).map((p) => p.id)), error: null });
+  const out = await nearRun([...above, ...under, hub, nearHub, reject, tooFar], judge);
+  assert.equal(out.picked.length, FILL_TO);
+  const filled = out.picked.filter((r) => r.nearBar);
+  assert.equal(filled.length, FILL_TO - 10);
+  assert.ok(out.picked.slice(0, 10).every((r) => !r.nearBar), 'what passed comes first, unmarked');
+  assert.deepEqual(filled.map((r) => r.title), under.slice(0, FILL_TO - 10).map((p) => p.title), 'closest to the bar first');
+  const stage = Object.fromEntries(out.state.nearBar.rows.map((r) => [r.title, r]));
+  assert.equal(stage[hub.title].stage, 'hub gap');
+  assert.equal(stage[nearHub.title].stage, 'hub gap');
+  assert.equal(stage[reject.title].stage, 'judge');
+  assert.equal(stage['Invented paper under 20'].stage, 'bar');
+  assert.equal(stage[tooFar.title], undefined, 'not near the bar');
+  assert.equal(stage[hub.title].seed, 'Band gaps of frameworks');
+  assert.equal(stage[hub.title].margin, 0.2);
+  assert.equal(out.state.nearBar.at, NOW);
+  assert.ok(!out.picked.some((r) => [hub.title, nearHub.title, reject.title, tooFar.title].includes(r.title)));
+});
+
+test('the near-bar ledger is bounded by stage', async () => {
+  const hubs = Array.from({ length: NEAR_BAR_STAGE + 7 }, (_, i) => ({ title: `Invented hub ${i}`, margin: 0.2, second: 0.01 }));
+  const out = await nearRun(hubs, passAll);
+  assert.equal(out.state.nearBar.rows.length, NEAR_BAR_STAGE);
+});
+
+test('25 hits past the bar need no fill; a failed profile check fills with nothing it could not vet', async () => {
+  const above = Array.from({ length: FILL_TO }, (_, i) => ({ title: `Invented paper above ${i}`, margin: 0.06 + i / 1000 }));
+  const under = [{ title: 'Invented paper under', margin: 0.049 }];
+  const full = await nearRun([...above, ...under], passAll);
+  assert.equal(full.picked.length, FILL_TO);
+  assert.ok(!full.picked.some((r) => r.nearBar));
+  const failed = await nearRun([...above.slice(0, 3), ...under], async () => ({ off: new Set(), error: 'rate limited' }));
+  assert.equal(failed.picked.length, 3);
+  assert.equal(failed.judgeProblem, 'rate limited');
+  const smaller = await nearRun([...above.slice(0, 3), ...under], passAll, { size: { fresh: 3, older: 0, discover: 0 } });
+  assert.equal(smaller.picked.length, 3, 'never past the size the radar asks for');
+});
+
+test('a day with nothing past the bar can still fill from just under it', async () => {
+  const out = await nearRun([{ title: 'Invented paper just under', margin: 0.049 }], passAll);
+  assert.deepEqual(out.picked.map((r) => [r.title, r.nearBar]), [['Invented paper just under', true]]);
+});
+
+test('a calibrated run leaves out what one broad seed alone holds up, and keeps what a second seed or a topic agrees with', async () => {
+  const items = [{ id: '2610.40001', title: 'Harness for invented agents', summary: 'software' }, { id: '2610.40002', title: 'Two seeds agree here', summary: 'both' }, { id: '2610.40003', title: 'Topic in the text', summary: 'sleep spindle' }];
+  const lib = seedLibrary({ abstractSim: () => 0.2, wholeSim: () => 0.1 });
+  lib.radarFulltext = async (q) => Object.fromEntries(q.items.map((i) => [i.id, { seed_max: 0.1, seed_best: 'zotero/K1', seed_raw: 0.7, seed_second: i.arxiv === '2610.40002' ? 0.09 : 0.02 }]));
+  const out = await wholeRun(items, lib, { profile: profile({ topics: [{ text: 'sleep spindle', weight: 1, origin: 'user' }] }) });
+  assert.deepEqual(out.picked.map((r) => r.title).sort(), ['Topic in the text', 'Two seeds agree here']);
 });
 
 test('namesakes: the one with works in the library wins; with none, the one whose work reads closest to it', async () => {

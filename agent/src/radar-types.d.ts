@@ -44,7 +44,7 @@ export interface RadarSeeds {
   categories: string[];
 }
 export interface ThresholdStats { threshold: number; overlap: boolean; related: Record<string, number>; unrelated: Record<string, number>; n_related: number; n_unrelated: number;
-  /** The similarity that keeps the closest tenth of the seeds' own field; the threshold is never below it. */
+  /** The similarity that keeps the closest tenth of the seeds' own field; it raises the threshold as far as the median seed. */
   field_cut?: number }
 /** Per seed, its mean similarity to recent papers of its own field; subtracted before the closest seed is taken. */
 export interface SeedBaseline { labels: string[]; abstract: number[]; full: number[] }
@@ -53,7 +53,7 @@ export interface RadarThreshold {
   abstract: number;
   /** One read whole from arXiv, at or above this; null until calibrated with whole papers. */
   full: number | null;
-  calibration?: { abstract: ThresholdStats; full: ThresholdStats | null; seeds: number; at: string; baseline?: SeedBaseline | null; field?: { abstracts: number; whole: number }; seedsKey?: string } | null;
+  calibration?: { abstract: ThresholdStats; full: ThresholdStats | null; seeds: number; at: string; baseline?: SeedBaseline | null; field?: { abstracts: number; whole: number }; seedsKey?: string; /** The calibration logic that made it (radar-seeds.js); absent is 1. */ version?: number } | null;
 }
 
 /** What a fetcher returns before normalising: scholarly.js results, feed items and MCP text rows all fit. */
@@ -70,8 +70,9 @@ export type PaperId = string; // 'doi:<lower>' | 'arxiv:<id>' | 'title:<normalis
 
 export interface RadarWhy {
   similarity: number; author: number; journal: number; topic: number; negative: number;
-  /** Spec radar-seeds: the closest seed ("zotero/KEY" or "text:<title>"), its title, and whether the paper was read whole. */
-  seed?: { label: string; title: string; whole: boolean; margin?: number };
+  /** Spec radar-seeds: the closest seed ("zotero/KEY" or "text:<title>"), its title, and whether the paper was read whole.
+   *  `second`: the next seed's margin; `lonely`: this seed stands alone among the seeds (radar-score.js hubOnly). */
+  seed?: { label: string; title: string; whole: boolean; margin?: number; second?: number; lonely?: boolean };
   /** Worth reading rows: how many library papers cite it (and up to 3 titles), and how many of this run's New rows. */
   citedBy?: { count: number; titles: string[]; newCount?: number };
   /** The learned topic this row matched (spec 017): the why-line says so. */
@@ -87,16 +88,20 @@ export interface RadarItem {
   score?: number; why?: RadarWhy;
   /** Worth reading rows: OpenAlex citation count and the plain-language reason shown on the row. */
   cites?: number; reason?: string;
+  /** Under the bar, shown to fill a short day (radar-run.js FILL_TO); read by the profile check, not a hub or judge reject. */
+  nearBar?: boolean;
 }
 
 export interface LibraryItem { key: string; doi: string | null; title: string; year: number | null; citekey: string | null; authors?: string[]; venue?: string; abstract?: string }
 
 export type ScoreScope = { collections: string[] | null };
 /** What the server needs to know the seeds by (radar_api.seed_matrix). */
-export interface SeedBody { keys: string[]; collections: string[]; texts: { title: string; text: string }[] }
+export interface SeedBody { keys: string[]; collections: string[]; texts: { title: string; text: string }[];
+  /** Papers the user liked or added (radar-feedback.js taughtSeeds), compared at a lower weight; never calibrated. */
+  taught?: { title: string; text: string }[] }
 export interface ScoreRequest { scope: ScoreScope; positives: string[]; negatives: string[]; items: { id: string; text: string }[]; seeds?: SeedBody; baseline?: SeedBaseline | null }
 /** `seed_max`: the margin over the closest seed's baseline (what thresholds compare); `seed_raw`: its plain similarity (what is shown). */
-export interface SeedScore { similarity: number; negative: number; seed_max?: number; seed_best?: string | null; seed_raw?: number }
+export interface SeedScore { similarity: number; negative: number; seed_max?: number; seed_best?: string | null; seed_raw?: number; seed_second?: number | null; seed_lonely?: boolean }
 export interface SeedProfile { topics: { text: string; weight: number }[]; authors: { name: string; count: number }[]; journals: { name: string; count: number }[] }
 
 /** `liked`: a thumbs-up, a positive example like `later` but nothing is saved. */
@@ -138,6 +143,8 @@ export interface UndoRecord {
   /** Spec 017: what the click taught or took back (absent on records made before it). */
   phrases?: PhraseDelta[];
 }
+/** What a run cut near the bar, and at which stage: under the `bar`, the `judge` (profile check) or the `hub gap` (hubOnly). */
+export interface NearBarLedger { at: string; rows: { title: string; seed: string; margin: number; stage: "bar" | "judge" | "hub gap" }[] }
 export type FeedbackVerdict = "added" | "later" | "liked" | "dismissed" | "undo";
 export interface RadarState {
   seen: Record<PaperId, { at: string; verdict: Verdict }>;
@@ -157,6 +164,8 @@ export interface RadarState {
   abstracts?: Record<string, { text: string; at: number }>;
   /** When a run last tried to calibrate a seed radar that had no calibration (ISO); a failed try waits a day. */
   calibrateTried?: string;
+  /** The last run's near-bar ledger; absent until a calibrated seed radar cut something near it. */
+  nearBar?: NearBarLedger;
 }
 
 /** A journal OpenAlex knows, as the setup sheet offers it. */
