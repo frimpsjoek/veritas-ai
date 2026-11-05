@@ -8,7 +8,7 @@ import { icon } from '../../ui/src/icons.js';
 import { formatRoute } from '../../ui/src/sources/route.js';
 import { titleNodes } from '../../ui/src/chat/markdown.js';
 import { apiOf, authorLine } from '../../ui/src/sources/view-kit.js';
-import { ancestorsOf, contextOf, crumbPath, nextSort, rowOfHit, rowOfItem, searchingLine, searchLine, searchPlaceholder, sortRows, treeRows, visibleRange } from './library-data.js';
+import { ancestorsOf, contextOf, crumbPath, nextSort, rowOfHit, rowOfItem, parseStored, searchingLine, searchLine, searchPlaceholder, sortRows, staleLine, treeRows, visibleRange } from './library-data.js';
 
 /** @typedef {import("./library-data.js").LibRow} LibRow */
 /** @typedef {import("./library-data.js").CollectionNode} CollectionNode */
@@ -18,17 +18,23 @@ const ROW_HEIGHT = 56;
 const SEARCH_MS = 250;
 const SEARCH_LIMIT = 100;
 const STORE_PREFIX = 'sbw-library-v1:';
+const TREE_KEY = 'sbw-library-tree-v1';
 
-/** The rows last shown for a collection, kept in this browser so a reload paints at once while the server answers
- *  (the full library is a 4 MB reply). Storage can be blocked or full; then there is simply no cache.
- *  @param {Window} win @param {string} key @returns {LibRow[] | null} */
+/** The rows last shown for a collection and when they were saved, kept in this browser so a reload paints at once while
+ *  the server answers (the full library is a 4 MB reply). Storage can be blocked or full; then there is simply no cache.
+ *  @param {Window} win @param {string} key @returns {{ at: string | null, rows: LibRow[] } | null} */
 function readStored(win, key) {
-  try { return JSON.parse(win.localStorage.getItem(STORE_PREFIX + key) ?? 'null'); } catch { return null; }
+  try { return parseStored(win.localStorage.getItem(STORE_PREFIX + key)); } catch { return null; }
 }
 
 /** @param {Window} win @param {string} key @param {LibRow[]} rows */
 function writeStored(win, key, rows) {
-  try { win.localStorage.setItem(STORE_PREFIX + key, JSON.stringify(rows)); } catch { /* full or blocked: the next load just waits for the server */ }
+  try { win.localStorage.setItem(STORE_PREFIX + key, JSON.stringify({ at: new Date().toISOString(), rows })); } catch { /* full or blocked: the next load just waits for the server */ }
+}
+
+/** The collections last listed, for when the server doesn't answer. @param {Window} win @returns {CollectionNode[]} */
+function readStoredTree(win) {
+  try { return JSON.parse(win.localStorage.getItem(TREE_KEY) ?? '[]'); } catch { return []; }
 }
 
 /** @param {LibRow[]} a @param {LibRow[]} b */
@@ -62,6 +68,9 @@ export function createLibraryView(ctx) {
   let pendingSearch = ''; // what "Search all papers" carries over to the whole library
   /** @type {any} */ let searchTimer = null;
   let loadError = '';
+  let stale = false; // the rows on show are the stored copy: the server didn't answer
+  /** @type {string | null} */ let staleAt = null;
+  let treeFailed = false;
   let loading = true;
   let drawn = false;
 
@@ -108,6 +117,9 @@ export function createLibraryView(ctx) {
   clear.hidden = true;
   bar.append(collectionsToggle, search, sortBox, h(doc, 'span', 'sbw-spacer-x'), clear, ask);
 
+  const staleBox = h(doc, 'div', 'sbw-lib-stale');
+  staleBox.setAttribute('role', 'status');
+  staleBox.hidden = true;
   const status = h(doc, 'p', 'sbw-hint sbw-lib-status');
   status.setAttribute('role', 'status');
   const columns = h(doc, 'div', 'sbw-lib-cols');
@@ -120,7 +132,7 @@ export function createLibraryView(ctx) {
   const rowsBox = h(doc, 'div', 'sbw-lib-rows');
   space.append(rowsBox);
   scroller.append(space);
-  main.append(head, bar, status, columns, scroller);
+  main.append(head, bar, staleBox, status, columns, scroller);
 
   // ---- the rows on show
   // Search results start in the server's relevance order until the reader picks a sort.
@@ -217,6 +229,16 @@ export function createLibraryView(ctx) {
     }
   }
 
+  function paintStale() {
+    staleBox.hidden = !stale;
+    if (!stale) return;
+    const line = h(doc, 'span', 'sbw-lib-stale-line', staleLine(staleAt));
+    const retry = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sb-button sbw-lib-stale-retry', 'Try again'));
+    retry.setAttribute('type', 'button');
+    retry.addEventListener('click', () => { void load(); if (treeFailed) void loadTree(); });
+    staleBox.replaceChildren(icon(doc, 'alert', 'sb-p-icon sbw-lib-stale-icon'), line, retry);
+  }
+
   function paintSortButtons() {
     const effective = litSort();
     relevance.hidden = !query;
@@ -243,6 +265,7 @@ export function createLibraryView(ctx) {
     list = shown();
     space.style.height = `${list.length * ROW_HEIGHT}px`;
     paintStatus();
+    paintStale();
     paintSortButtons();
     paintAsk();
     scroller.hidden = columns.hidden = Boolean(loadError) || (!loading && list.length === 0);
@@ -253,12 +276,13 @@ export function createLibraryView(ctx) {
   async function load() {
     const mine = ++token;
     loadError = '';
+    stale = false;
     const cacheKey = collection ?? '';
     const cached = cache.get(cacheKey);
     if (cached) { base = cached; loading = false; refresh(); return; }
     const stored = readStored(win, cacheKey);
     loading = !stored;
-    base = stored ?? [];
+    base = stored?.rows ?? [];
     refresh();
     /** @type {LibRow[] | null} */ let rows = null;
     let failure = '';
@@ -275,7 +299,9 @@ export function createLibraryView(ctx) {
       failure = String(/** @type {any} */ (error)?.message ?? error);
     }
     loading = false;
-    if (rows) { if (!stored || !sameRows(stored, rows)) base = rows; } else if (!stored) loadError = failure; // a stored copy stays when the server does not answer
+    if (rows) { if (!stored || !sameRows(stored.rows, rows)) base = rows; }
+    else if (stored) { stale = true; staleAt = stored.at; } // a stored copy stays when the server does not answer, and says so
+    else loadError = failure;
     refresh();
     paintTree();
   }
@@ -310,9 +336,12 @@ export function createLibraryView(ctx) {
   async function loadTree() {
     try {
       nodes = (await api('/zotero/collections')) ?? [];
+      treeFailed = false;
+      try { win.localStorage.setItem(TREE_KEY, JSON.stringify(nodes)); } catch { /* full or blocked: no saved copy */ }
     } catch (error) {
       host.logError(error);
-      nodes = [];
+      treeFailed = true;
+      if (!nodes.length) nodes = readStoredTree(win);
     }
     nodesLoaded = true;
     if (collection) for (const ancestor of ancestorsOf(nodes, collection)) open.add(ancestor);
@@ -352,7 +381,11 @@ export function createLibraryView(ctx) {
       list.append(row);
     }
     treeBox.append(list);
-    if (nodesLoaded && !nodes.length) treeBox.append(h(doc, 'p', 'sbw-hint sbw-tree-empty', 'No collections.'));
+    if (treeFailed) {
+      const note = h(doc, 'p', 'sbw-hint sbw-tree-empty', nodes.length ? "Can't reach the server; this is the last list this browser kept. " : "Can't reach the server. ");
+      note.append(linkButton('Try again', () => { void loadTree(); }));
+      treeBox.append(note);
+    } else if (nodesLoaded && !nodes.length) treeBox.append(h(doc, 'p', 'sbw-hint sbw-tree-empty', 'No collections.'));
   }
 
   function paintCrumb() {

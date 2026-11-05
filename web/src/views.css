@@ -49,6 +49,11 @@
 .sbw-lib-sortbtn[data-dir="1"].is-on::after { content: " \2193"; }
 .sbw-lib-sortbtn[data-dir="-1"].is-on::after { content: " \2191"; }
 .sbw-lib-collections, .sbw-lib-clear { margin: 0; }
+.sbw-lib-stale { display: flex; align-items: center; gap: var(--sbw-s2); margin: 0 var(--lib-gutter) var(--sbw-s2); padding: var(--sbw-s2) var(--sbw-s3); border: 1px solid var(--sb-ui-line); border-radius: var(--sbw-r1); font-size: var(--sbw-t-small); }
+.sbw-lib-stale[hidden] { display: none; }
+.sbw-lib-stale-line { flex: 1; min-width: 0; }
+.sbw-lib-stale-icon.sb-p-icon { flex: none; stroke: var(--sb-ui-danger); }
+.sbw-lib-stale-retry { flex: none; white-space: nowrap; }
 .sbw-lib-status { margin: 0; padding-bottom: var(--sbw-s2); min-height: 20px; }
 .sbw-lib-status .sb-p-icon.sbw-lib-spin { width: 14px; height: 14px; margin-inline-end: 6px; vertical-align: -2px; stroke: currentColor; animation: sbw-lib-spin 0.9s linear infinite; }
 @keyframes sbw-lib-spin { to { transform: rotate(360deg); } }
