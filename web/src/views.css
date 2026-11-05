@@ -21,7 +21,7 @@
 /* ---- Library */
 .sbw-lib { --lib-gutter: var(--sbw-s4); position: relative; display: flex; flex-direction: column; min-height: 0; background: var(--sb-ui-bg); }
 /* below 700 px: a sheet over the list, opened by the panel button or the chip */
-.sbw-lib-tree { display: none; position: absolute; z-index: 5; top: 0; bottom: 0; left: 0; width: min(320px, 85%); overflow: auto; box-sizing: border-box; padding: var(--sbw-s3) var(--sbw-s2); background: var(--sb-ui-bg); box-shadow: var(--sb-ui-shadow); font-size: var(--sbw-t-small); }
+.sbw-lib-tree { display: none; position: absolute; z-index: 5; top: 0; bottom: 0; left: 0; width: min(320px, 85%); overflow: auto; box-sizing: border-box; padding: var(--sbw-s3) var(--sbw-s2); background: var(--sb-ui-bg); border-right: 1px solid var(--sb-ui-line); box-shadow: var(--sb-ui-shadow); font-size: var(--sbw-t-small); }
 .sbw-lib.show-tree .sbw-lib-tree { display: block; }
 .sbw-tree-close { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--sbw-r1); background: none; color: var(--sb-ui-muted); cursor: pointer; }
 .sbw-tree-close:hover { background: var(--sb-ui-hover); color: var(--sb-ui-text); }
