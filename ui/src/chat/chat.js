@@ -210,7 +210,8 @@ export class ChatView {
     this.historyToggle = this.el('button', 'sb-ai-history-toggle');
     this.historyToggle.setAttribute('type', 'button');
     this.historyToggle.append(this.icon('panelLeft'));
-    this.historyToggle.addEventListener('click', () => this.setHistoryCollapsed(!this.historyCollapsed));
+    // what is on screen decides: the web shell starts a phone with the list folded, without saving that as a choice
+    this.historyToggle.addEventListener('click', () => this.setHistoryCollapsed(!this.side.hidden));
     this.historyNewChat = button(this.doc, 'New chat', () => this.newChat());
     this.historyNewChat.className = 'sb-ai-history-newchat';
     // the open session's name and, when it is in a project, "in <project>"; always shown, so the thread has a heading
@@ -1604,7 +1605,7 @@ export class ChatView {
     const on = current?.kind === 'papers' ? { result: { id: current.ref.id, version: current.ref.version }, rows: 'all' } : null;
     const user = this.addUser(text, attachments, on ? { skills, on } : { skills });
     const turn = this.addAnswer();
-    turn.retry = { run: () => { this.attachments = attached; this.skills = skills; this.renderChips(); return this.resendAfterSwitch(text, this.mode); } };
+    turn.retry = { run: () => { this.attachments = [...attached, ...this.attachments]; this.skills = skills; this.renderChips(); return this.resendAfterSwitch(text, this.mode); } };
     this.startLive(turn);
     this.reserveSpace(user, turn.root);
     this.follower.follow();
