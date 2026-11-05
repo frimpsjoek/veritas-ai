@@ -1284,7 +1284,7 @@ export async function createLocalRuntime(deps) {
         id, ref: { kind: 'web', url: it.url }, inLibrary: false, title: it.title, authors: it.authors, year: it.year, venue: it.venue,
         doi: it.doi, url: it.url, abstract: it.abstract, abstractStatus: it.abstract ? 'source' : 'none', citations: it.cites ?? null, fullText: false,
         pdfUrl: it.arxiv ? `https://arxiv.org/pdf/${it.arxiv}` : null, studyType: null, foundBy: it.sources.map((id) => sourceLabel(id, config)),
-        radar: { key: it.id, score: it.score ?? 0, why: /** @type {any} */ (it.why), links: it.links, sources: it.sources, date: it.date, ...(it.reason ? { reason: it.reason } : {}), ...(it.nearBar ? { nearBar: true } : {}), ...(why.lines.get(it.id) ? { why_line: why.lines.get(it.id) } : {}) },
+        radar: { key: it.id, score: it.score ?? 0, why: /** @type {any} */ (it.why), links: it.links, sources: it.sources, date: it.date, ...(it.reason ? { reason: it.reason } : {}), ...(it.nearBar ? { nearBar: true } : {}), ...(it.afield ? { afield: it.afield } : {}), ...(why.lines.get(it.id) ? { why_line: why.lines.get(it.id) } : {}) },
       });
     });
     /** @type {import("./domain").ResultRef[]} */

@@ -90,6 +90,8 @@ export interface RadarItem {
   cites?: number; reason?: string;
   /** Under the bar, shown to fill a short day (radar-run.js FILL_TO); read by the profile check, not a hub or judge reject. */
   nearBar?: boolean;
+  /** OpenAlex's field for the work (Worth reading rows); `afield`: the same, when this row holds the place kept for another field. */
+  field?: string; afield?: string;
 }
 
 export interface LibraryItem { key: string; doi: string | null; title: string; year: number | null; citekey: string | null; authors?: string[]; venue?: string; abstract?: string }

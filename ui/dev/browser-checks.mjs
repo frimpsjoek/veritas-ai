@@ -139,6 +139,20 @@ export async function runBrowserChecks(browser, port, outDir) {
     check(`${tag} an arXiv paper shows its title once, in the same font family as its text`, paper.titles === 1 && paper.titleFont === paper.bodyFont && paper.bylineFont === paper.bodyFont, paper);
     check(`${tag} the abstract is body text under a small label, its TeX drawn`, paper.label === 'Abstract' && paper.quotes === 0 && paper.math === 1, paper);
     check(`${tag} subjects are chips and PDF / Full text are header buttons`, JSON.stringify(paper.chips) === '["Mesoscale and Nanoscale Physics","Materials Science"]' && JSON.stringify(paper.links) === '["PDF","Full text"]' && paper.meta === 'arXiv:2607.25690v2 · Submitted 28 Jul 2026 · revised 25 Oct 2026' && !paper.sideways, paper);
+    const beside = await page.evaluate(() => {
+      const article = document.querySelector('.sbw-browser-article');
+      const figure = document.createElement('figure');
+      figure.className = 'sbw-reader-figure';
+      figure.innerHTML = '<img alt="" style="aspect-ratio:4/3;background:#cdd">';
+      document.querySelector('.sbw-reader-head').after(figure);
+      const text = article.querySelector('.sbw-note-body p');
+      text.textContent = 'Proximity effects in layered heterostructures are commonly represented by static parameters. '.repeat(14);
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      const lines = [...range.getClientRects()];
+      return { wide: article.classList.contains('is-wide'), articleWidth: Math.round(article.getBoundingClientRect().width), first: Math.round(lines[0].width), last: Math.round(Math.max(...lines.slice(-2).map((r) => r.width))), figure: Math.round(figure.getBoundingClientRect().width) };
+    });
+    check(`${width}px a paper's page takes the width, with the abstract beside the figure and on beneath it`, beside.wide && (width < 760 || (beside.first < beside.last && beside.articleWidth > 800)), beside);
     await page.screenshot({ path: join(outDir, `browser-arxiv-${width}.png`) });
     await page.click('.sbw-reader-links button:last-child');
     await page.waitForFunction(() => document.querySelector('.sbw-browser-title')?.textContent === 'The other article');
@@ -287,22 +301,37 @@ export async function runBrowserChecks(browser, port, outDir) {
       const first = document.querySelector('.sbw-paper');
       return {
         acts: [...first.querySelectorAll('.sb-dg-act')].map((b) => b.textContent), keys: [...first.querySelectorAll('.sb-dg-act')].map((b) => b.dataset.key), current: first.classList.contains('is-current'),
-        open: [...first.querySelectorAll('.sbw-paper-open a')].map((a) => a.textContent), lead: first.querySelector('.sbw-paper-open a').classList.contains('is-lead'),
-        chips: [...first.querySelectorAll('.sbw-why-chip')].map((c) => c.textContent), chipTag: first.querySelector('.sbw-why-chip').tagName, near: document.querySelectorAll('.sbw-paper')[1].textContent.includes('Just under the bar'),
-        judged: document.querySelector('.sbw-papers-judged')?.textContent, more: document.querySelector('.sbw-papers-more')?.textContent,
+        chips: first.querySelectorAll('.sbw-why-chip, .sbw-paper-open, .sbw-paper-source').length, authors: first.querySelector('.sbw-paper-meta')?.textContent, near: document.querySelectorAll('.sbw-paper')[1].textContent.includes('Just under the bar'),
+        judged: document.querySelector('.sbw-papers-judged'), more: document.querySelector('.sbw-papers-more')?.textContent,
         worthHead: document.querySelector('h2.sbw-papers-head')?.firstChild.textContent, worthShown: document.querySelector('h2.sbw-papers-head').nextElementSibling.querySelectorAll('.sbw-paper').length, worthMore: document.querySelector('h2.sbw-papers-head').nextElementSibling.querySelector('.sbw-papers-more')?.textContent,
         run: document.querySelector('.sbw-run')?.textContent, sideways: document.scrollingElement.scrollWidth > innerWidth,
-        summaryIcon: Boolean(document.querySelector('.sbw-paper-more > summary svg.sb-lucide')),
+        summaryIcon: Boolean(document.querySelector('.sbw-paper-more > summary svg.sb-lucide')), hasMore: Boolean(document.querySelector('.sbw-paper-more')),
       };
     });
-    check(`${tag} labelled pills with keys, on the first open paper`, JSON.stringify(home.acts) === '["Add to Zotero","Like","Not for me"]' && home.keys.join() === 'a,l,d' && home.current, home);
-    check(`${tag} the open row leads with the full text; PDF and Abstract follow, each address once`, home.open.join() === 'Full text,PDF,Abstract' && home.lead, home.open);
-    check(`${tag} why chips are display only; a row near the bar says so`, home.chips[0].startsWith('close to') && home.chipTag === 'SPAN' && home.near, home);
-    check(`${tag} progress and steps: 8 shown of 11, 3 of 5 Worth reading, an h2`, home.judged === '0 of 11 judged \u00B7 every click teaches the radar' && home.more === 'Show 3 more' && home.worthHead === 'Worth reading' && home.worthShown === 3 && home.worthMore === 'Show 2 more', home);
+    check(`${tag} icons with keys, on one line, on the first open paper`, JSON.stringify(home.acts) === '["Add to Zotero","Like","Not for me"]' && home.keys.join() === 'a,l,d' && home.current, home);
+    check(`${tag} no why, ways in or source lines; a row near the bar says so`, home.chips === 0 && home.near, home);
+    check(`${tag} steps: 8 shown of 11, 3 of 5 Worth reading, an h2`, !home.judged && home.more === 'Show 3 more' && home.worthHead === 'Worth reading' && home.worthShown === 3 && home.worthMore === 'Show 2 more', home);
     check(`${tag} the run line says when the issue came; no sideways scroll`, /Issue built at|Last issue built/.test(home.run) && /next /.test(home.run) && !home.sideways, home);
-    check(`${tag} "Read the abstract" has a line icon, no arrow character`, home.summaryIcon, home);
+    check(`${tag} "Read the abstract" has a line icon, no arrow character`, home.summaryIcon || !home.hasMore, home);
     await page.locator('.sbw-today').scrollIntoViewIfNeeded();
     await page.evaluate(() => document.querySelector('.sbw-today').scrollIntoView({ block: 'start' }));
+    const wraps = await page.evaluate(() => {
+      const paper = [...document.querySelectorAll('.sbw-paper.has-figure')].find((p) => p.querySelector('.sbw-paper-why'));
+      const acts = document.querySelector('.sbw-paper .sb-dg-acts');
+      const tops = [...acts.querySelectorAll('.sb-dg-act, .sb-dg-chev')].map((b) => Math.round(b.getBoundingClientRect().top));
+      return { oneLine: new Set(tops).size === 1, authors: document.querySelector('.sbw-layout-authors')?.getAttribute('aria-pressed'), float: paper ? getComputedStyle(paper.querySelector('.sbw-paper-figure-box')).float : null };
+    });
+    check(`${tag} the icons sit on one line; authors are off by default; a figure floats so text runs round it`, wraps.oneLine && wraps.authors === 'false' && wraps.float !== 'none', wraps);
+    const runsRound = await page.evaluate(() => {
+      const paper = document.querySelector('.sbw-paper.has-figure');
+      const text = paper.querySelector('.sbw-paper-why');
+      text.textContent = 'Voles dig long burrows under the meadow in every season of the year. '.repeat(5);
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      const lines = [...range.getClientRects()];
+      return { first: Math.round(lines[0].width), last: Math.round(Math.max(...lines.slice(-2).map((r) => r.width))), figure: Math.round(paper.querySelector('.sbw-paper-figure-box').getBoundingClientRect().bottom), bottom: Math.round(lines.at(-1).bottom) };
+    });
+    check(`${tag} the abstract runs round the figure and takes the full width beneath it`, runsRound.bottom > runsRound.figure && runsRound.last > runsRound.first, runsRound);
     await shot('home');
     await page.evaluate(() => document.querySelector('h2.sbw-papers-head').scrollIntoView({ block: 'start' }));
     await shot('worth');
@@ -322,14 +351,14 @@ export async function runBrowserChecks(browser, port, outDir) {
     await page.evaluate(() => document.activeElement?.blur());
     await page.keyboard.press('a');
     await page.waitForFunction(() => document.querySelector('.sbw-paper .sb-dg-state')?.textContent.startsWith('Added to Zotero'));
-    const added = await page.evaluate(() => ({ state: document.querySelector('.sbw-paper .sb-dg-state').textContent, call: window.__calls.filter((c) => c.kind === 'add-to-library').at(-1), second: document.querySelectorAll('.sbw-paper')[1].classList.contains('is-current'), head: document.querySelector('.sbw-home-date').textContent, judged: document.querySelector('.sbw-papers-judged').textContent }));
-    check(`${tag} a adds to the picked collection, says where, and moves on`, added.call.collection === 'foraging' && added.state === 'Added to Zotero \u00B7 Ecology \u203A Foraging' && added.second && /1 judged/.test(added.head) && added.judged.startsWith('1 of 11'), added);
+    const added = await page.evaluate(() => ({ state: document.querySelector('.sbw-paper .sb-dg-state').textContent, call: window.__calls.filter((c) => c.kind === 'add-to-library').at(-1), second: document.querySelectorAll('.sbw-paper')[1].classList.contains('is-current') }));
+    check(`${tag} a adds to the picked collection, says where, and moves on`, added.call.collection === 'foraging' && added.state === 'Added to Zotero \u00B7 Ecology \u203A Foraging' && added.second, added);
     check(`${tag} a sends one 'added'`, (await feedback()).filter((f) => f.verdict === 'added').length === 1, await feedback());
     await page.keyboard.press('l');
     await page.keyboard.press('d');
     await page.waitForFunction(() => document.querySelectorAll('.sbw-paper')[2].classList.contains('is-dismissed'));
-    const collapsed = await page.evaluate(() => { const p = document.querySelectorAll('.sbw-paper')[2]; return { why: getComputedStyle(p.querySelector('.sbw-paper-why')).display, open: getComputedStyle(p.querySelector('.sbw-paper-open')).display, state: p.querySelector('.sb-dg-state').textContent, undo: [...p.querySelectorAll('.sb-dg-act')].map((b) => b.textContent) }; });
-    check(`${tag} l likes, d folds the paper to its title and what was decided`, (await feedback()).map((f) => f.verdict).join() === 'added,liked,dismissed' && collapsed.why === 'none' && collapsed.open === 'none' && collapsed.state === 'Not for me: fewer like this' && collapsed.undo.join() === 'Undo', { f: await feedback(), collapsed });
+    const collapsed = await page.evaluate(() => { const p = document.querySelectorAll('.sbw-paper')[2]; return { why: getComputedStyle(p.querySelector('.sbw-paper-why')).display, state: p.querySelector('.sb-dg-state').textContent, undo: [...p.querySelectorAll('.sb-dg-act')].map((b) => b.textContent) }; });
+    check(`${tag} l likes, d folds the paper to its title and what was decided`, (await feedback()).map((f) => f.verdict).join() === 'added,liked,dismissed' && collapsed.why === 'none' && collapsed.state === 'Not for me: fewer like this' && collapsed.undo.join() === 'Undo', { f: await feedback(), collapsed });
     await page.keyboard.press('k');
     await page.keyboard.press('a');
     await page.waitForTimeout(100);
@@ -342,8 +371,8 @@ export async function runBrowserChecks(browser, port, outDir) {
     const row = page.locator('.sbw-paper').nth(3);
     await row.locator('a.sbw-paper-title').click();
     await page.waitForSelector('.sbw-reader-teach');
-    const teach = await page.evaluate(() => ({ text: document.querySelector('.sbw-reader-teach').textContent, split: Boolean(document.querySelector('.sbw-reader-links .sb-split .sb-coll')), select: document.querySelectorAll('select.sbw-reader-collection').length }));
-    check(`${tag} a paper opened from an issue has "For the radar" and the collection menu, no bare select`, /For the radar:LikeNot for me/.test(teach.text) && teach.split && teach.select === 0, teach);
+    const teach = await page.evaluate(() => ({ text: document.querySelector('.sbw-reader-teach').textContent, icons: document.querySelectorAll('.sbw-reader-links .sbw-reader-teach .sb-dg-act svg').length, split: Boolean(document.querySelector('.sbw-reader-links .sb-split .sb-coll')), select: document.querySelectorAll('select.sbw-reader-collection').length }));
+    check(`${tag} a paper opened from an issue has "For the radar" and the collection menu, no bare select`, teach.icons === 2 && teach.split && teach.select === 0, teach);
     await shot('reader');
     const reader = page.locator('.sbw-browser');
     await reader.locator('.sbw-reader-links .sb-split > .sbw-reader-action').click();
@@ -355,17 +384,9 @@ export async function runBrowserChecks(browser, port, outDir) {
     check(`${tag} the row on Home follows what the reader did`, true);
 
     // the PDF from Home: read only, so it says what highlights need; judging and Add are in the bars
-    await page.locator('.sbw-paper').nth(4).locator('.sbw-paper-open a').first().scrollIntoViewIfNeeded();
     await page.evaluate(() => window.__host.openLink('https://files.example/paper.pdf'));
     await page.waitForFunction(() => /Highlights need the paper in Zotero/.test(document.querySelector('.sbw-pdf-status')?.textContent ?? ''));
     check(`${tag} a web PDF says highlights need the paper in Zotero`, true);
-    await page.locator('.sbw-browser-tool[aria-label="Close"]').click();
-    await page.locator('.sbw-paper').first().scrollIntoViewIfNeeded();
-    await page.locator('.sbw-paper').first().locator('.sbw-paper-open a', { hasText: 'PDF' }).click();
-    await page.waitForFunction(() => /Highlights need/.test(document.querySelector('.sbw-pdf-status')?.textContent ?? ''));
-    const bars = await page.evaluate(() => ({ teach: Boolean(document.querySelector('.sbw-pdf-bar .sbw-reader-teach')), save: document.querySelector('.sbw-browser-save')?.textContent, title: document.querySelector('.sbw-browser-title').textContent, fits: document.querySelector('.sbw-browser-bar').scrollWidth <= document.querySelector('.sbw-browser-bar').clientWidth }));
-    check(`${tag} a PDF opened from an issue keeps Add to Zotero and "For the radar"; the paper already added says so`, bars.teach && bars.save === 'Added to Zotero' && bars.title === 'Vole burrow study number 1' && bars.fits, bars);
-    await shot('pdf');
     await page.locator('.sbw-browser-tool[aria-label="Close"]').click();
 
     // the run line's other two states, each from what the routines list says

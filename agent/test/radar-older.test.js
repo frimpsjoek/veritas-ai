@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { worthReading, OLDER } from '../src/radar-older.js';
+import { worthReading, withOneFromAfield, OLDER } from '../src/radar-older.js';
 import { politeFetch } from '../src/radar-sources.js';
 import { normalise, keysOf } from '../src/radar.js';
 import { emptyState } from '../src/radar-state.js';
@@ -148,4 +148,32 @@ test('the most cited candidates already shown or held do not starve the group: t
   const out = await worthReading({ libraryItems: three, scopeItems: three, newRows: [], state: emptyState(), fetch: openAlexGraph(big), now: NOW, size: { older: 3 }, seenKeys });
   assert.equal(out.rows.length, 3);
   assert.ok(out.rows.every((r) => !seenKeys.has(`doi:${r.doi}`)));
+});
+
+test('one place goes to a paper outside the library\'s own fields, the rest stay the most cited', () => {
+  const paper = (id, field) => ({ id, field });
+  const items = [paper('a', 'Chemistry'), paper('b', 'Chemistry'), paper('c', 'Physics'), paper('d', 'Physics'), paper('e', 'Chemistry'), paper('f', 'Earth Science'), paper('g', 'Medicine')];
+  const out = withOneFromAfield(items, 3);
+  assert.deepEqual(out.map((r) => r.id), ['a', 'b', 'f']);
+  assert.equal(out[2].afield, 'Earth Science');
+  assert.equal(out[0].afield, undefined);
+});
+
+test('no paper from elsewhere, or room for one only, changes nothing', () => {
+  const paper = (id, field) => ({ id, field });
+  const same = [paper('a', 'Chemistry'), paper('b', 'Physics'), paper('c', 'Chemistry'), paper('d', 'Physics')];
+  assert.deepEqual(withOneFromAfield(same, 3).map((r) => r.id), ['a', 'b', 'c']);
+  assert.deepEqual(withOneFromAfield([paper('a', 'Chemistry'), paper('b', 'Physics'), paper('c', 'Medicine')], 1).map((r) => r.id), ['a']);
+  assert.deepEqual(withOneFromAfield([paper('a', undefined), paper('b', undefined)], 3).map((r) => r.id), ['a', 'b']);
+});
+
+test('worthReading reads the field from OpenAlex and marks the row it picks for another field', async () => {
+  const refs = ['A', 'B', 'C', 'D'];
+  const works = [lib(1, refs), lib(2, refs), lib(3, refs),
+    { id: 'A', doi: '10.1/a', title: 'Home paper one', refs: [], field: 'Chemistry' }, { id: 'B', doi: '10.1/b', title: 'Home paper two', refs: [], field: 'Physics' },
+    { id: 'C', doi: '10.1/c', title: 'Home paper three', refs: [], field: 'Chemistry' }, { id: 'D', doi: '10.1/d', title: 'From elsewhere', refs: [], field: 'Earth and Planetary Sciences' }];
+  const lib3 = [1, 2, 3].map((n) => ({ key: `K${n}`, doi: `10.1/l${n}`, title: `Library paper ${n} on cortical oscillations`, year: 2020 + n, citekey: null }));
+  const { rows } = await run({ libraryItems: lib3, scopeItems: lib3, fetch: openAlexGraph(works), size: { older: 3 } });
+  assert.equal(rows.length, 3);
+  assert.deepEqual(rows.filter((r) => r.afield).map((r) => r.doi), ['10.1/d']);
 });

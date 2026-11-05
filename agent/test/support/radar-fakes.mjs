@@ -52,6 +52,7 @@ export function openAlexGraph(works) {
     publication_year: w.year ?? 1999, publication_date: `${w.year ?? 1999}-01-01`, cited_by_count: w.cited ?? 0,
     referenced_works: (w.refs ?? []).map((r) => `https://openalex.org/${r}`), authorships: [], primary_location: { source: { display_name: 'Journal of Invented Results' } },
     abstract_inverted_index: { Invented: [0], abstract: [1] },
+    ...(w.field ? { primary_topic: { field: { display_name: w.field } } } : {}),
   });
   const fn = async (url) => {
     calls.push(String(url));

@@ -268,6 +268,14 @@ p.sbw-prose { margin: 0 0 var(--sbw-s3); max-width: var(--measure); }
 .sbw-browser-body { flex: 1; min-height: 0; overflow: auto; }
 .sbw-browser-frame { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
 .sbw-browser-article { box-sizing: border-box; max-width: 680px; margin-inline: auto; padding: var(--sbw-s4) var(--sbw-s4) var(--sbw-s5, 48px); }
+.sbw-browser-article.is-wide { --measure: 820px; max-width: 1120px; display: flow-root; }
+.sbw-browser-article.is-wide:has(.sbw-reader-figure) { --measure: none; }
+.sbw-browser-article.is-wide :is(.sbw-reader-head, .sbw-note-body) { max-width: none; }
+.sbw-browser-article.is-wide .sbw-reader-title { font-size: 26px; }
+.sbw-browser-article.is-wide .sbw-note-body { font-size: 16px; line-height: 1.55; }
+.sbw-browser-article.is-wide .sbw-reader-figure { float: right; width: 46%; max-width: 520px; margin: 0 0 var(--sbw-s3) var(--sbw-s4); }
+.sbw-browser-article.is-wide .sbw-reader-figure img { max-height: none; width: 100%; }
+@media (max-width: 760px) { .sbw-browser-article.is-wide .sbw-reader-figure { float: none; width: auto; max-width: 100%; margin: 0 0 var(--sbw-s4); } }
 .sbw-browser-article img { max-width: 100%; height: auto; }
 .sbw-browser-article .sbw-note-body a { overflow-wrap: anywhere; }
 /* One family for the whole reader (2026-10-29): the title and byline in the note's prose font, the title larger; the
@@ -290,10 +298,8 @@ p.sbw-prose { margin: 0 0 var(--sbw-s3); max-width: var(--measure); }
 .sbw-reader-save > .sbw-reader-action { border-radius: var(--sbw-r1) 0 0 var(--sbw-r1); }
 .sbw-reader-chev { padding: 0 var(--sbw-s2); border-left: 0; border-radius: 0 var(--sbw-r1) var(--sbw-r1) 0; }
 /* From a radar issue: Like and Not for me, with what was decided once it is */
-.sbw-reader-teach { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sbw-s2); margin-top: var(--sbw-s3); color: var(--sb-ui-muted); font-family: var(--sb-ui-font); font-size: var(--sbw-t-small); }
-.sbw-reader-teach-note { color: var(--sb-ui-muted); font-size: 12px; }
+.sbw-reader-teach { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--sbw-s1); color: var(--sb-ui-muted); font-family: var(--sb-ui-font); font-size: var(--sbw-t-small); }
 .sbw-browser .sbw-pdf-bar { flex-wrap: wrap; padding: var(--sbw-s2) var(--sbw-s3) 0; }
-.sbw-pdf-bar .sbw-reader-teach { margin-top: 0; }
 .sbw-browser-save { flex: none; }
 .sbw-browser-save .sb-coll-pop { left: auto; right: 0; }
 /* A DOI's landing page (2026-10-29): line icons for "opens outside" and the citation, a graphical abstract only when

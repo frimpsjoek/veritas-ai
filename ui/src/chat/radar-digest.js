@@ -153,7 +153,7 @@ export class RadarDigest {
       return;
     }
     for (const a of actionList(this.canAdd)) {
-      const b = this.button(a.label, () => this.choose(row, a.verdict), a.primary, busy, a.mark, a.hint, !this.judging);
+      const b = this.button(a.label, () => this.choose(row, a.verdict), a.primary, busy, a.mark, a.hint, true);
       if (!this.judging) { box.append(b); continue; }
       b.dataset.key = a.key;
       b.setAttribute('aria-keyshortcuts', a.key);

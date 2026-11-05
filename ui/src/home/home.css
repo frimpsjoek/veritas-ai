@@ -55,13 +55,13 @@ button.sbw-quiet { border: 0; background: none; font: inherit; color: var(--sb-u
 .sbw-papers-more[hidden] { display: none; }
 .sbw-papers-head small { margin-left: var(--sbw-s3); color: var(--sb-ui-muted); font-family: var(--sbw-sans); font-size: var(--sbw-t-small); }
 .sbw-papers-head { grid-column: 1 / -1; margin: var(--sbw-s2) 0 0; padding-top: var(--sbw-s4); border-top: 1px solid var(--sb-ui-line); font-family: var(--sbw-serif); font-size: 20px; font-weight: 400; }
-.sbw-paper { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sbw-s4); min-width: 0; padding-top: var(--sbw-s4); border-top: 1px solid var(--sb-ui-line); }
-.sbw-paper.has-figure { grid-template-columns: minmax(0, 1fr) 144px; }
-.sbw-papers.is-one .sbw-paper.has-figure { grid-template-columns: minmax(0, 1fr) 208px; }
-.sbw-paper-text { display: flex; flex-direction: column; gap: var(--sbw-s1); min-width: 0; }
+/* flow-root holds the floated figure inside the paper; the text is plain flow, so it runs round the figure and on beneath it */
+.sbw-paper { display: flow-root; min-width: 0; padding-top: var(--sbw-s4); border-top: 1px solid var(--sb-ui-line); }
+.sbw-paper-text { min-width: 0; }
 /* Every figure gets the same 4:3 frame on the right, filled and cropped from the top (where panel (a) usually is),
    on white since most are drawn on white. The paper's link shows it whole. */
-.sbw-paper-figure-box { display: none; align-self: start; aspect-ratio: 4 / 3; overflow: hidden; background: #fff; border: 1px solid var(--sb-ui-line); border-radius: 4px; }
+.sbw-paper-figure-box { display: none; float: right; width: 168px; margin: 2px 0 var(--sbw-s2) var(--sbw-s4); aspect-ratio: 4 / 3; overflow: hidden; background: #fff; border: 1px solid var(--sb-ui-line); border-radius: 4px; }
+.sbw-papers.is-one .sbw-paper-figure-box { width: 240px; }
 .sbw-paper.has-figure .sbw-paper-figure-box { display: block; }
 .sbw-paper-figure { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top center; }
 .sbw-paper-more { margin-top: var(--sbw-s1); }
@@ -70,42 +70,29 @@ button.sbw-quiet { border: 0; background: none; font: inherit; color: var(--sb-u
 .sbw-paper-more[open] > summary .sb-lucide { transform: rotate(180deg); }
 .sbw-paper-more > summary:hover { color: var(--sb-ui-text); }
 .sbw-paper-abstract { margin: var(--sbw-s2) 0 0; color: var(--sb-ui-text); font-size: 14px; line-height: 1.6; }
-.sbw-paper-title { font-family: var(--sbw-serif); font-size: 18px; line-height: 1.3; color: var(--sb-ui-text); text-decoration: none; }
+.sbw-paper-title { display: block; font-family: var(--sbw-serif); font-size: 18px; line-height: 1.3; color: var(--sb-ui-text); text-decoration: none; }
 a.sbw-paper-title:hover { text-decoration: underline; text-underline-offset: 3px; }
-.sbw-paper-meta { margin: 0; color: var(--sb-ui-muted); font-size: var(--sbw-t-small); }
-.sbw-paper-why { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; margin: var(--sbw-s1) 0 0; color: var(--sb-ui-muted); font-size: 14px; line-height: 1.5; }
+.sbw-paper-meta { margin: var(--sbw-s1) 0 0; color: var(--sb-ui-muted); font-size: var(--sbw-t-small); }
+/* clip, not hidden or a line clamp: those make a box of their own, which sits beside a float instead of running round it */
+.sbw-paper-why { max-height: 10.5em; overflow: clip; margin: var(--sbw-s1) 0 0; color: var(--sb-ui-muted); font-size: 14px; line-height: 1.5; }
 .sbw-today-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--sbw-s1) var(--sbw-s3); margin-bottom: calc(-1 * var(--sbw-s3)); }
 .sbw-today-bar .sbw-quiet { margin: 0; font-size: var(--sbw-t-small); }
 .sbw-today-bar .sbw-today-chat[hidden] { display: none; }
-.sbw-today-keys { color: var(--sb-ui-muted); font-size: 12px; }
-.sbw-today-keys[hidden] { display: none; }
-@container (max-width: 959px) { .sbw-today-keys { display: none; } }
-@media (hover: none) { .sbw-today-keys { display: none; } }
 .sbw-today-nav { display: flex; gap: var(--sbw-s2); }
 .sbw-today-nav .sbw-quiet { margin: 0; font-size: var(--sbw-t-small); }
 .sbw-today-nav .sbw-quiet[hidden], .sbw-layout[hidden] { display: none; }
 .sbw-today-bar .sbw-layout { margin: 0 0 0 auto; }
-.sbw-paper-source { margin: var(--sbw-s1) 0 0; color: var(--sb-ui-muted); font-size: 12px; letter-spacing: 0.01em; }
 /* The ways into a paper: one row of text links, the best one bold. */
-.sbw-paper-open { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sbw-s1) var(--sbw-s3); margin: var(--sbw-s1) 0 0; font-size: var(--sbw-t-small); }
-.sbw-paper-open a { display: inline-flex; align-items: center; gap: 5px; color: var(--sb-ui-accent); text-decoration: none; cursor: pointer; }
-.sbw-paper-open a:hover { text-decoration: underline; text-underline-offset: 3px; }
-.sbw-paper-open a.is-lead { font-weight: 600; }
 /* Why it matched: one quiet line of facts. Display only, so they are not buttons. */
-.sbw-paper-chips { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sbw-s1); margin: var(--sbw-s1) 0 0; color: var(--sb-ui-muted); font-size: 12px; }
-.sbw-why-chip { padding: 1px 8px; border-radius: 999px; background: var(--sb-ui-hover); color: var(--sb-ui-muted); line-height: 1.6; overflow-wrap: anywhere; }
-.sbw-why-chip.is-seed { color: var(--sb-ui-text); }
 /* The radar's actions under a paper: labelled pills, Add to Zotero split from its collection menu, Undo in a toast. A
    pill says its key on the paper the keys act on, where there is a keyboard. */
-.sbw-paper .sb-dg-acts { display: flex; flex-wrap: wrap; align-items: center; margin-top: var(--sbw-s2); gap: var(--sbw-s2); }
-.sbw-paper .sb-dg-act, .sb-dg-chev, .sbw-reader-teach .sb-dg-act, .sbw-today .sb-dg-toast .sb-dg-act { font: inherit; font-size: 13px; line-height: 1.3; padding: 4px 12px; border: 1px solid var(--sb-ui-line); border-radius: 999px; background: transparent; color: var(--sb-ui-text); cursor: pointer; white-space: nowrap; }
+.sbw-paper .sb-dg-acts { display: flex; flex-wrap: nowrap; align-items: center; margin-top: var(--sbw-s2); gap: var(--sbw-s1); }
+.sbw-paper .sb-dg-act, .sb-dg-chev, .sbw-reader-teach .sb-dg-act, .sbw-today .sb-dg-toast .sb-dg-act { font: inherit; font-size: 13px; line-height: 1.3; padding: 5px 9px; border: 1px solid var(--sb-ui-line); border-radius: 999px; background: transparent; color: var(--sb-ui-text); cursor: pointer; white-space: nowrap; }
 .sbw-paper .sb-dg-act, .sb-dg-chev, .sbw-reader-teach .sb-dg-act { display: inline-flex; align-items: center; gap: 6px; }
 .sbw-paper .sb-dg-act:hover:not(:disabled), .sb-dg-chev:hover:not(:disabled), .sbw-reader-teach .sb-dg-act:hover:not(:disabled) { border-color: var(--sb-ui-accent); color: var(--sb-ui-accent); }
 .sbw-paper .sb-dg-act.is-primary { border-color: var(--sb-ui-accent); color: var(--sb-ui-accent); font-weight: 600; }
 .sbw-paper .sb-dg-act:disabled, .sb-dg-chev:disabled, .sbw-reader-teach .sb-dg-act:disabled { opacity: .5; cursor: default; }
 .sbw-paper.is-current { border-top-color: var(--sb-ui-accent); }
-.sbw-paper.is-current .sb-dg-act[data-key]::after { content: attr(data-key); margin-left: 2px; padding: 0 4px; border: 1px solid var(--sb-ui-line); border-radius: 3px; font: 10px/1.5 var(--sb-ui-mono, monospace); color: var(--sb-ui-muted); }
-@media (hover: none) { .sbw-paper.is-current .sb-dg-act[data-key]::after { display: none; } }
 .sb-split { position: relative; display: inline-flex; }
 .sb-split > .sb-dg-act { border-radius: 999px 0 0 999px !important; }
 .sb-coll { display: inline-flex; }
@@ -120,14 +107,13 @@ a.sbw-paper-title:hover { text-decoration: underline; text-underline-offset: 3px
 .sb-coll-note { flex: none; color: var(--sb-ui-muted); font-size: 11px; font-weight: 400; }
 .sb-coll-none { margin: 0; padding: 6px 8px; color: var(--sb-ui-muted); }
 /* A paper judged Not for me folds to its title and what was decided, so the page keeps moving. */
-.sbw-paper.is-dismissed, .sbw-papers.is-one .sbw-paper.is-dismissed { grid-template-columns: minmax(0, 1fr); }
-.sbw-paper.is-dismissed :is(.sbw-paper-meta, .sbw-paper-why, .sbw-paper-more, .sbw-paper-open, .sbw-paper-chips, .sbw-paper-source, .sbw-paper-figure-box) { display: none !important; }
+.sbw-paper.is-dismissed :is(.sbw-paper-meta, .sbw-paper-why, .sbw-paper-more, .sbw-paper-figure-box) { display: none !important; }
 .sbw-paper.is-dismissed .sbw-paper-title { font-size: 15px; color: var(--sb-ui-muted); }
 .sbw-today .sb-dg-toast { position: fixed; bottom: 24px; z-index: 30; width: max-content; max-width: calc(100vw - 32px); box-sizing: border-box; }
 @media (max-width: 699px) { .sbw-today .sb-dg-toast { bottom: calc(72px + env(safe-area-inset-bottom, 0px)); } }
 .sbw-today .sb-dg-toast .sb-dg-act { color: var(--sb-ui-bg); border-color: transparent; text-decoration: underline; padding: 0; }
 /* The run line under the banner, and the rows that say a list is empty or could not load. */
-.sbw-run { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: var(--sbw-s1) var(--sbw-s3); padding: var(--sbw-s2) var(--sbw-s3); border: 1px solid var(--sb-ui-line); border-radius: var(--sbw-r1); color: var(--sb-ui-muted); font-size: var(--sbw-t-small); }
+.sbw-run { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: var(--sbw-s1) var(--sbw-s3); color: var(--sb-ui-muted); font-size: var(--sbw-t-small);  padding: 0; }
 .sbw-run-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--sb-ui-muted); }
 .sbw-run-text { flex: 1 1 12rem; min-width: 0; overflow-wrap: anywhere; }
 .sbw-run-text strong { color: var(--sb-ui-text); font-weight: 600; }
@@ -141,9 +127,6 @@ a.sbw-paper-title:hover { text-decoration: underline; text-underline-offset: 3px
 /* Under a group: the judging progress and the next step. */
 .sbw-papers-foot { grid-column: 1 / -1; display: flex; flex-direction: column; align-items: center; gap: var(--sbw-s2); padding: var(--sbw-s2) 0; }
 .sbw-papers-foot[hidden] { display: none; }
-.sbw-papers-track { display: block; width: 240px; max-width: 100%; height: 3px; border-radius: 2px; background: var(--sb-ui-line); overflow: hidden; }
-.sbw-papers-fill { display: block; height: 100%; width: 0; background: var(--sb-ui-accent); transition: width 150ms ease-out; }
-.sbw-papers-judged { color: var(--sb-ui-muted); font-size: var(--sbw-t-small); text-align: center; }
 .sbw-shelf { display: flex; flex-direction: column; gap: var(--sbw-s4); }
 .sbw-shelf-head { display: flex; align-items: baseline; gap: var(--sbw-s3); padding-top: var(--sbw-s4); border-top: 1px solid var(--sb-ui-line); }
 .sbw-shelf-title { margin: 0; font-family: var(--sbw-serif); font-size: 24px; font-weight: 400; letter-spacing: -0.005em; }
@@ -154,7 +137,7 @@ a.sbw-paper-title:hover { text-decoration: underline; text-underline-offset: 3px
 .sbw-pager-where { color: var(--sb-ui-faint); font-size: var(--sbw-t-small); font-variant-numeric: tabular-nums; }
 @media (max-width: 699px) {
   .sbw-papers { grid-template-columns: minmax(0, 1fr); }
-  .sbw-paper.has-figure, .sbw-papers.is-one .sbw-paper.has-figure { grid-template-columns: minmax(0, 1fr) 96px; }
+  .sbw-paper-figure-box, .sbw-papers.is-one .sbw-paper-figure-box { width: 104px; }
   .sbw-cover.sbw-today-banner { min-height: 180px; }
 }
 /* A chat is a text card on the page: no photo, the page's own colours, the same type. */
@@ -169,13 +152,13 @@ a.sbw-paper-title:hover { text-decoration: underline; text-underline-offset: 3px
 .sbw-cover.is-text .sbw-cover-foot { left: var(--sbw-s4); text-align: left; }
 .sbw-cover.is-text.is-new::after { background: var(--sb-ui-accent); box-shadow: none; }
 .sbw-papers.is-one { grid-template-columns: minmax(0, 1fr); max-width: 760px; }
-.sbw-papers.is-one .sbw-paper-why { display: block; -webkit-line-clamp: unset; overflow: visible; }
+.sbw-papers.is-one .sbw-paper-why { max-height: none; }
 /* Two columns only when the issue is at least 960 px wide (each column then has room for its paper and its actions);
    narrower, the papers read as one column, like the "one column" choice in Settings > General. */
 .sbw-today { container-type: inline-size; }
 @container (max-width: 959px) {
   .sbw-papers { grid-template-columns: minmax(0, 1fr); max-width: 760px; }
-  .sbw-papers .sbw-paper-why { display: block; -webkit-line-clamp: unset; overflow: visible; }
+  .sbw-papers .sbw-paper-why { max-height: none; }
 }
 .sbw-layout { display: flex; justify-content: flex-end; gap: var(--sbw-s1); }
 .sbw-layout-btn { padding: 3px 12px; border: 1px solid var(--sb-ui-line); border-radius: 999px; background: none; color: var(--sb-ui-muted); font-size: var(--sbw-t-small); cursor: pointer; }

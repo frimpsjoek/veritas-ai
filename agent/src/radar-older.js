@@ -20,7 +20,26 @@ export const OLDER = {
    *  was shown stays at the top of the ranking, so one look at the top 20 found nothing new on 2026-11-04. */
   metadataTop: 20,
   metadataPages: 5,
+  /** How many candidates to read before saying which fields are the library's own, and how many fields count as its own. */
+  fieldSample: 10,
+  homeFields: 2,
 };
+
+/**
+ * The most cited candidates, with one place kept for a paper outside the library's own fields. Fields meet where a
+ * paper from elsewhere helps: this one is unexpected, and the library citing it three times says it is not random.
+ * The library's fields are read from the candidates themselves, all of them cited by it. None from elsewhere, no swap.
+ * @param {RadarItem[]} items most cited first @param {number} size @returns {RadarItem[]}
+ */
+export function withOneFromAfield(items, size) {
+  /** @type {Map<string, number>} */
+  const counts = new Map();
+  for (const it of items) if (it.field) counts.set(it.field, (counts.get(it.field) ?? 0) + 1);
+  const home = new Set([...counts].sort((a, b) => b[1] - a[1]).slice(0, OLDER.homeFields).map(([field]) => field));
+  const away = size >= 2 && counts.size > OLDER.homeFields ? items.find((it) => it.field && !home.has(it.field)) : undefined;
+  if (!away) return items.slice(0, size);
+  return [...items.filter((it) => it !== away).slice(0, size - 1), { ...away, afield: away.field }];
+}
 
 const API = 'https://api.openalex.org';
 const shortId = (/** @type {unknown} */ id) => String(id ?? '').replace(/^https?:\/\/openalex\.org\//, '');
@@ -125,7 +144,7 @@ export async function worthReading(run) {
   const held = new Set(run.libraryItems.flatMap((it) => keysOf({ doi: it.doi, title: it.title })));
   /** @type {RadarItem[]} */
   const items = [];
-  for (let page = 0; page < OLDER.metadataPages && items.length < run.size.older; page += 1) {
+  for (let page = 0; page < OLDER.metadataPages && items.length < Math.max(run.size.older, OLDER.fieldSample); page += 1) {
     const ids = ranked.slice(page * OLDER.metadataTop, (page + 1) * OLDER.metadataTop);
     if (!ids.length) break;
     /** @type {any[]} */
@@ -137,7 +156,7 @@ export async function worthReading(run) {
       const titles = citing.get(item.openalexId ?? '') ?? [];
       const newCount = newCites.get(item.openalexId ?? '') ?? 0;
       items.push({
-        ...item, cites: w.cites ?? 0, why: { similarity: 0, author: 0, journal: 0, topic: 0, negative: 0, citedBy: { count: titles.length, titles: titles.slice(0, 3), ...(newCount ? { newCount } : {}) } },
+        ...item, ...(w.field ? { field: w.field } : {}), cites: w.cites ?? 0, why: { similarity: 0, author: 0, journal: 0, topic: 0, negative: 0, citedBy: { count: titles.length, titles: titles.slice(0, 3), ...(newCount ? { newCount } : {}) } },
         reason: reasonOf(titles.length, titles.slice(0, 3), newCount),
       });
     }
@@ -154,5 +173,5 @@ export async function worthReading(run) {
   }
   const countOf = (/** @type {RadarItem} */ it) => it.why?.citedBy?.count ?? 0;
   items.sort((a, b) => countOf(b) - countOf(a) || (b.why?.citedBy?.newCount ?? 0) - (a.why?.citedBy?.newCount ?? 0) || (b.score ?? 0) - (a.score ?? 0) || (a.id < b.id ? -1 : 1));
-  return done(items.slice(0, run.size.older));
+  return done(withOneFromAfield(items, run.size.older));
 }

@@ -6,7 +6,7 @@
 
 export const SOURCES = ['openalex', 'semanticscholar', 'arxiv', 'crossref', 'europepmc', 'biorxiv', 'chemrxiv'];
 
-export const OPENALEX_FIELDS = 'id,doi,ids,display_name,publication_year,publication_date,authorships,primary_location,cited_by_count,best_oa_location,type,abstract_inverted_index,keywords';
+export const OPENALEX_FIELDS = 'id,doi,ids,display_name,publication_year,publication_date,authorships,primary_location,cited_by_count,best_oa_location,type,abstract_inverted_index,keywords,primary_topic';
 const CHEMRXIV_SOURCE_ID = 'S4393918830';
 
 async function getJSON(fetchFn, url, headers = {}) {
@@ -43,6 +43,7 @@ export function fromOpenAlex(work) {
     date: /^\d{4}-\d{2}-\d{2}$/.test(work.publication_date ?? '') ? work.publication_date : null,
     openalexId: String(work.id ?? '').replace(/^https?:\/\/openalex\.org\//, '') || null,
     kind: work.type || null,
+    ...(work.primary_topic?.field?.display_name ? { field: String(work.primary_topic.field.display_name) } : {}),
     ...((work.keywords ?? []).length ? { keywords: work.keywords.map((k) => k?.display_name).filter(Boolean).slice(0, 8) } : {}),
   };
 }

@@ -10,7 +10,7 @@ import { apiOf } from '../sources/view-kit.js';
 import { mountSources } from '../sources/sources-view.js';
 import { linkTo } from './links.js';
 import { RadarDigest, markViewed } from '../chat/radar-digest.js';
-import { whyChips, openLinks, judgedLine, keyAction, actionList } from '../chat/radar-digest-data.js';
+import { keyAction } from '../chat/radar-digest-data.js';
 import { arxivAuthors, plainName } from '../../../agent/src/paper-names.js';
 
 /** @typedef {import('./links.js').HomeTarget} HomeTarget */
@@ -121,52 +121,16 @@ function viewing(el, onView) {
 }
 
 /** Each way into a paper's entry has its line icon. */
-const OPEN_ICON = /** @type {const} */ ({ full: 'bookOpen', pdf: 'fileText', abstract: 'text', publisher: 'externalLink' });
-
-/** The row of ways into a paper, the best first and bold. All but the publisher's page open in the reader, which then
- *  knows the paper's issue; the publisher's page goes outside (publishers refuse to load in the panel).
- *  @param {Document} doc @param {import('../chat/radar-digest-data.js').OpenLink[]} ways @param {HomeLinks} links
- *  @param {import('../host').RadarLink | null} radar @param {(() => void) | undefined} onView @param {any} host */
-function openRow(doc, ways, links, radar, onView, host) {
-  const row = h(doc, 'p', 'sbw-paper-open');
-  ways.forEach((way, at) => {
-    const a = h(doc, 'a', at === 0 ? 'is-lead' : '');
-    a.append(lucide(doc, OPEN_ICON[way.kind], 14), h(doc, 'span', '', way.label));
-    if (way.outside && host?.openLink && 'href' in links) {
-      a.setAttribute('href', way.url);
-      a.setAttribute('rel', 'noopener noreferrer');
-      a.addEventListener('click', (event) => { event.preventDefault(); host.openLink(way.url, { outside: true }); });
-    } else linkTo(a, { to: 'url', url: way.url, radar: way.outside ? null : radar }, links);
-    viewing(a, onView);
-    row.append(a);
-  });
-  return row;
-}
-
-/** Why the radar matched a paper, as a quiet line of facts. Display only.
- *  @param {Document} doc @param {import('../chat/radar-digest-data.js').WhyChip[]} chips */
-function whyRow(doc, chips) {
-  const row = h(doc, 'p', 'sbw-paper-chips');
-  const facts = chips.some((chip) => chip.kind !== 'via');
-  if (facts) row.append(h(doc, 'span', '', 'Why:'));
-  for (const chip of chips) {
-    const el = h(doc, 'span', chip.kind === 'via' ? 'sbw-why-via' : `sbw-why-chip is-${chip.kind}`, chip.kind === 'via' && facts ? `\u00B7 ${chip.text}` : chip.text);
-    el.title = chip.hint;
-    row.append(el);
-  }
-  return row;
-}
 
 /** A paper of today's issue in abstract form: its graphical abstract on the right when the publisher has one, then the
- *  title (to the paper), who and where, why read it, and the full abstract behind "Read the abstract"; then the ways in
- *  (the open row, the best one bold), why it matched and where it was found (display only). Under it, the radar's
- *  actions (Add to Zotero, Read later, Like, Not for me), which teach the radar what to show.
+ *  title (to the paper), where and when (who too, when the person asks for authors) and the abstract, which wraps round
+ *  the figure. Under it, the radar's icons (Add to Zotero, Like, Not for me), which teach the radar what to show.
  *  @param {Document} doc @param {any} row @param {HomeLinks} links @param {(route: string, params?: any) => Promise<any>} [api]
  *  @param {RadarDigest | null} [digest] the issue's radar, for the row actions
  *  @param {'summary' | 'abstract'} [show] what the line under the title is: the AI's summary, or the paper's abstract
  *  @param {() => void} [onView] the paper was opened (its link, its figure, or its abstract): it is no longer news
- *  @param {any} [host] opens a publisher's page outside */
-function paperEntry(doc, row, links, api, digest, show = 'summary', onView, host) {
+ *  @param {boolean} [showAuthors] who wrote it, on the line under the title; off by default */
+function paperEntry(doc, row, links, api, digest, show = 'abstract', onView, showAuthors = false) {
   const entry = h(doc, 'article', 'sbw-paper');
   const text = h(doc, 'div', 'sbw-paper-text');
   const url = row.doi ? `https://doi.org/${row.doi}` : row.url;
@@ -176,7 +140,7 @@ function paperEntry(doc, row, links, api, digest, show = 'summary', onView, host
   // Issues written before 2026-11-02 hold arXiv's authors as one string of TeX.
   const authors = row.venue === 'arXiv' ? arxivAuthors(row.authors) : (row.authors ?? []).map(plainName);
   const who = authors.length > 3 ? `${authors.slice(0, 3).join(', ')} +${authors.length - 3}` : authors.join(', ');
-  const meta = [who, row.venue, row.radar?.date ?? row.year].filter(Boolean).join(' · ');
+  const meta = [showAuthors ? who : '', row.venue, row.radar?.date ?? row.year, row.radar?.afield ? `From further afield: ${row.radar.afield}` : '', row.radar?.nearBar ? 'Just under the bar' : ''].filter(Boolean).join(' · ');
   text.append(title);
   if (meta) text.append(h(doc, 'p', 'sbw-paper-meta', meta));
   const abstract = String(row.abstract ?? '').trim();
@@ -200,14 +164,6 @@ function paperEntry(doc, row, links, api, digest, show = 'summary', onView, host
     });
     text.append(more);
   }
-  const ways = openLinks(row);
-  if (ways.length) text.append(openRow(doc, ways, links, radar, onView, host));
-  const chips = whyChips(row);
-  if (chips.length) text.append(whyRow(doc, chips));
-  else {
-    const via = (row.foundBy ?? []).filter(Boolean);
-    if (via.length) text.append(h(doc, 'p', 'sbw-paper-source', `Found via ${via.join(', ')}`));
-  }
   if (digest) { text.append(digest.actions(row)); digest.mark(entry, row); }
   entry.append(text);
   const arxiv = /arxiv\.org\/(?:abs|pdf)\/(\d{4}\.\d{4,5})/.exec(`${row.pdfUrl ?? ''} ${row.url ?? ''}`)?.[1];
@@ -224,7 +180,8 @@ function paperEntry(doc, row, links, api, digest, show = 'summary', onView, host
       const link = h(doc, url ? 'a' : 'span', 'sbw-paper-figure-box');
       if (url) { viewing(linkTo(link, { to: 'url', url, radar }, links), onView); link.tabIndex = -1; }
       link.append(img);
-      entry.append(link);
+      // Before the text and floated, so the words run round it.
+      entry.prepend(link);
     }, () => {});
   }
   return entry;
@@ -368,7 +325,7 @@ function troubleRow(doc, words, retry) {
  *  `unknown`: the routines could not be read, so whether a radar exists is not known; `onRan(block)`: a run started or
  *  watched here was recorded; `onViewed(conversations)`: a paper opened here lowered the news, read again; `onJudged(n)`:
  *  how many papers of the issue shown have a verdict */
-async function todayBlock(doc, ai, host, links, { issues, routine, pick, unknown, onRan, onViewed, onJudged }) {
+async function todayBlock(doc, ai, host, links, { issues, routine, pick, unknown, onRan, onViewed }) {
   const block = h(doc, 'section', 'sbw-today');
   const api = apiOf(host);
   if (!routine && !issues.length && unknown) {
@@ -399,11 +356,12 @@ async function todayBlock(doc, ai, host, links, { issues, routine, pick, unknown
   // Two columns only where the page is wide enough (home.css, a container query); Settings > General can keep it to one.
   const oneColumn = host.prefs.get('homeColumns');
   list.classList.toggle('is-one', oneColumn === 'one' || oneColumn === 1);
-  // Under each paper: the AI's summary (default) or the paper's own abstract, the person's choice, remembered.
+  // Under each paper: the paper's own abstract (default) or the AI's summary, the person's choice, remembered.
   const shows = h(doc, 'div', 'sbw-layout');
   shows.setAttribute('role', 'group');
   shows.setAttribute('aria-label', 'Under each paper');
-  /** @type {'summary' | 'abstract'} */ let textMode = host.prefs.get('radarText') === 'abstract' ? 'abstract' : 'summary';
+  /** @type {'summary' | 'abstract'} */ let textMode = host.prefs.get('radarText') === 'summary' ? 'summary' : 'abstract';
+  let showAuthors = host.prefs.get('homeAuthors') === true;
   for (const [mode, label] of /** @type {const} */ ([['summary', 'AI summary'], ['abstract', 'Abstract']])) {
     const b = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sbw-layout-btn', label));
     b.type = 'button';
@@ -418,6 +376,16 @@ async function todayBlock(doc, ai, host, links, { issues, routine, pick, unknown
     });
     shows.append(b);
   }
+  // Authors stay off the page unless asked for: the title and abstract are what a paper is judged on.
+  const authorsButton = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sbw-layout-btn sbw-layout-authors', 'Authors'));
+  authorsButton.type = 'button';
+  authorsButton.setAttribute('aria-pressed', String(showAuthors));
+  authorsButton.addEventListener('click', () => {
+    showAuthors = !showAuthors;
+    host.prefs.set('homeAuthors', showAuthors);
+    authorsButton.setAttribute('aria-pressed', String(showAuthors));
+    void paint();
+  });
   const bar = h(doc, 'div', 'sbw-today-bar');
   const sources = linkTo(h(doc, 'a', 'sbw-quiet sbw-today-sources', 'Sources'), { to: 'sources' }, links);
   // The issue reads here as a list; its chat is one step away for questions about it.
@@ -426,10 +394,7 @@ async function todayBlock(doc, ai, host, links, { issues, routine, pick, unknown
   // Hosts whose server predates runNow or redo get no button rather than one that fails.
   const run = routine && onRan ? runControls(doc, ai, routine, block, () => onRan(block)) : null;
   if (run?.runNow) bar.append(run.runNow);
-  // What the keys do, where there are keys and room to say so.
-  const keysHint = h(doc, 'span', 'sbw-today-keys');
-  keysHint.hidden = true;
-  bar.append(keysHint, shows);
+  bar.append(authorsButton, shows);
   nav.append(older, newer);
   block.append(stage, ...(run ? [run.line] : []), bar, list);
 
@@ -440,7 +405,6 @@ async function todayBlock(doc, ai, host, links, { issues, routine, pick, unknown
   /** @type {{ el: HTMLElement, row: any }[]} */ let cards = [];
   /** @type {any} */ let current = null;
   let keyed = false;
-  /** @type {(() => void)[]} */ let progress = [];
   /** @param {{ el: HTMLElement, row: any } | null} card @param {boolean} [scroll] */
   const setCurrent = (card, scroll = false) => {
     current?.el.classList.remove('is-current');
@@ -513,15 +477,12 @@ async function todayBlock(doc, ai, host, links, { issues, routine, pick, unknown
     shows.hidden = !issue;
     list.replaceChildren();
     cards = [];
-    progress = [];
     current = null;
-    keysHint.hidden = true;
     if (!issue) {
       const quiet = h(doc, 'div', 'sbw-run');
       const done = routine?.lastRun?.status === 'done' && sameDay(routine.lastRun.at, now);
       quiet.append(h(doc, 'span', 'sbw-run-dot'), h(doc, 'span', 'sbw-run-text', done ? 'Nothing new above the bar today.' : 'No issue yet today.'), linkTo(h(doc, 'a', 'sbw-quiet sbw-run-act', 'Sources'), { to: 'sources' }, links));
       list.append(quiet);
-      onJudged?.(0);
       return;
     }
     try {
@@ -532,35 +493,14 @@ async function todayBlock(doc, ai, host, links, { issues, routine, pick, unknown
         const rows = body?.rows ?? [];
         if (mine !== painting) return;
         const worth = result.title === WORTH_READING;
-        if (result.title && result.title !== 'New') {
-          const head = h(doc, 'h2', 'sbw-papers-head', result.title);
-          if (worth) head.append(h(doc, 'small', '', `${rows.length} today \u00B7 older papers your library keeps citing`));
-          list.append(head);
-        }
+        if (result.title && result.title !== 'New') list.append(h(doc, 'h2', 'sbw-papers-head', result.title));
         // The same row actions as the issue's chat view, so a paper can be rated where it is read.
         const radar = body?.radar?.routine ? body.radar : null;
         digest = radar && (digest?.routine === radar.routine ? digest : new RadarDigest(host, doc, block, { routine: radar.routine, summary: radar.summary ?? '', judging: true }));
         const key = `${issue.id}/${result.ref?.id ?? result.title}`;
         const more = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sb-button sbw-papers-more'));
         more.type = 'button';
-        // Under the group: how far the judging has got (not for Worth reading, which is a suggestion list), and the next step.
         const foot = h(doc, 'div', 'sbw-papers-foot');
-        if (digest && !worth && rows.length) {
-          const track = h(doc, 'span', 'sbw-papers-track');
-          const fill = h(doc, 'span', 'sbw-papers-fill');
-          track.append(fill);
-          const said = h(doc, 'span', 'sbw-papers-judged');
-          foot.append(track, said);
-          const shownDigest = digest;
-          const update = () => {
-            const judged = shownDigest.judged(rows);
-            fill.style?.setProperty('width', `${Math.round((judged / rows.length) * 100)}%`);
-            said.textContent = judgedLine(judged, rows.length);
-            onJudged?.(judged);
-          };
-          update();
-          progress.push(update);
-        }
         foot.append(more);
         // One box per group (display: contents, so its papers stay in the page's grid), so a later group stays below.
         const group = h(doc, 'div', 'sbw-papers-group');
@@ -569,7 +509,7 @@ async function todayBlock(doc, ai, host, links, { issues, routine, pick, unknown
           const upTo = Math.max(revealed.get(key) ?? (worth ? WORTH_STEP : PAPER_STEP), from + (from ? PAPER_STEP : 0));
           revealed.set(key, upTo);
           const drawn = rows.slice(from, upTo).map((/** @type {any} */ row) => {
-            const el = paperEntry(doc, row, links, api, digest, textMode, () => { void viewed(issue, row); }, host);
+            const el = paperEntry(doc, row, links, api, digest, textMode, () => { void viewed(issue, row); }, showAuthors);
             cards.push({ el, row });
             return el;
           });
@@ -584,13 +524,9 @@ async function todayBlock(doc, ai, host, links, { issues, routine, pick, unknown
       if (digest) {
         const shown = digest;
         shown.onChange = () => {
-          for (const update of progress) update();
           if (!keyed && (!current || shown.settled(current.row))) setCurrent(nextOpen());
         };
         shown.onChange();
-        const save = actionList(shown.canAdd)[0].verdict === 'added' ? 'add' : 'save';
-        keysHint.textContent = `j / k next paper \u00B7 a ${save} \u00B7 l like \u00B7 d not for me`;
-        keysHint.hidden = !cards.length;
       }
     } catch {
       if (mine === painting) list.replaceChildren(troubleRow(doc, "Couldn't load this issue's papers.", () => { void paint(); }));
@@ -697,14 +633,12 @@ export async function paintHome(into, ctx) {
   const dateLine = count.textContent;
   // Also after a paper is opened on Home: the count goes down one paper at a time, back to the date at none.
   let waiting = 0;
-  let judged = 0;
-  const sayCount = () => { count.textContent = [waiting ? `${waiting} new ${waiting === 1 ? 'paper' : 'papers'}` : dateLine, judged ? `${judged} judged` : ''].filter(Boolean).join(' \u00B7 '); };
+  const sayCount = () => { count.textContent = waiting ? `${waiting} new ${waiting === 1 ? 'paper' : 'papers'}` : dateLine; };
   const showWaiting = (/** @type {any[]} */ list) => {
     waiting = list.reduce((/** @type {number} */ sum, /** @type {any} */ c) => sum + (Number(c.news?.papers) || 0), 0);
     sayCount();
     ctx.onWaiting?.(waiting);
   };
-  const showJudged = (/** @type {number} */ n) => { judged = n; sayCount(); };
   showWaiting(conversations);
   const { radarRoutines, radars, shown, kindOf, issues } = issuesOf(conversations, routines);
   const newest = (/** @type {Shelved[]} */ list) => list.sort((a, b) => (a.at < b.at ? 1 : -1));
@@ -714,7 +648,7 @@ export async function paintHome(into, ctx) {
     try {
       const [c, r] = await Promise.all([ai.conversations.list(), ai.routines.list()]);
       const fresh = issuesOf(c, r);
-      old.replaceWith(await todayBlock(doc, ai, host, links, { issues: fresh.issues, routine: fresh.radarRoutines[0] ?? null, onRan: refreshToday, onViewed: showWaiting, onJudged: showJudged }));
+      old.replaceWith(await todayBlock(doc, ai, host, links, { issues: fresh.issues, routine: fresh.radarRoutines[0] ?? null, onRan: refreshToday, onViewed: showWaiting }));
     } catch (error) { host.logError(error); }
   };
   const today = issues[0] && sameDay(issues[0].updated, new Date().toISOString()) ? issues[0] : null;
@@ -726,7 +660,7 @@ export async function paintHome(into, ctx) {
     const slot = h(doc, 'section', 'sbw-today');
     sections.push(slot);
     void mountSources(slot, { host, doc, links }, { mode: 'intro', routines, onDone: () => { void paintHome(into, ctx); } });
-  } else sections.push(await todayBlock(doc, ai, host, links, { issues, routine: radarRoutines[0] ?? null, pick: ctx.issue, unknown: routinesFailed, onRan: refreshToday, onViewed: showWaiting, onJudged: showJudged }));
+  } else sections.push(await todayBlock(doc, ai, host, links, { issues, routine: radarRoutines[0] ?? null, pick: ctx.issue, unknown: routinesFailed, onRan: refreshToday, onViewed: showWaiting }));
   // Chats are not shelved here: the Chat page lists them.
   const reports = newest(shown.filter((/** @type {any} */ c) => kindOf(c) === 'report').map((/** @type {any} */ c) => shelved(c, radars)));
   const earlier = newest(issues.filter((/** @type {any} */ c) => c !== today).map((/** @type {any} */ c) => shelved(c, radars)));

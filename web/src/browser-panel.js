@@ -139,7 +139,8 @@ export function createBrowserPanel({ host, doc, win, into }) {
     const plan = readerPlan(page);
     // inline TeX ($…$, \(…\)) drawn as MathML, only for answers the server marked as having math
     const words = (/** @type {string} */ value) => plan.math ? withMath(value) : doc.createTextNode(value);
-    const article = h(doc, 'article', plan.articleClass);
+    // A paper's page has no long text to keep narrow: it takes the width, with the figure beside the abstract.
+    const article = h(doc, 'article', `${plan.articleClass}${plan.html ? '' : ' is-wide'}`);
     const top = h(doc, 'header', 'sbw-reader-head');
     const heading = h(doc, 'h1', 'sbw-reader-title');
     heading.append(words(plan.title));
@@ -179,9 +180,9 @@ export function createBrowserPanel({ host, doc, win, into }) {
         cite.addEventListener('click', () => copyText(plan.citation, 'Citation copied'));
         row.append(cite);
       }
+      if (radar) row.append(teachRow());
       top.append(row);
     }
-    if (radar) top.append(teachRow(true));
     article.append(top);
     // a paper's graphical abstract, only when the figure finder (Home's /paper-figure: the publisher page's preview
     // image when that page answers, or a figure at a known address) has a real one; nothing is drawn while it looks
@@ -239,10 +240,9 @@ export function createBrowserPanel({ host, doc, win, into }) {
     return foot;
   }
 
-  /** "For the radar": Like and Not for me on a paper opened from a radar issue, the same verdicts as its row on Home; a
-   *  verdict given shows what happened and an Undo. `words`: also say that Add to Zotero counts as a like.
-   *  @param {boolean} words */
-  function teachRow(words) {
+  /** Like and Not for me, as icons, on a paper opened from a radar issue: the same verdicts as its row on Home; a
+   *  verdict given shows what happened and an Undo. */
+  function teachRow() {
     const link = /** @type {import('../../ui/src/host').RadarLink} */ (radar);
     const row = h(doc, 'div', 'sbw-reader-teach');
     /** @param {'liked' | 'dismissed' | 'undo'} verdict */
@@ -264,18 +264,18 @@ export function createBrowserPanel({ host, doc, win, into }) {
     };
     const paint = () => {
       const verdict = link.verdict();
-      row.replaceChildren(h(doc, 'span', 'sbw-reader-teach-label', 'For the radar:'));
+      row.replaceChildren();
       if (verdict) {
         row.append(h(doc, 'span', 'sb-dg-state', settledLabel(verdict)), pill('Undo', () => void tell('undo')));
         return;
       }
       for (const a of actionList(false).filter((x) => x.verdict === 'liked' || x.verdict === 'dismissed')) {
-        const b = pill(a.label, () => void tell(/** @type {'liked' | 'dismissed'} */ (a.verdict)));
+        const b = pill('', () => void tell(/** @type {'liked' | 'dismissed'} */ (a.verdict)));
         b.title = a.hint;
-        if ('lucide' in a.mark) b.prepend(lucide(doc, a.mark.lucide, 14));
+        b.setAttribute('aria-label', a.label);
+        if ('lucide' in a.mark) b.append(lucide(doc, a.mark.lucide, 16));
         row.append(b);
       }
-      if (words && host.can.addToLibrary) row.append(h(doc, 'span', 'sbw-reader-teach-note', 'Adding to Zotero already counts as a like'));
     };
     paint();
     repaintTeach = paint;
@@ -384,7 +384,7 @@ export function createBrowserPanel({ host, doc, win, into }) {
       src, data: host.server.sameOrigin ? undefined : host.assets.bytes(path),
       title: title || 'PDF', marks: [], openRaw: () => host.openLink(url, { outside: true }),
       failed: (message) => { problem.textContent = message; problem.hidden = false; },
-      tools: radar ? teachRow(false) : null,
+      tools: radar ? teachRow() : null,
     });
     body.replaceChildren(viewer.el, problem);
     viewer.ready.catch((error) => {
