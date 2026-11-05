@@ -59,7 +59,7 @@ test('why chips: the closest seed, a learned topic, followed author and journal,
   assert.deepEqual([chips[1].text, chips[2].text, chips[3].text], ['core-hole XAS', 'an author you follow', 'via arXiv cond-mat']);
   const plain = whyChips(row({}, { why: { similarity: 0.5, author: 0, journal: 0.3, topic: 0.2, negative: 0, titleOnly: 0.1 } }));
   assert.deepEqual(plain.map((c) => c.text), ['a topic you follow', 'a journal you follow', 'title only', 'via arXiv']);
-  assert.deepEqual(whyChips(row({}, { why: { similarity: 0, author: 0, journal: 0, topic: 0, negative: 0 }, nearBar: true })).map((c) => c.text), ['just under the bar', 'via arXiv']);
+  assert.deepEqual(whyChips(row({}, { why: { similarity: 0, author: 0, journal: 0, topic: 0, negative: 0 }, nearBar: true })).map((c) => c.text), ['Just under the bar', 'via arXiv']);
   assert.deepEqual(whyChips(row({ foundBy: [] }, { why: undefined })), []);
   assert.deepEqual(whyChips({ ...row(), radar: undefined }), []);
 });

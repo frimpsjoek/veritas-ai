@@ -1,7 +1,7 @@
 // The collection menu behind Add to Zotero (Home's split button, the reader, the PDF bar): what it lists. Invented names.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { collectionRows, collectionLabel } from '../src/home/collection-data.js';
+import { collectionRows, collectionLabel, collectionTarget } from '../src/home/collection-data.js';
 
 const TREE = [
   { key: 'A', name: 'Physics', parent: null, count: 3 },
@@ -29,4 +29,11 @@ test('the split button names the chosen collection by its path, My Library for n
   assert.equal(collectionLabel(TREE, 'D'), 'Physics › Condensed matter › 2D materials');
   assert.equal(collectionLabel(TREE, ''), 'My Library');
   assert.equal(collectionLabel(TREE, 'NOPE'), 'My Library');
+});
+
+test('collectionTarget: the key to add to, only for a collection that still exists', () => {
+  assert.equal(collectionTarget(TREE, 'C'), 'C');
+  assert.equal(collectionTarget(TREE, 'GONE'), null);
+  assert.equal(collectionTarget(TREE, ''), null);
+  assert.equal(collectionTarget(null, 'C'), null);
 });

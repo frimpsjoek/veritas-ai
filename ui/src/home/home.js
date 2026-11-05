@@ -183,8 +183,8 @@ function paperEntry(doc, row, links, api, digest, show = 'summary', onView) {
 /** A long issue comes in steps, so rating papers stays a choice. */
 const PAPER_STEP = 8;
 
-/** "Show 8 more (22 left)" @param {number} left */
-export const moreLabel = (left) => `Show ${Math.min(left, PAPER_STEP)} more${left > PAPER_STEP ? ` (${left} left)` : ''}`;
+/** "Show 8 more (22 left)" @param {number} left @param {number} [step] */
+export const moreLabel = (left, step = PAPER_STEP) => `Show ${Math.min(left, step)} more${left > step ? ` (${left} left)` : ''}`;
 
 /** How often Home looks at a running radar, and how long before it stops looking and offers Run now again. */
 const RUN_POLL_MS = 5000;

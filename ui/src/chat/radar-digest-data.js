@@ -85,7 +85,7 @@ export function whyChips(row) {
   if (why && why.author > 0) out.push({ kind: 'author', text: 'an author you follow', hint: 'One of its authors is in your profile' });
   if (why && why.journal > 0) out.push({ kind: 'journal', text: 'a journal you follow', hint: 'Published in a journal you follow' });
   if (why && why.titleOnly) out.push({ kind: 'note', text: 'title only', hint: 'No abstract: judged by its title alone, so it counts less' });
-  if (radar.nearBar === true) out.push({ kind: 'note', text: 'just under the bar', hint: 'Scored just below the threshold; shown so you can say whether it belongs' });
+  if (radar.nearBar === true) out.push({ kind: 'note', text: 'Just under the bar', hint: 'Scored just below the threshold; shown so you can say whether it belongs' });
   const via = (row.foundBy ?? []).filter(Boolean);
   const sources = via.length ? via : (radar.sources ?? []).filter(Boolean);
   if (sources.length) out.push({ kind: 'via', text: `via ${sources.join(', ')}`, hint: 'Where the radar found it' });

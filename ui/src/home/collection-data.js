@@ -63,3 +63,9 @@ export function collectionLabel(collections, key) {
   const list = Array.isArray(collections) ? collections : [];
   return key && list.some((c) => c.key === key) ? pathOf(list, key) : MY_LIBRARY;
 }
+
+/** The key to add to: the chosen collection while it still exists; null means My Library, as the button then says.
+ *  @param {CollectionLike[] | null | undefined} collections @param {string} key @returns {string | null} */
+export function collectionTarget(collections, key) {
+  return key && Array.isArray(collections) && collections.some((c) => c.key === key) ? key : null;
+}
