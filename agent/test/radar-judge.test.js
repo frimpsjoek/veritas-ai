@@ -28,10 +28,12 @@ test('a throwing model, or one that rejects everything, drops nothing', async ()
   assert.match(sweeping.error, /rejected every paper/);
 });
 
-test('the prompt states the interests and leans to keeping when unsure', () => {
+test('the prompt states the interests, keeps its benefit of the doubt for science, and refuses AI in general', () => {
   const p = judgePrompt([item(1)], { topics: [], seeds: [], rejected: [] });
   assert.match(p, /\(not stated\)/);
-  assert.match(p, /When unsure, answer true/);
+  assert.match(p, /fits=false .*AI, agents or software in general.*no application to chemistry, materials or physics/);
+  assert.match(p, /When unsure about a paper in chemistry, materials or physics, answer true/);
+  assert.doesNotMatch(p, /When unsure, answer true/, 'no default true for AI, agents or software');
   assert.doesNotMatch(p, /typical of their own work/);
 });
 

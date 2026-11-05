@@ -34,7 +34,8 @@ export function judgePrompt(rows, profile) {
     ...(profile.rejected.length ? ['Papers they marked as not relevant:', list(profile.rejected)] : []),
     'For each paper below, decide whether this researcher would plausibly want to read it.',
     'fits=false when its main subject is a different field (biology, medicine, clinical work, unrelated engineering, for example), even if it shares a material, a method or a word with their interests.',
-    'fits=true when it is in their field or a close neighbour of it. When unsure, answer true.',
+    'fits=false when it is about AI, agents or software in general, with no application to chemistry, materials or physics: a framework, a benchmark, a harness, agent memory or safety. Interest in AI for science does not cover those, and being unsure does not make them fit.',
+    'fits=true when it is in their field or a close neighbour of it. When unsure about a paper in chemistry, materials or physics, answer true.',
     'Answer with JSON: {"papers":[{"n":<paper number>,"fits":true|false}]}, one entry per paper.',
     ...rows.map((r, i) => `\n### Paper ${i + 1}\nTitle: ${r.title}${r.venue ? `\nVenue: ${r.venue}` : ''}\nAbstract: ${String(r.abstract ?? '').trim().slice(0, MAX_ABSTRACT) || '(none)'}`),
   ].join('\n');
