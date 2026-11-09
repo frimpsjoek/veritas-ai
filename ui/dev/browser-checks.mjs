@@ -165,6 +165,15 @@ export async function runBrowserChecks(browser, port, outDir) {
     });
     check(`${tag} equations are display math with their numbers, no raw TeX and no boxes`, maths.count === 5 && maths.numbers === '(13),(14),(15),(16),(17)' && maths.drawn && !maths.raw && !maths.rawBox && !maths.tables && maths.inline === 5 && !maths.sideways, maths);
     await page.screenshot({ path: join(outDir, `browser-math-${width}.png`) });
+    await open('https://reader.example/figures');
+    await page.waitForFunction(() => [...document.querySelectorAll('.sbw-note-body figure img')].length === 2 && [...document.querySelectorAll('.sbw-note-body figure img')].every((i) => i.complete && i.naturalWidth > 0));
+    const figures = await page.evaluate(() => [...document.querySelectorAll('.sbw-note-body figure')].map((f) => {
+      const img = f.querySelector('img').getBoundingClientRect(), box = f.getBoundingClientRect();
+      return { w: Math.round(img.width), h: Math.round(img.height), col: Math.round(box.width), centred: Math.abs((img.left - box.left) - (box.right - img.right)) < 2, caption: Boolean(f.querySelector('figcaption')?.textContent), fits: img.height <= innerHeight * 0.7 + 1, sideways: document.scrollingElement.scrollWidth > innerWidth };
+    }));
+    // the wide one is scaled up from its printed 238 px (unless the column is narrower); the tall one stays within 70% of the window
+    check(`${tag} a full text's figures show, scaled up, centred, captioned and within the window`, figures.length === 2 && figures.every((f) => f.centred && f.caption && f.fits && !f.sideways) && (figures[0].w > 238 || figures[0].w >= figures[0].col - 1) && Math.abs(figures[0].w / figures[0].h - 238 / 183) < 0.02 && Math.abs(figures[1].w / figures[1].h - 215 / 404) < 0.02, figures);
+    await page.screenshot({ path: join(outDir, `browser-figures-${width}.png`) });
     await open('https://reader.example/other');
     await page.waitForFunction(() => document.querySelector('.sbw-browser-title')?.textContent === 'The other article');
     check(`${tag} "Full text" opens in the panel`, (await panel()).open);

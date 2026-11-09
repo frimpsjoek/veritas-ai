@@ -15,6 +15,8 @@ import { mathNode } from '../../ui/src/chat/markdown.js';
 import { addressOf, blockedReason, createHistory, fileNameOf, displayTex, equationOf, firstPrefer, mathParts, pageQuery, paperToAdd, readerPlan, sourceOf, stepBack } from './browser-state.js';
 
 const FRAME_SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox';
+// A full text's figure: LaTeXML gives the printed size, small on screen; scaled up, within a width and a share of the window.
+const FIGURE_SCALE = 1.6, FIGURE_MAX_WIDTH = 640, FIGURE_MAX_HEIGHT = 70; // FIGURE_MAX_HEIGHT in vh
 
 /**
  * @param {{ host: any, doc: Document, win: Window, into: HTMLElement }} o `into` is the shell's content area (position: relative)
@@ -197,6 +199,7 @@ export function createBrowserPanel({ host, doc, win, into }) {
       text.append(h(doc, 'h2', 'sbw-reader-label', plan.abstractLabel), abstract);
     }
     text.append(noteFragment(doc, plan.html, host));
+    sizeFigures(text);
     if (plan.math) drawMath(text);
     // links in the article are relative to the page; the server already made them absolute
     interceptLinks(text, innerHost);
@@ -346,6 +349,17 @@ export function createBrowserPanel({ host, doc, win, into }) {
       if (caption) box.append(h(doc, 'figcaption', 'sbw-reader-figure-note', alt));
       after.after(box);
     }, () => {});
+  }
+
+  /** A full text's figures: the size the page gives (LaTeXML's is the printed size, small on screen) times
+   *  FIGURE_SCALE, at most FIGURE_MAX_WIDTH, the column, or what keeps the height under FIGURE_MAX_HEIGHT of the
+   *  window; the width and height attributes keep the shape. @param {HTMLElement} root */
+  function sizeFigures(root) {
+    for (const img of /** @type {HTMLImageElement[]} */ (Array.from(root.querySelectorAll('figure img[width][height]')))) {
+      const w = Number(img.getAttribute('width')), tall = Number(img.getAttribute('height'));
+      if (!(w > 0 && tall > 0)) continue;
+      img.style.width = `min(100%, ${Math.round(Math.min(w * FIGURE_SCALE, FIGURE_MAX_WIDTH))}px, ${((w / tall) * FIGURE_MAX_HEIGHT).toFixed(2)}vh)`;
+    }
   }
 
   /** @param {string} value @param {string} done */

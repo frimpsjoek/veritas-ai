@@ -535,3 +535,52 @@ def test_a_figure_whose_picture_did_not_convert_keeps_its_caption_and_says_so():
 def test_a_colour_name_does_not_run_into_the_words_after_it():
     html = _latexml('<div><span class="ltx_ERROR undefined">\\color</span> <p><span class="ltx_text">DDNavyGenerate credible structures.</span></p></div>')
     assert "<p>Generate credible structures.</p>" in html
+
+
+def test_a_figure_keeps_its_picture_with_an_absolute_address():
+    read = web_page.reader("https://arxiv.org/html/2608.23130v2", (
+        "<html><body><article><p>" + "Words about the method go here, enough to keep as text. " * 8 + "</p>"
+        '<figure id="S3.F1" class="ltx_figure"><img src="2608.23130v2/Figure1.png" class="ltx_graphics" width="357" height="339" '
+        'alt="Refer to caption"><figcaption>Figure 1: the clusters.</figcaption></figure></article></body></html>').encode())
+    assert ('<figure><img src="https://arxiv.org/html/2608.23130v2/Figure1.png" alt="Refer to caption" width="357" height="339">'
+            "<figcaption>Figure 1: the clusters.</figcaption></figure>") in read["html"]
+
+
+def test_a_picture_with_no_caption_survives_a_page_without_an_article():
+    words = "<p>" + "A paragraph of the story with enough words to count as text. " * 6 + "</p>"
+    read = web_page.reader("https://blog.example/post/one", (
+        f'<html><body>{words}<div><img src="/media/plot.png" alt="A plot"></div>{words}</body></html>').encode())
+    assert '<img src="https://blog.example/media/plot.png" alt="A plot">' in read["html"]
+
+
+def test_pixels_icons_hidden_and_odd_pictures_go_and_a_lazy_one_takes_its_real_address():
+    words = "Words about the method go here, enough to keep as text. " * 8
+    read = web_page.reader("https://blog.example/post/", (
+        f"<html><body><article><p>{words}</p>"
+        '<img src="https://track.example/p.gif" width="1" height="1">'
+        '<img src="/icons/share.svg" width="24" height="24" alt="Share">'
+        '<img src="/hidden.png" hidden><img src="javascript:alert(1)"><img src="data:image/png;base64,AAAA" alt="inline">'
+        '<figure><img src="data:image/gif;base64,R0lGOD" data-src="figs/lazy.png" alt="Lazy"></figure>'
+        "</article></body></html>").encode())
+    html = read["html"]
+    assert "track.example" not in html and "share.svg" not in html and "hidden.png" not in html
+    assert "javascript" not in html and "base64" not in html
+    assert '<figure><img src="https://blog.example/post/figs/lazy.png" alt="Lazy"></figure>' in html
+
+
+def test_subfigures_close_in_order_and_a_tikz_panel_still_drops_its_source():
+    html = _latexml('<figure class="ltx_figure"><div class="ltx_flex_figure">'
+                    '<figure class="ltx_figure_panel"><img src="a.png" alt="a"></figure>'
+                    '<figure class="ltx_figure_panel"><span class="ltx_ERROR undefined">{tikzpicture}</span><p>\\node (t1) x</p></figure>'
+                    '</div><figcaption>Figure 2: two panels.</figcaption></figure><p>Text after the figure.</p>')
+    assert '<img src="https://arxiv.org/html/a.png" alt="a">' in html and "node (t1)" not in html
+    assert html.endswith("<p>Text after the figure.</p>"), "the text after the figure is not inside it"
+    assert html.count("<figure>") == html.count("</figure>")
+
+
+def test_an_svg_figure_in_an_object_becomes_a_picture_and_other_objects_still_go():
+    html = _latexml('<figure class="ltx_figure"><object type="image/svg+xml" data="2608.1/abs.svg" width="476" height="310">'
+                    'fallback text</object><figcaption>Figure 3: spectra.</figcaption></figure>'
+                    '<object type="application/x-shockwave-flash" data="game.swf">old plugin</object>')
+    assert '<figure><img src="https://arxiv.org/html/2608.1/abs.svg" alt="" width="476" height="310"><figcaption>' in html
+    assert "fallback text" not in html and "swf" not in html and "old plugin" not in html

@@ -457,11 +457,11 @@ def _blocked_reason(answer: Response) -> str:
 
 
 KEEP = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "blockquote", "pre", "code", "em", "strong", "b",
-        "i", "sub", "sup", "a", "br", "figcaption", "table", "thead", "tbody", "tr", "th", "td", "dl", "dt", "dd"}
-BLOCK = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "blockquote", "pre", "figcaption", "table", "thead",
-         "tbody", "tr", "th", "td", "dl", "dt", "dd"}
+        "i", "sub", "sup", "a", "br", "figure", "figcaption", "table", "thead", "tbody", "tr", "th", "td", "dl", "dt", "dd"}
+BLOCK = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "blockquote", "pre", "figure", "figcaption", "table",
+         "thead", "tbody", "tr", "th", "td", "dl", "dt", "dd"}
 # Elements that are not kept but end a run of text: loose text between two of them becomes its own paragraph.
-BOUNDARY = {"div", "section", "article", "main", "figure", "center", "address", "details", "summary", "hgroup",
+BOUNDARY = {"div", "section", "article", "main", "center", "address", "details", "summary", "hgroup",
             "fieldset", "body"}
 SKIP = {"script", "style", "noscript", "svg", "nav", "header", "footer", "aside", "form", "button", "iframe", "template",
         "select", "textarea", "head", "object", "canvas", "dialog", "menu"}
@@ -477,6 +477,13 @@ TEX_LABEL_TEXT = re.compile(r"^\s*[\w-]+:[\w:.-]+")
 COLOR_MACROS = {"\\color", "\\textcolor"}
 TEX_COLOR_TEXT = re.compile(r"^\s*[\w!.-]*?[a-z0-9](?=[A-Z][a-z])")  # "DDNavyGenerate credible": the name runs into the words
 FIGURE_NOT_DRAWN = "A figure here is drawn in TeX, which this view cannot show. The PDF has it."
+# A picture is kept with an absolute http(s) address, its alt text and its size. One whose given sizes are all under
+# ICON_MAX pixels, or any of them PIXEL_MAX or less, is an icon or a tracking pixel and goes. A lazy-loading page puts
+# the real address in a data- attribute and a placeholder (often a data: URI) in src. An <object> of an image type
+# (LaTeXML's SVG figures) is read as a picture of its data address; its fallback content is skipped with it.
+IMAGE_ATTRS = ("src", "alt", "width", "height")
+LAZY_SRC = ("data-src", "data-lazy-src", "data-original")
+ICON_MAX, PIXEL_MAX = 48, 2
 VOID = {"br", "img", "hr", "meta", "link", "input", "source", "wbr", "area", "base", "col", "embed", "param", "track"}
 HEADING = re.compile(r"h[1-6]")
 LABEL = re.compile(r"^\s*(Title|Authors?|Abstract)\s*:\s*")
@@ -500,7 +507,8 @@ class _Reader(html.parser.HTMLParser):
     swallow the page. Text outside any kept block (a <div> of text) is wrapped in <p>, so every piece of the page is a
     block the pruning can weigh. A <math> becomes $TeX$ from its alttext (or TeX annotation) for the client to draw, or
     $$TeX$$ for a display one. LaTeXML lays out a numbered equation as a table: each of its rows becomes one paragraph,
-    "$$TeX$$ (15)", which the client draws as an equation with its number rather than as a table."""
+    "$$TeX$$ (15)", which the client draws as an equation with its number rather than as a table. An <img> is kept as
+    _image allows; a <figure> is kept as a block, and one opened inside a figure being dropped is not."""
 
     def __init__(self, base: str) -> None:
         super().__init__(convert_charrefs=True)
@@ -520,6 +528,7 @@ class _Reader(html.parser.HTMLParser):
         self.tex_error: list[str] | None = None  # the text of the ltx_ERROR span being read
         self.figure_depth = 0
         self.dropping_figure = False  # in a figure whose picture did not convert: nothing but its caption is kept
+        self.figures: list[bool] = []  # the figures open now, each whether it was written (not while dropping)
         self.after_macro: re.Pattern | None = None  # what the text after an unconverted macro starts with, to take off
         self.in_equation = False
         self.has_math = False
@@ -537,7 +546,7 @@ class _Reader(html.parser.HTMLParser):
 
     def _flush(self) -> None:
         run, self.loose = "".join(self.loose), []
-        if _text_length(run):
+        if _text_length(run) or "<img " in run:
             self._write(f"<p>{run.strip()}</p>")
 
     def _open(self, tag: str) -> None:
@@ -574,17 +583,24 @@ class _Reader(html.parser.HTMLParser):
             if tag == "annotation" and a.get("encoding", "").lower() in ("application/x-tex", "tex"):
                 self.math["in_tex"] = True
             return
-        if tag == "figure":
-            self.figure_depth += 1
         if self.dropping_figure:
             if tag == "figcaption":
                 self.dropping_figure = False
             else:
+                if tag == "figure":
+                    self.figure_depth += 1
+                    self.figures.append(False)
                 return
         if tag == "span" and "ltx_ERROR" in a.get("class", "").split():
             self.tex_error = []
             return
         hidden = "hidden" in a or a.get("aria-hidden") == "true" or SKIP_CLASSES & set(a.get("class", "").split())
+        if tag == "img":
+            if not hidden:
+                self._image(a)
+            return
+        if tag == "object" and a.get("type", "").lower().startswith("image/") and not hidden:
+            self._image({**a, "src": a.get("data", "")})  # LaTeXML's SVG figures; an <img> draws SVG without its scripts
         if tag in SKIP or (hidden and tag not in VOID):
             self.skip_tag, self.skip_n = tag, 1
             return
@@ -608,9 +624,28 @@ class _Reader(html.parser.HTMLParser):
             ok = urllib.parse.urlparse(href).scheme in ("http", "https")
             self._emit(f'<a href="{html.escape(href, quote=True)}">' if ok else "<a>")
         elif tag in BLOCK:
+            if tag == "figure":
+                self.figure_depth += 1
+                self.figures.append(True)
             self._open(tag)
         elif tag in KEEP:
             self._emit(f"<{tag}>")
+
+    def _image(self, a: dict[str, str]) -> None:
+        src = a.get("src", "").strip()
+        lazy = next((a[k].strip() for k in LAZY_SRC if a.get(k, "").strip()), "")
+        if lazy and (not src or src.lower().startswith("data:")):
+            src = lazy
+        if not src:
+            return
+        src = urllib.parse.urljoin(self.base, src)
+        if urllib.parse.urlparse(src).scheme not in ("http", "https"):
+            return
+        sizes = [int(a[k]) for k in ("width", "height") if a.get(k, "").strip().isdigit()]
+        if sizes and (max(sizes) < ICON_MAX or min(sizes) <= PIXEL_MAX):
+            return
+        kept = {"src": src, "alt": a.get("alt", "").strip(), **{k: a[k].strip() for k in ("width", "height") if a.get(k, "").strip().isdigit()}}
+        self._emit("<img" + "".join(f' {k}="{html.escape(v, quote=True)}"' for k, v in kept.items()) + ">")
 
     def handle_endtag(self, tag):
         if tag == "title":
@@ -658,9 +693,14 @@ class _Reader(html.parser.HTMLParser):
                     self._close("p")
             return
         if tag == "figure":
-            self.figure_depth = max(0, self.figure_depth - 1)
+            if not self.figures:
+                return
+            self.figure_depth -= 1
             if not self.figure_depth:
                 self.dropping_figure = False
+            if self.figures.pop():
+                self._close(tag)
+            return
         if self.dropping_figure:
             return
         if tag in BOUNDARY:
@@ -716,6 +756,10 @@ class _Node:
     href: str = ""
     cls: str = ""
     kids: list = field(default_factory=list)  # _Node or str (unescaped text)
+    image: tuple = ()  # an <img>'s (name, value) pairs, in IMAGE_ATTRS order
+
+    def has_image(self) -> bool:
+        return self.tag == "img" or any(isinstance(k, _Node) and k.has_image() for k in self.kids)
 
     def text(self) -> str:
         return "".join(k if isinstance(k, str) else k.text() for k in self.kids)
@@ -728,11 +772,13 @@ class _Node:
         if self.tag == "#root":
             return inner
         attrs = (f' href="{html.escape(self.href, quote=True)}"' if self.href else "") + (f' class="{self.cls}"' if self.cls else "")
+        attrs += "".join(f' {k}="{html.escape(v, quote=True)}"' for k, v in self.image)
         return f"<{self.tag}{attrs}>" if self.tag in VOID else f"<{self.tag}{attrs}>{inner}</{self.tag}>"
 
 
 class _Tree(html.parser.HTMLParser):
-    """Parses the reader's own output back (known tags, an href at most); a stray closing tag is ignored."""
+    """Parses the reader's own output back (known tags, an href or an image's attributes at most); a stray closing tag
+    is ignored."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -741,6 +787,9 @@ class _Tree(html.parser.HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         node = _Node(tag, dict(attrs).get("href") or "")
+        if tag == "img":
+            given = dict(attrs)
+            node.image = tuple((k, given[k] or "") for k in IMAGE_ATTRS if k in given)
         self.stack[-1].kids.append(node)
         if tag not in VOID:
             self.stack.append(node)
@@ -773,7 +822,9 @@ def _same(a: str, b: str) -> bool:
 
 def _is_chrome(node: _Node, repeated: frozenset = frozenset()) -> bool:
     """A leaf block that is site furniture: empty, mostly links, a short line the page repeats, or a known short
-    phrase."""
+    phrase. A block with a picture in it is never furniture."""
+    if node.has_image():
+        return False
     text = _words(node.text())
     if not text or text in repeated:
         return True

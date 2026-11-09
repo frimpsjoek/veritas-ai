@@ -317,6 +317,12 @@ p.sbw-prose { margin: 0 0 var(--sbw-s3); max-width: var(--measure); }
 .sbw-reader-figure { max-width: 680px; margin-inline: auto; }
 .sbw-reader-figure img { display: block; max-width: 100%; max-height: 420px; margin-inline: auto; border-radius: 8px; background: #fff; }
 .sbw-reader-figure-note { margin-top: var(--sbw-s1); color: var(--sb-ui-muted); font-family: var(--sb-ui-font); font-size: 12px; text-align: center; }
+/* The paper's own figures (2026-11-09), from its full text: centred at the size sizeFigures gives, on white (most plots
+   are dark lines on a transparent ground), the caption under it in the UI font, smaller and muted. */
+.sbw-browser-article .sbw-note-body figure { margin: var(--sbw-s4) 0; }
+.sbw-browser-article .sbw-note-body figure img { display: block; margin: 0 auto var(--sbw-s2); border-radius: 6px; background: #fff; }
+.sbw-browser-article .sbw-note-body figure figure { margin: 0 0 var(--sbw-s3); }
+.sbw-browser-article .sbw-note-body figcaption { max-width: var(--measure); margin: 0 auto; color: var(--sb-ui-muted); font-family: var(--sb-ui-font); font-size: 13px; line-height: 1.5; }
 .sbw-browser-article .sbw-note-body h2.sbw-reader-label + p { margin-top: 0; }
 .sbw-reader-foot { max-width: var(--measure); margin-top: var(--sbw-s4); padding-top: var(--sbw-s3); border-top: 1px solid var(--sb-ui-line); color: var(--sb-ui-muted); }
 .sbw-reader-foot p { margin: 0 0 var(--sbw-s1); font-size: 15px; line-height: 1.5; }
