@@ -76,7 +76,8 @@ Pressing **Save PDF to Zotero** on a paper's page:
      attached to that item;
    - it is not: the item is added (from OpenAlex/Crossref metadata for the DOI, as the reader's landing page builds
      it) with the PDF attached;
-   - duplicates (my call): the entry carries the file's SHA-256 and the PDF address it came from, and the plugin
+   - duplicates (my call): the entry carries the file's MD5 (the hash Zotero itself stores for an attachment, so the plugin can compare
+     without reading every file) and the PDF address it came from, and the plugin
      stores the address as the attachment's URL. An item that already has an attachment with the same content (hash)
      is not attached again, and the button says "Already in Zotero". An item that has a different PDF (an open-access
      copy, a preprint, an earlier Connector save) gets the publisher's PDF as a second attachment, titled
