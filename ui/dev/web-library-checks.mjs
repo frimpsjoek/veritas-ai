@@ -74,14 +74,14 @@ export async function runWebLibraryChecks(browser, port, outDir) {
     check('390px the phone bar is Home, Chat, Library, Notes and More', JSON.stringify(bar) === '["Home","Chat","Library","Notes","More"]', bar);
     await page.locator('.sbw-more').click();
     const menu = await page.evaluate(() => [...document.querySelectorAll('.sbw-menu-item')].filter((n) => getComputedStyle(n).display !== 'none').map((n) => n.textContent));
-    check('390px More holds the theme switch, Routines, Projects, Sources, Settings and Search index', JSON.stringify(menu) === '["Dark mode","Routines","Projects","Sources","Settings","Search index"]', menu);
+    check('390px More holds the theme switch, Projects, Settings, Search index and Server (Routines and the radar are in Settings)', JSON.stringify(menu) === '["Dark mode","Projects","Settings","Search index","Server"]', menu);
     await page.close();
     const wide = await open(1280);
     const rail = await wide.evaluate(() => [...document.querySelectorAll('.sbw-nav-item:not(.sbw-more):not(.sbw-theme)')].filter((n) => getComputedStyle(n).display !== 'none').map((n) => n.getAttribute('aria-label')));
-    check('1280px the rail lists Home, Chat, Library, Notes, Routines and Projects', JSON.stringify(rail) === '["Home","Chat","Library","Notes","Routines","Projects"]', rail);
+    check('1280px the rail lists Home, Chat, Library, Notes and Projects', JSON.stringify(rail) === '["Home","Chat","Library","Notes","Projects"]', rail);
     await wide.locator('.sbw-more').click();
     const wideMenu = await wide.evaluate(() => [...document.querySelectorAll('.sbw-menu-item')].filter((n) => getComputedStyle(n).display !== 'none').map((n) => n.textContent));
-    check('1280px More holds only Sources, Settings and Search index', JSON.stringify(wideMenu) === '["Sources","Settings","Search index"]', wideMenu);
+    check('1280px More holds only Settings, Search index and Server', JSON.stringify(wideMenu) === '["Settings","Search index","Server"]', wideMenu);
     await go(wide, `#/note/${encodeURIComponent('Inbox/Gauge $U(1)$ idea.md')}`);
     await wide.waitForSelector('.sbw-reader-article .sbw-table-wrap');
     const reader = await wide.evaluate(() => ({

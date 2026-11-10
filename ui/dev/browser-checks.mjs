@@ -396,7 +396,10 @@ export async function runBrowserChecks(browser, port, outDir) {
     await shot('reader');
     const reader = page.locator('.sbw-browser');
     await reader.locator('.sbw-reader-links .sb-split > .sbw-reader-action').click();
-    await page.waitForFunction(() => document.querySelector('.sbw-reader-teach .sb-dg-state')?.textContent === 'Added to Zotero');
+    // the Zotero button says it went through; the teach row beside it does not say so again, and offers Undo (a246ca4)
+    await page.waitForFunction(() => document.querySelector('.sbw-reader-links .sb-split > .sbw-reader-action')?.textContent === 'Added to Zotero');
+    const settled = await page.evaluate(() => ({ state: document.querySelector('.sbw-reader-teach .sb-dg-state')?.textContent ?? null, undo: document.querySelector('.sbw-reader-teach .sb-dg-act')?.textContent }));
+    check(`${tag} after Add to Zotero the teach row offers Undo and does not repeat "Added"`, settled.state === null && settled.undo === 'Undo', settled);
     const toldOnce = (await feedback()).filter((f) => f.verdict === 'added' && f.key === 'doi:10.1/x3').length;
     check(`${tag} Add to Zotero from an issue sends 'added' once`, toldOnce === 1, await feedback());
     await page.locator('.sbw-browser-tool[aria-label="Close"]').click();

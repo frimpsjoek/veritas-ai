@@ -36,7 +36,7 @@ export async function runWebChecks(browser, port, outDir) {
     const page = await browser.newPage({ viewport: { width, height: 800 }, ...extra });
     const errors = [];
     page.on('pageerror', (error) => errors.push(String(error)));
-    page.on('console', (msg) => { if (msg.type() === 'error') errors.push(msg.text()); });
+    page.on('console', (msg) => { if (msg.type() === 'error') errors.push(`${msg.text()}${msg.location()?.url ? ` (${msg.location().url})` : ''}`); });
     page.errors = errors;
     // the fake-host shell makes real requests for Library and Notes; the invented server answers them (dev/web-fixtures.mjs)
     if (url.startsWith(`${origin}/dev/harness/web.html`)) {
@@ -66,33 +66,34 @@ export async function runWebChecks(browser, port, outDir) {
     await page.waitForSelector('.sbw-paper');
     const home = await page.evaluate(() => ({
       banner: (() => { const b = document.querySelector('.sbw-today-banner'); return { label: b.querySelector('.sbw-cover-label')?.textContent, title: b.querySelector('.sbw-cover-title')?.textContent, line: b.querySelector('.sbw-cover-line')?.textContent, fresh: b.classList.contains('is-new'), href: b.getAttribute('href'), chat: document.querySelector('.sbw-today-chat:not([hidden])')?.getAttribute('href') ?? null }; })(),
-      papers: [...document.querySelectorAll('.sbw-paper')].map((p) => ({ via: p.querySelector('.sbw-why-via')?.textContent ?? null, title: p.querySelector('.sbw-paper-title')?.textContent, href: p.querySelector('a.sbw-paper-title')?.getAttribute('href') ?? null, meta: p.querySelector('.sbw-paper-meta')?.textContent ?? null, why: p.querySelector('.sbw-paper-why')?.textContent ?? null })),
+      papers: [...document.querySelectorAll('.sbw-paper')].map((p) => ({ via: p.querySelector('.sbw-why-via')?.textContent ?? null, authors: p.querySelector('.sbw-paper-authors')?.textContent ?? null, title: p.querySelector('.sbw-paper-title')?.textContent, href: p.querySelector('a.sbw-paper-title')?.getAttribute('href') ?? null, meta: p.querySelector('.sbw-paper-meta')?.textContent ?? null, why: p.querySelector('.sbw-paper-why')?.textContent ?? null })),
       heads: [...document.querySelectorAll('.sbw-papers-head')].map((x) => x.firstChild.textContent),
       shelves: [...document.querySelectorAll('.sbw-shelf')].map((sh) => ({ title: sh.querySelector('.sbw-shelf-title')?.textContent, count: sh.querySelector('.sbw-shelf-count')?.textContent, covers: [...sh.querySelectorAll('.sbw-cover-title')].map((c) => c.textContent), pager: sh.querySelector('.sbw-pager-where')?.textContent ?? null })),
       count: document.querySelector('.sbw-home-date')?.textContent, badge: document.querySelector('.sbw-nav-item[data-view="home"] .sbw-nav-badge')?.textContent,
     }));
     const today = new Date().toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
     check(`${tag} Today leads across the full width: today's radar issue, dated, how many are new, marked new, its chat one link away (the banner itself is not a link)`, home.banner.label === "Today's reading radar" && home.banner.title === today && home.banner.line === '5 new papers' && home.banner.fresh && home.banner.href === null && home.banner.chat === '#/chat?session=c4', home.banner);
-    check(`${tag} Today shows every paper in abstract form: the title to the paper, authors, venue and date, why read it`, home.papers.length === 3 && home.papers[0].title === 'Burrow microclimates in field voles' && home.papers[0].href === 'https://doi.org/10.1/vole' && home.papers[0].meta === 'A. Vole, B. Mole · Ecology · 2026-10-10' && home.papers[0].why === 'Burrows stay four degrees warmer than the surface.' && home.papers[1].why === 'Voles cache seeds under the snowpack.' && home.papers[2].why === 'Cited by 3 papers in your library' && JSON.stringify(home.heads) === '["Worth reading"]', home.papers);
+    check(`${tag} Today shows every paper in abstract form: the title to the paper, venue and date, its abstract (a paper with none keeps its why line); no authors until asked for`, home.papers.length === 3 && home.papers[0].title === 'Burrow microclimates in field voles' && home.papers[0].href === 'https://doi.org/10.1/vole' && home.papers[0].meta === 'Ecology · 2026-10-10' && home.papers[0].why?.startsWith('Field voles dig burrows') && home.papers[1].why === 'Voles cache seeds under the snowpack.' && home.papers[2].why === 'Cited by 3 papers in your library' && home.papers.every((p) => p.authors === null) && JSON.stringify(home.heads) === '["Worth reading"]', home.papers);
     check(`${tag} the rest is separated into Research reports and Earlier issues, each counted; no Chats shelf (the Chat page lists them)`, JSON.stringify(home.shelves.map((x) => [x.title, x.count])) === '[["Research reports","1"],["Earlier issues","1"]]', home.shelves);
     await page.waitForSelector('.sbw-paper.has-figure');
     const figures = await page.evaluate(async () => {
       const papers = [...document.querySelectorAll('.sbw-paper')];
       const first = papers[0];
       const box = first.querySelector('.sbw-paper-figure-box')?.getBoundingClientRect();
-      const text = first.querySelector('.sbw-paper-text').getBoundingClientRect();
+      const paper = first.getBoundingClientRect();
       const more = first.querySelector('.sbw-paper-more');
       const summary = more?.querySelector('summary');
-      const before = { label: summary?.textContent, shown: more ? more.querySelector('.sbw-paper-abstract').checkVisibility() : null };
+      const preview = () => first.querySelector('.sbw-paper-why')?.checkVisibility() ?? null;
+      const before = { label: summary?.textContent, shown: more ? more.querySelector('.sbw-paper-abstract').checkVisibility() : null, preview: preview() };
       summary?.click();
       await new Promise((r) => setTimeout(r, 50));
-      const after = { label: summary?.textContent, text: more?.querySelector('.sbw-paper-abstract')?.textContent ?? '', shown: more ? more.querySelector('.sbw-paper-abstract').checkVisibility() : null };
+      const after = { label: summary?.textContent, text: more?.querySelector('.sbw-paper-abstract')?.textContent ?? '', shown: more ? more.querySelector('.sbw-paper-abstract').checkVisibility() : null, preview: preview() };
       summary?.click();
-      return { withFigure: papers.map((p) => p.classList.contains('has-figure')), right: box ? box.left >= text.right && Math.abs(box.width / box.height - 4 / 3) < 0.02 : false, before, after };
+      return { withFigure: papers.map((p) => p.classList.contains('has-figure')), right: box ? box.left >= paper.left + paper.width / 2 && box.right <= paper.right + 1 && Math.abs(box.width / box.height - 4 / 3) < 0.02 : false, before, after };
     });
-    check(`${tag} a paper with a graphical abstract shows it on the right in a 4:3 frame; the others have none`, JSON.stringify(figures.withFigure) === '[true,false,false]' && figures.right, figures);
-    check(`${tag} "Read the abstract" opens the full abstract and "Show less" closes it`, figures.before.label === 'Read the abstract' && figures.before.shown === false && figures.after.label === 'Show less' && figures.after.shown === true && figures.after.text.endsWith('The end.'), figures);
-    check(`${tag} each paper says where it was found`, home.papers[0].via === 'via bioRxiv, Ecology feed', home.papers[0]);
+    check(`${tag} a paper with a graphical abstract shows it on the right of the paper in a 4:3 frame; the others have none`, JSON.stringify(figures.withFigure) === '[true,false,false]' && figures.right, figures);
+    check(`${tag} "Read more" opens a long abstract in full in place of its preview, and "Show less" closes it`, figures.before.label === 'Read more' && figures.before.shown === false && figures.before.preview === true && figures.after.label === 'Show less' && figures.after.shown === true && figures.after.preview === false && figures.after.text.endsWith('The end.'), figures);
+    check(`${tag} no source line under a paper (Home keeps to title, venue and abstract)`, home.papers.every((p) => p.via === null), home.papers);
     const stepped = await page.evaluate(async () => {
       const wait = () => new Promise((r) => setTimeout(r, 80));
       const title = () => document.querySelector('.sbw-today-banner .sbw-cover-title')?.textContent;
@@ -141,7 +142,7 @@ export async function runWebChecks(browser, port, outDir) {
         bannerFull: Math.abs(rect(banner).width - rect(document.querySelector('.sbw-home-body')).width) <= 1,
         frame: getComputedStyle(report, '::before').borderTopWidth,
         lefts: [rect(document.querySelector('.sbw-h1')).left, rect(banner).left],
-        buttons: document.querySelectorAll('.sb-button.is-primary').length,
+        buttons: [...document.querySelectorAll('.sb-button.is-primary')].filter((b) => !b.closest('.sbw-setup')).length,
       };
     });
     check(`${tag} Home headings are Fraunces, the page title at least 32 px`, look.fraunces && /^"?Fraunces\b/.test(look.h1) && /^"?Fraunces\b/.test(look.title) && look.h1Size >= 32, look);
@@ -269,7 +270,7 @@ export async function runWebChecks(browser, port, outDir) {
     await page.locator('.sbw-more').click();
     // below 700 px the bar has no room for Routines and Projects, so More lists them first (ledger 12)
     const menuItems = await page.evaluate(() => [...document.querySelectorAll('.sbw-menu-item')].filter((n) => getComputedStyle(n).display !== 'none').map((n) => n.textContent));
-    check(`${tag} the ellipsis menu lists ${width < 700 ? 'the theme switch, Projects, ' : ''}Settings and Search index (Routines and the radar are in Settings)`, JSON.stringify(menuItems) === JSON.stringify([...(width < 700 ? [menuItems[0], 'Projects'] : []), 'Settings', 'Search index']) && (width >= 700 || /^(Light|Dark) mode$/.test(menuItems[0])), menuItems);
+    check(`${tag} the ellipsis menu lists ${width < 700 ? 'the theme switch, Projects, ' : ''}Settings, Search index and Server (Routines and the radar are in Settings)`, JSON.stringify(menuItems) === JSON.stringify([...(width < 700 ? [menuItems[0], 'Projects'] : []), 'Settings', 'Search index', 'Server']) && (width >= 700 || /^(Light|Dark) mode$/.test(menuItems[0])), menuItems);
     await page.locator('.sbw-menu-item', { hasText: 'Search index' }).click();
     await page.waitForSelector('.sbw-row');
     check(`${tag} Search index shows the index`, (await page.locator('#sbw-index').textContent()).includes('40 documents'));
@@ -279,7 +280,7 @@ export async function runWebChecks(browser, port, outDir) {
     await page.waitForSelector('#sbw-folders .sbw-folder');
     const folderRows = await page.evaluate(() => [...document.querySelectorAll('#sbw-folders .sbw-folder')].map((r) => `${r.querySelector('.sbw-row-name').textContent}: ${r.querySelector('.sbw-row-detail').textContent}`));
     check(`${tag} Folders lists the vault, Zotero and the plain folder with kind and count`, JSON.stringify(folderRows) === JSON.stringify([
-      'second-brain: Obsidian vault · 40 documents · main folder: notes Second Brain writes go here',
+      'second-brain: Obsidian vault · 40 documents · main folder: notes Veritas writes go here',
       'zotero: Zotero library · 12 documents', 'papers: Folder · 7 documents']), folderRows);
     check(`${tag} Folders: no sideways page scroll`, await noSideways(page));
     if (width === 1280) {
@@ -314,14 +315,12 @@ export async function runWebChecks(browser, port, outDir) {
     const rows = await page.evaluate(() => [...document.querySelectorAll('.sbw-paper .sb-dg-acts')].map((box) => { const paper = box.closest('.sbw-paper').getBoundingClientRect(); return [...box.querySelectorAll('.sb-dg-act, .sb-dg-chev')].every((b) => b.getBoundingClientRect().right <= paper.right + 1); }));
     check(`${tag} Home: each paper's actions wrap inside its column`, rows.every(Boolean), rows);
     if (width === 1280) {
-      // under each paper: the AI summary (default) or the abstract, remembered
+      // under each paper: the abstract (default) or the AI summary, remembered
       const firstLine = () => page.locator('.sbw-paper .sbw-paper-why').first().textContent();
-      check(`${tag} Home: the AI summary is shown by default`, (await firstLine()) === 'Burrows stay four degrees warmer than the surface.');
-      await page.locator('.sbw-layout-btn', { hasText: 'Abstract' }).click();
-      await page.waitForFunction(() => document.querySelector('.sbw-paper .sbw-paper-why')?.textContent.startsWith('Field voles dig burrows'));
-      check(`${tag} Home: Abstract shows each paper's abstract instead, justified`, (await page.evaluate(() => getComputedStyle(document.querySelector('.sbw-paper .sbw-paper-why')).textAlign)) === 'justify');
+      check(`${tag} Home: the abstract is shown by default, justified`, (await firstLine()).startsWith('Field voles dig burrows') && (await page.evaluate(() => getComputedStyle(document.querySelector('.sbw-paper .sbw-paper-why')).textAlign)) === 'justify');
       await page.locator('.sbw-layout-btn', { hasText: 'AI summary' }).click();
       await page.waitForFunction(() => document.querySelector('.sbw-paper .sbw-paper-why')?.textContent.startsWith('Burrows stay'));
+      check(`${tag} Home: AI summary shows each paper's summary instead`, (await firstLine()) === 'Burrows stay four degrees warmer than the surface.');
       const first = page.locator('.sbw-paper').first();
       await first.getByRole('button', { name: 'Not for me' }).click();
       await page.waitForFunction(() => document.querySelector('.sbw-paper')?.classList.contains('is-dismissed'));
@@ -658,7 +657,7 @@ export async function runWebChecks(browser, port, outDir) {
       await page.click('.sbw-today-sources');
       await page.waitForSelector('.sbw-sources .sbw-chip');
       const edit = await page.evaluate(() => ({ hash: location.hash, ring: document.querySelector('.sbw-src-ring-n').textContent, title: document.title, more: document.querySelector('.sbw-more').classList.contains('is-active') || getComputedStyle(document.querySelector('.sbw-more')).display === 'none', hasIntro: Boolean(document.querySelector('.is-intro')) }));
-      check(`${tag} the Sources link opens Settings > Reading radar with the existing radar's 2 follows counted`, edit.hash === '#/settings?section=radar' && edit.ring === '2' && edit.title === 'Settings · Second Brain' && !edit.hasIntro && true, edit);
+      check(`${tag} the Sources link opens Settings > Reading radar with the existing radar's 2 follows counted`, edit.hash === '#/settings?section=radar' && edit.ring === '2' && edit.title === 'Settings · Veritas' && !edit.hasIntro && true, edit);
       check(`${tag} #/sources has no sideways page scroll`, await noSideways(page));
       check(`${tag} #/sources lights the More item in the rail`, edit.more, edit);
       const sizes = await page.evaluate(() => {
@@ -820,7 +819,7 @@ export async function runWebChecks(browser, port, outDir) {
   // ------------------------------------------------------------ the real web host against a scripted server
   const server = scriptedServer();
   for (const width of WIDTHS) {
-    const { page, goto } = await open(`${origin}/dist-web/index.html#/home`, width);
+    const { page, goto } = await open(`${origin}/app/index.html#/home`, width);
     server.attach(page);
     await goto();
     await page.waitForSelector('.sbw-cover');
@@ -884,7 +883,7 @@ export async function runWebChecks(browser, port, outDir) {
 
       // the manifest is real
       const manifest = await page.evaluate(() => fetch('manifest.webmanifest').then((r) => r.text()).then(JSON.parse));
-      check(`${tag} the manifest names the app and installs standalone`, manifest.name === 'Second Brain' && manifest.display === 'standalone' && manifest.icons.length > 0 && (await page.title()) === 'Settings · Second Brain', manifest);
+      check(`${tag} the manifest names the app and installs standalone`, manifest.name === 'Veritas' && manifest.display === 'standalone' && manifest.icons.length > 0 && (await page.title()) === 'Settings · Veritas', manifest);
       await page.screenshot({ path: join(outDir, 'web-real-1280.png') });
     }
     check(`${tag} logged no errors`, page.errors.filter((e) => !/Failed to load resource/.test(e)).length === 0, page.errors);
@@ -898,7 +897,7 @@ export async function runWebChecks(browser, port, outDir) {
       { provider: 'codex', state: 'missing', version: null, account: { kind: 'none', label: null, plan: null }, usage: null, installHelp: 'Install the ChatGPT app to use your ChatGPT plan.' },
       { provider: 'local', state: 'ready', version: null, account: { kind: 'none', label: null, plan: null }, usage: null, installHelp: null, detail: '2 models found.' },
     ];
-    const { page, goto } = await open(`${origin}/dist-web/index.html#/settings?section=models`, 1280);
+    const { page, goto } = await open(`${origin}/app/index.html#/settings?section=models`, 1280);
     server.attach(page);
     await goto();
     await page.waitForSelector('.sbm .sbm-models');
@@ -979,7 +978,7 @@ export async function runWebChecks(browser, port, outDir) {
     await page.close();
   }
   {
-    const { page, goto } = await open(`${origin}/dist-web/index.html#/settings?section=models`, 390);
+    const { page, goto } = await open(`${origin}/app/index.html#/settings?section=models`, 390);
     server.attach(page);
     await goto();
     await page.waitForSelector('.sbm .sbm-models');
@@ -999,7 +998,7 @@ export async function runWebChecks(browser, port, outDir) {
 
   // the server going away shows as offline, and the app recovers
   {
-    const { page, goto } = await open(`${origin}/dist-web/index.html#/chat`, 1280);
+    const { page, goto } = await open(`${origin}/app/index.html#/chat`, 1280);
     server.attach(page);
     await goto();
     await page.waitForSelector('.sb-ai-where');
@@ -1034,13 +1033,17 @@ function scriptedServer() {
     ],
     log: /** @type {{ seq: number, type: string, [k: string]: any }[]} */ ([]),
     attach(page) {
-      page.route(/\/(web|agent|ping|status|zotero|search|recent|links)\b/, async (route) => {
+      page.route(/\/(web|agent|ping|status|zotero|search|recent|links|sources|setup|site-icon)\b/, async (route) => {
         const url = new URL(route.request().url());
         const method = route.request().method();
         const json = (body, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
         if (s.down) return route.abort();
         const path = url.pathname;
-        if (path === '/ping') return json({ ok: true });
+        if (path === '/ping') return json({ ok: true, ready: true });
+        // Home's guided setup (spec 023) and the source pills' icons; shapes as server/http_api.py
+        if (path === '/sources') return json({ folders: [] });
+        if (path === '/setup/suggest') return json({ zotero: null, vaults: [], pdf_folders: [] });
+        if (path === '/site-icon') return route.fulfill({ status: 200, contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"/>' });
         if (path === '/web/state') {
           if (method === 'POST') {
             const body = JSON.parse(route.request().postData() ?? '{}');
@@ -1089,7 +1092,10 @@ function scriptedServer() {
             { id: 'mistral/large', label: 'mistral/large', hint: null, efforts: [], source: 'provider', isDefault: false }]);
           return json([]);
         }
-        if (api === '/routines' || api === '/projects' || api === '/skills' || api === '/reviews') return json([]);
+        if (api === '/routines' || api === '/projects' || api === '/skills' || api === '/reviews' || api === '/mcp-servers') return json([]);
+        // shapes as agent/src/service.d.ts (sessions.view, radar.profile)
+        if (api === '/sessions/view') return json({ steps: [], results: [], current: null });
+        if (api === '/radar/profile') return json({ topics: [], authors: [], journals: [] });
         if (api === '/settings') {
           if (method === 'POST') {
             const patch = JSON.parse(route.request().postData() ?? '{}');

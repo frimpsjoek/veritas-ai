@@ -191,6 +191,9 @@ export function answer(url, method, post, headers = {}) {
   if (url.hostname === 'frame.example') return { status: 200, contentType: 'text/html', body: '<!doctype html><title>Framed</title><h1 id="framed">A framed page</h1>' };
   if (url.pathname === '/sources' || url.pathname.startsWith('/sources/')) return folders(url, method, post);
   switch (url.pathname) {
+    // the server light (shell.js) and guided setup (setup-card.js) ask these; shapes as server/http_api.py and setup_suggest.py
+    case '/ping': return json({ ok: true, ready: true });
+    case '/setup/suggest': return json({ zotero: null, vaults: [], pdf_folders: [] });
     case '/web/page': return webPage(q.get('url') ?? '', q.get('prefer'));
     case '/web/pdf': return q.get('url') === 'https://files.example/paper.pdf' ? { status: 200, contentType: 'application/pdf', body: PDF } : json({ error: 'This link is not a PDF' }, 415);
     case '/zotero/collections': return json(COLLECTIONS);
