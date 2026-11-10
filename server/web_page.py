@@ -128,6 +128,47 @@ def doi_of(url: str) -> str | None:
     return found.group(1).rstrip("/.").lower()
 
 
+ENGAGE = re.compile(r"/engage/(?:chemrxiv/article-details|api-gateway/chemrxiv/assets/orp/resource/item)/([0-9a-f]{24})(?:[/?#]|$)")
+
+
+def engage_id(url: str) -> str | None:
+    """The item id in a ChemRxiv Engage link (an article page or its PDF asset), or None."""
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        return None
+    if (parsed.hostname or "").lower().removeprefix("www.") != "chemrxiv.org":
+        return None
+    found = ENGAGE.search(parsed.path.lower() + "/")
+    return found.group(1) if found else None
+
+
+def engage_doi(item: str, get=fetch) -> str | None:
+    """The DOI of a ChemRxiv Engage item, from OpenAlex's record of its landing page, kept for good once found.
+
+    chemrxiv.org answers only web browsers (a Cloudflare challenge), its public API too, and an Engage link holds no
+    DOI; OpenAlex lists the Engage page among the work's locations.
+    """
+    path = folder("openalex") / f"engage-{item}.json"
+    try:
+        known = json.loads(path.read_text())
+        if known.get("doi"):
+            return known["doi"]
+    except (OSError, ValueError):
+        pass
+    landing = f"https://chemrxiv.org/engage/chemrxiv/article-details/{item}"
+    try:
+        answer = get(f"https://api.openalex.org/works?filter=locations.landing_page_url:{landing}&select=doi",
+                     200_000, "application/json")
+        results = json.loads(answer.body).get("results", []) if answer.status == 200 else []
+    except (OSError, Refused, ValueError):
+        return None
+    found = doi_of(results[0].get("doi") or "") if len(results) == 1 else None
+    if found:
+        path.write_text(json.dumps({"doi": found}))
+    return found
+
+
 def library_pdf(doi: str) -> tuple[str, str] | None:
     """(attachment key, title) of a PDF in the Zotero library for this DOI, or None."""
     if not zotero.root().is_dir():
@@ -1053,7 +1094,8 @@ def page(url: str, prefer: str | None = None, get=fetch) -> dict:
     except Refused as error:
         return {"mode": "blocked", "url": url, "title": url, "reason": str(error)}
     host = urllib.parse.urlparse(url).hostname or url
-    doi = doi_of(url)
+    engage = engage_id(url)
+    doi = doi_of(url) or (engage_doi(engage, get) if engage else None)
     arxiv = arxiv_of(url) or ((radar_api.arxiv_id(doi[len(ARXIV_DOI):]), "abs") if doi and doi.startswith(ARXIV_DOI) else None)
     if arxiv and arxiv[0]:
         found = _arxiv(url, arxiv[0], arxiv[1], prefer, get)

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sqlite3
+import urllib.parse
 
 import pytest
 
@@ -584,3 +585,47 @@ def test_an_svg_figure_in_an_object_becomes_a_picture_and_other_objects_still_go
                     '<object type="application/x-shockwave-flash" data="game.swf">old plugin</object>')
     assert '<figure><img src="https://arxiv.org/html/2608.1/abs.svg" alt="" width="476" height="310"><figcaption>' in html
     assert "fallback text" not in html and "swf" not in html and "old plugin" not in html
+
+
+# --- ChemRxiv's Engage links: chemrxiv.org answers only browsers (Cloudflare), so the DOI comes from OpenAlex --------
+
+ENGAGE_ID = "66c9d14420ac769e5fb4ddd1"
+ENGAGE = f"https://chemrxiv.org/engage/chemrxiv/article-details/{ENGAGE_ID}"
+CHEMRXIV_DOI = "10.26434/chemrxiv-2024-wdv4b"
+
+
+def engage_lookup(url=ENGAGE):
+    return f"https://api.openalex.org/works?filter=locations.landing_page_url:{url}&select=doi"
+
+
+@pytest.mark.parametrize("url", [ENGAGE, f"https://www.chemrxiv.org/engage/chemrxiv/article-details/{ENGAGE_ID}?x=1",
+                                 f"{ENGAGE}/", f"https://chemrxiv.org/engage/api-gateway/chemrxiv/assets/orp/resource/item/{ENGAGE_ID}/original/x.pdf"])
+def test_engage_ids(url):
+    assert web_page.engage_id(url) == ENGAGE_ID
+
+
+def test_not_an_engage_link():
+    assert web_page.engage_id("https://chemrxiv.org/doi/full/10.26434/chemrxiv.15000484/v1") is None
+    assert web_page.engage_id(f"https://example.org/engage/chemrxiv/article-details/{ENGAGE_ID}") is None
+
+
+def test_an_engage_link_opens_as_its_paper_without_asking_chemrxiv(web):
+    pages, calls, get = web
+    pages[engage_lookup()] = Response("x", 200, {}, json.dumps({"results": [{"doi": f"https://doi.org/{CHEMRXIV_DOI}"}]}).encode())
+    pages[openalex_url(CHEMRXIV_DOI)] = Response("x", 200, {}, json.dumps(WORK_CLOSED).encode())
+    answer = web_page.page(ENGAGE, get=get)
+    assert answer["mode"] == "reader" and answer["source"] == "openalex"
+    assert answer["paper"]["doi"] == CHEMRXIV_DOI
+    assert not any("chemrxiv.org" in urllib.parse.urlparse(c).netloc for c in calls)
+    # the DOI is remembered: a second open asks OpenAlex for the work only (itself kept a day)
+    calls.clear()
+    web_page.page(ENGAGE, get=get)
+    assert engage_lookup() not in calls
+
+
+def test_an_engage_link_openalex_does_not_know_still_says_why(web):
+    pages, _, get = web
+    pages[engage_lookup()] = Response("x", 200, {}, json.dumps({"results": []}).encode())
+    pages[ENGAGE] = Response(ENGAGE, 403, {"cf-mitigated": "challenge", "server": "cloudflare"}, b"")
+    answer = web_page.page(ENGAGE, get=get)
+    assert answer["mode"] == "blocked" and answer["reason"] == web_page.BOT
