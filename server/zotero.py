@@ -69,7 +69,14 @@ MIN_TEXT_CHARS = 200  # a shorter cache holds no document worth indexing, and no
 #   1: DOI or half the title's words anywhere in the text.
 #   2: DOI, title or authors in the first HEAD_CHARS only; author line as a second signal; near-empty caches dropped;
 #      overrides (text_overrides.json); highlights of a rejected attachment dropped with its text.
-TEXT_GUARD_VERSION = 2
+#   3: DOI matched whole; a title alone must sit near the top; publication lists rejected; a text nothing can be
+#      judged by is "unknown" and not admitted, instead of getting the benefit of the doubt.
+TEXT_GUARD_VERSION = 3
+MIN_EXACT_TITLE_CHARS = 8  # a shorter title could turn up by chance
+TITLE_NEAR_CHARS = 1200  # a paper's own title sits in its first lines; further down it may be a citation of it
+# Words a CV or publication list carries near its top and a paper does not ("publications" alone is in publisher names).
+LISTING_MARKERS = ("curriculum vitae", "list of publications", "selected publications", "peer reviewed publications",
+                   "research experience", "work experience", "professional experience")
 OVERRIDES_FILE = "text_overrides.json"  # in the data folder (paths.data_dir): {attachment key: "mine" | "foreign"}
 OVERRIDE_VALUES = ("mine", "foreign")
 
@@ -84,7 +91,8 @@ def _folded(text: str) -> str:
 class TextDecision:
     """Why an attachment's cached text is, or is not, taken as its item's. Carries no text."""
     accepted: bool
-    reason: str  # override:mine, override:foreign, override:invalid, empty, doi, title, title+authors, title_short, authors, foreign
+    reason: str  # override:mine, override:foreign, override:invalid, empty, listing, doi, title, title+authors,
+    #              title_exact, title_short, authors, unknown, foreign
     doi_hit: bool = False
     title_fraction: float = 0.0  # share of the title's judged words in the head of the text
     author_fraction: float = 0.0  # share of the authors' surnames in the head of the text
@@ -92,12 +100,25 @@ class TextDecision:
 
     @property
     def foreign(self) -> bool:
-        """Rejected because the text is another document's (not merely empty)."""
+        """Rejected as another document's, or as impossible to judge (not merely empty)."""
         return not self.accepted and self.reason != "empty"
 
 
 def overrides_file() -> Path:
     return paths.data_dir() / OVERRIDES_FILE
+
+
+def overrides_stamp() -> str:
+    """Changes when the overrides file changes, for the index stamp: an edit there must re-read Zotero (spec 026 R3)."""
+    try:
+        return hashlib.sha1(overrides_file().read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
+def _exact(text: str) -> str:
+    """Case and whitespace folded, every script kept: `_folded` drops what is not Latin, this does not."""
+    return " ".join(unicodedata.normalize("NFKC", html.unescape(re.sub(r"<[^>]+>", " ", text or ""))).casefold().split())
 
 
 def text_overrides() -> dict[str, str]:
@@ -126,10 +147,13 @@ def judge_text(title: str, doi: str, text: str, authors: list[str] | tuple[str, 
     Zotero keeps an attachment's .zotero-ft-cache even after the file has moved or been replaced, so a cache can hold
     another document, including a private one. Such text must not be indexed, shown or cited under this item's name.
     Only the head of the text is read (HEAD_CHARS): a document names itself at the start, while a document that
-    merely cites this item (a reference list, a CV) does so later. Signals, in order: the item's DOI; at least half
-    the title's judged words (longer than three letters, not a stopword); a quarter of them together with half the
-    authors' surnames; for a title too short to judge by, any author surname (or the benefit of the doubt when the
-    item has no authors). A heuristic cannot be right every time: `text_overrides.json` is the backstop for both a
+    merely cites this item (a reference list, a CV) does so later. Rejected first: a text with a CV or publication-list
+    marker. Then, in order: the item's whole DOI; at least half the title's judged words (longer than three letters,
+    not a stopword) in the first TITLE_NEAR_CHARS; half the title with half the authors' surnames in the head; a
+    quarter of the title with half the surnames; the title verbatim near the top (the only signal for a non-Latin
+    title); for a title too short to judge by, any author surname. A text none of these can speak to, such as an
+    untitled authorless item, is "unknown" and not admitted. A heuristic cannot be right every time:
+    `text_overrides.json` is the backstop for both a
     false reject and a false accept.
     """
     override = (overrides if overrides is not None else text_overrides()).get(attachment_key) if attachment_key else None
@@ -141,19 +165,27 @@ def judge_text(title: str, doi: str, text: str, authors: list[str] | tuple[str, 
     if len(body) < MIN_TEXT_CHARS:
         return TextDecision(False, "empty", chars=len(body))
     head = f" {body[:HEAD_CHARS]} "
-    doi_hit = bool(doi) and _folded(doi).strip() in head
+    near = f" {body[:TITLE_NEAR_CHARS]} "
+    folded_doi = _folded(doi).strip()
+    doi_hit = bool(folded_doi) and f" {folded_doi} " in head  # whole: 10.1021/ja035 is not 10.1021/ja0357902
     words = [w for w in _folded(title).split() if len(w) > 3 and w not in _TITLE_STOPWORDS]
     surnames = [s for s in (_folded(a).split()[-1] if _folded(a).split() else "" for a in authors) if len(s) > 3]
     title_fraction = sum(f" {w} " in head for w in words) / len(words) if words else 0.0
+    near_fraction = sum(f" {w} " in near for w in words) / len(words) if words else 0.0
     author_fraction = sum(f" {s} " in head for s in surnames) / len(surnames) if surnames else 0.0
     facts = dict(doi_hit=doi_hit, title_fraction=round(title_fraction, 3), author_fraction=round(author_fraction, 3), chars=len(body))
+    if any(f" {marker} " in head for marker in LISTING_MARKERS):
+        return TextDecision(False, "listing", **facts)
     if doi_hit:
         return TextDecision(True, "doi", **facts)
+    exact_title = _exact(title)
+    if len(exact_title) >= MIN_EXACT_TITLE_CHARS and exact_title in _exact(text)[:TITLE_NEAR_CHARS]:
+        return TextDecision(True, "title_exact", **facts)
     if len(words) < MIN_TITLE_WORDS:
-        if not surnames:
-            return TextDecision(True, "title_short", **facts)
-        return TextDecision(author_fraction > 0, "authors" if author_fraction > 0 else "foreign", **facts)
-    if title_fraction >= MIN_TITLE_MATCH:
+        if surnames:
+            return TextDecision(author_fraction > 0, "authors" if author_fraction > 0 else "foreign", **facts)
+        return TextDecision(False, "unknown", **facts)
+    if near_fraction >= MIN_TITLE_MATCH:
         return TextDecision(True, "title", **facts)
     if title_fraction >= MIN_TITLE_WITH_AUTHORS and surnames and author_fraction >= MIN_AUTHOR_MATCH:
         return TextDecision(True, "title+authors", **facts)
@@ -235,7 +267,7 @@ def audit_text() -> list[dict]:
                 continue
             d = judge_text(f.get("title") or f.get("shortTitle") or key, f.get("DOI", ""), _read_cache(cache),
                            creators.get(item_id, []), keys[attachment], overrides)
-            rows.append({"item": key, "attachment": keys[attachment], "decision": "mine" if d.accepted else ("empty" if d.reason == "empty" else "foreign"),
+            rows.append({"item": key, "attachment": keys[attachment], "decision": "mine" if d.accepted else ("empty" if d.reason == "empty" else ("unknown" if d.reason == "unknown" else "foreign")),
                          "reason": d.reason, "doi_hit": d.doi_hit, "title_fraction": d.title_fraction,
                          "author_fraction": d.author_fraction, "chars": d.chars})
     return rows

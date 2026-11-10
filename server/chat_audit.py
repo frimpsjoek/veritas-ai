@@ -8,9 +8,10 @@ Neither form records tool calls as such, so this looks for the item's key anywhe
 `zotero/KEY`, a citation `[@KEY]` (the agent's citekey is the Zotero key: `agent/src/library-http.js`), or a
 `citekey` field. It prints paths and counts only, never a line of a chat.
 
-What it cannot tell: a `search_notes` / `search_library` result carries a snippet of the matching passage without a
-read, and the snippet is not stored unless the answer cites the item; a chat that saw such a snippet and did not
-cite the key is not listed.
+Claude Code and Claude Desktop keep full transcripts, tool results included, so there a `search_notes` result naming
+`zotero/KEY` is found too. What it cannot tell: Veritas's own chats do not store a search snippet unless the answer
+cites the item, so a Veritas chat that saw a snippet and did not cite the key is not listed. A listed file names the
+key; whether it holds the foreign text itself takes a person opening it.
 """
 from __future__ import annotations
 
@@ -73,14 +74,18 @@ def default_folders() -> list[Path]:
     vault = getattr(kb, "VAULT", None)
     if vault:
         folders.append(Path(vault) / "chats")
+    home = Path.home()
+    folders += [home / ".claude" / "projects",  # Claude Code: full transcripts, tool results included
+                home / "Library" / "Application Support" / "Claude" / "claude-code-sessions",
+                home / "Library" / "Application Support" / "Claude" / "local-agent-mode-sessions"]
     return folders
 
 
 def foreign_keys() -> set[str]:
-    """Item keys with at least one attachment the guard rejects as foreign, from `zotero.audit_text()`."""
+    """Item keys with at least one attachment the guard rejects (foreign or unknown), from `zotero.audit_text()`."""
     import zotero
 
-    return {row["item"] for row in zotero.audit_text() if row["decision"] == "foreign"}
+    return {row["item"] for row in zotero.audit_text() if row["decision"] in ("foreign", "unknown")}
 
 
 def cli(folders: list[str], keys_file: str | None) -> None:

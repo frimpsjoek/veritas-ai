@@ -55,7 +55,8 @@ step "server: tests"
 if "$PY" -c "import pytest" 2>/dev/null; then
   (cd server && KB_BACKEND=onnx "$PY" -m pytest tests -q -p no:cacheprovider)
 else
-  echo "check.sh: pytest not available (create server/.venv from server/requirements.txt); server tests skipped" >&2
+  echo "check.sh: pytest not available (create server/.venv from server/requirements.txt): server tests cannot run" >&2
+  exit 1
 fi
 
 step "app: cargo check"

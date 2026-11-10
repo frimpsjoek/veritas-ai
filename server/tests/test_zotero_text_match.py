@@ -36,8 +36,46 @@ def test_a_different_doi_does_not_rescue_another_document():
     assert not zotero.text_belongs_to_item(TITLE, "10.1021/ja0357902", "Unrelated. doi:10.1000/other body text " * 20)
 
 
-def test_a_title_too_short_to_judge_is_kept_when_the_item_has_no_authors():
-    assert zotero.judge_text("Quantum dots", "", FILLER).reason == "title_short"
+def test_a_text_nothing_can_judge_is_not_admitted():
+    """No benefit of the doubt: an authorless item with a title too short to judge is unknown, as is a blank title."""
+    assert zotero.judge_text("Quantum dots", "", FILLER).reason == "unknown"
+    assert zotero.judge_text("", "", FILLER).reason == "unknown"
+    assert not zotero.judge_text("", "", FILLER).accepted
+    assert zotero.judge_text("", "", FILLER).foreign
+
+
+def test_a_non_latin_title_is_judged_verbatim_not_waved_through():
+    title = "铜表面的电子结构研究"
+    assert zotero.judge_text(title, "", FILLER).reason == "unknown"
+    assert zotero.judge_text(title, "", f"{title} {FILLER}").reason == "title_exact"
+
+
+def test_a_doi_prefix_does_not_match_a_longer_doi():
+    text = f"Unrelated paper. doi:10.1021/ja0357902 {FILLER}"
+    assert not zotero.judge_text(TITLE, "10.1021/ja035", text).doi_hit
+    assert zotero.judge_text(TITLE, "10.1021/ja0357902", text).doi_hit
+
+
+def test_a_cv_listing_the_paper_near_the_top_is_rejected():
+    cv = f"Jane Doe. Curriculum Vitae. Publications: {TITLE}. J. Joo, T. Hyeon. {FILLER}"
+    decision = zotero.judge_text(TITLE, "", cv, authors=AUTHORS)
+    assert decision.reason == "listing" and not decision.accepted
+
+
+def test_a_title_past_the_top_needs_the_authors_too():
+    padding = "padding " * (zotero.TITLE_NEAR_CHARS // 8 + 1)
+    body = f"{padding}{TITLE} {FILLER}"
+    assert zotero.judge_text(TITLE, "", body).reason == "foreign"
+    assert zotero.judge_text(TITLE, "", f"J. Joo, H. B. Na and T. Hyeon. {body}", authors=AUTHORS).reason == "title+authors"
+
+
+def test_an_overrides_edit_changes_the_stamp(tmp_path, monkeypatch):
+    monkeypatch.setattr(zotero, "overrides_file", lambda: tmp_path / "text_overrides.json")
+    assert zotero.overrides_stamp() == ""
+    (tmp_path / "text_overrides.json").write_text('{"A": "foreign"}')
+    first = zotero.overrides_stamp()
+    (tmp_path / "text_overrides.json").write_text('{"A": "mine"}')
+    assert first and zotero.overrides_stamp() != first
 
 
 def test_a_title_too_short_to_judge_needs_an_author_when_authors_are_known():
@@ -59,7 +97,8 @@ def test_title_words_match_whole_words_only():
 
 def test_a_document_that_merely_cites_the_title_later_does_not_belong():
     # A CV or another paper's reference list repeats the title, but after its own first page.
-    assert zotero.judge_text(TITLE, "", f"Curriculum vitae of someone. {TAIL} 12. {TITLE}, JACS 2003.").reason == "foreign"
+    assert zotero.judge_text(TITLE, "", f"Curriculum vitae of someone. {TAIL} 12. {TITLE}, JACS 2003.").reason == "listing"
+    assert zotero.judge_text(TITLE, "", f"Notes of someone. {TAIL} 12. {TITLE}, JACS 2003.").reason == "foreign"
 
 
 def test_a_doi_cited_later_in_the_text_does_not_belong():

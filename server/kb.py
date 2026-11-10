@@ -826,7 +826,7 @@ def _index_library(db: sqlite3.Connection, verbose: bool, progress: Progress, pr
     args = (prefix,) if prefix else ()
     # abstracts found in OpenAlex (abstracts.py) change the documents too, so their file is part of the check, and so
     # is the text guard's version: a stricter guard must re-read every item, or rejected text stays indexed (spec 026 R1)
-    fingerprint = json.dumps([zotero.fingerprint(), abstracts.stamp(), zotero.TEXT_GUARD_VERSION])
+    fingerprint = json.dumps([zotero.fingerprint(), abstracts.stamp(), zotero.TEXT_GUARD_VERSION, zotero.overrides_stamp()])
     row = db.execute("SELECT value FROM meta WHERE key=?", (fingerprint_key,)).fetchone()
     missing_keys = {r[0] for r in db.execute(
         f"SELECT path FROM notes WHERE source='zotero' AND {mine} AND (meta IS NULL OR json_extract(meta, '$.collection_keys') IS NULL)",
@@ -1881,7 +1881,7 @@ def main() -> None:
     p.add_argument("--replace", action="store_true", help="overwrite this install's index")
     p = sub.add_parser("audit-text", help="the text guard's decision for every Zotero attachment with cached text; "
                                           "prints keys and numbers, never text (spec 026 R2)")
-    p.add_argument("--only", choices=["mine", "foreign", "empty"], help="print rows with this decision only")
+    p.add_argument("--only", choices=["mine", "foreign", "unknown", "empty"], help="print rows with this decision only")
     p = sub.add_parser("audit-chats", help="chats whose records name a Zotero item the text guard rejects; prints "
                                            "paths and counts, never chat text (spec 026 R22)")
     p.add_argument("folders", nargs="*", help="chat folders (JSONL or Markdown mirrors); default: this install's "

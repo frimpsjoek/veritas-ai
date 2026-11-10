@@ -241,6 +241,16 @@ def test_an_already_indexed_foreign_text_is_removed_by_the_next_run_after_a_guar
     assert tantivy_hits(searcher, OK_SENTINEL) == [f"zotero/{MINE}"]
 
 
+def test_an_overrides_edit_re_reads_zotero_on_the_next_run(library, monkeypatch, tmp_path):
+    """Nothing in Zotero changed; only the overrides file did. An ordinary index run must still act on it."""
+    monkeypatch.setattr(zotero, "overrides_file", lambda: tmp_path / "text_overrides.json")
+    kb.index(verbose=False)
+    assert where_is(OK_SENTINEL)["chunks"] == [f"zotero/{MINE}"]
+    (tmp_path / "text_overrides.json").write_text(json.dumps({ATT_MINE: "foreign"}))
+    kb.index(verbose=False)
+    assert where_is(OK_SENTINEL) == {"chunks": [], "fts": 0, "vecs": 0}
+
+
 def test_highlights_and_has_full_text_follow_the_decision(library):
     docs = {d.key: d for d in zotero.documents()}
     assert OK_SENTINEL in docs[MINE].text and "## Highlights" in docs[MINE].text
