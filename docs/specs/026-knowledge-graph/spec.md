@@ -61,6 +61,16 @@ rest are from `dev` as reviewed, where `server/zotero.py` carried an uncommitted
   Cleaning from the dev repo alone can undo itself. Nothing in the new code can prevent this: the old code decides
   on its own, and the index has no version lock an old server would honour. The upgrade (R21) is required, not
   optional; until then the fix is to stop both installed servers.
+- **Two more ways old code runs (found in a second review, 2026-11-04).** (i) A LaunchAgent,
+  `~/Library/LaunchAgents/com.frimpsjoe.second-brain-dev.plist` (RunAtLoad, KeepAlive), runs the pre-Veritas
+  `~/Documents/second-brain-dev/obsidian-kb/kb.py serve --port 27190`, with no guard and its own index
+  `obsidian-kb/data/kb.sqlite` (about 40,700 full-text chunks), still indexing `~/Zotero`; it was running on
+  2026-11-10 (PID 3991 on 127.0.0.1:27190). Stopping it needs `launchctl bootout`, because KeepAlive restarts it.
+  (ii) Every MCP `veritas` process (`server/server.py:49-55`, the Homebrew copy) starts `kb.py serve` itself when
+  127.0.0.1:27182 does not answer, so stopping the app and the service is not enough: while any Claude session has
+  the old MCP server loaded, the next tool call can start an unguarded server. All Claude sessions must be closed,
+  or the installed MCP server upgraded, before an index is cleaned. So there are four indexes to clean or retire:
+  Homebrew's, the desktop app's, the main tree's `server/data/kb.sqlite`, and obsidian-kb's.
 - **Chat history.** Chats are mirrored as Markdown into the vault (`agent/src/core.js:473-474`;
   `~/Documents/lab-notebook/chats`, 16 files) and kept as JSONL under each data folder's `agent/chats`; the vault is
   itself indexed. The mirror holds user and assistant text only (`agent/src/chat-markdown.js:44-48`); neither form
@@ -136,12 +146,15 @@ repeated below as stated, with the arithmetic checked, not the prices).
   matches the item's own title. On a fixture, a sentinel in a rejected cache returns nothing through `/search`
   (Tantivy included) and MCP `search_notes`; an item indexed under an older guard loses its text on the next
   ordinary run after the version bump. The same holds for highlights on the rejected attachment.
-- **R5.** Stale copies (`server/data/kb.sqlite`, the 2026-10-28 backup) are deleted or moved out of any served path;
+- **R5.** Stale copies (`server/data/kb.sqlite`, the 2026-10-28 backup, `obsidian-kb/data/kb.sqlite` with its
+  Tantivy folder) are deleted or moved out of any served path;
   which of the two is D5. The spec records the `ls -la` before and after.
 - **R21.** No installed server runs without the guard: a tagged release is installed through `brew upgrade` and the
   desktop app is upgraded, or both are stopped until then (D10). Test: `grep -c TEXT_GUARD_VERSION` on each installed
   `zotero.py` or bundle, and each served data folder is listed by path in the evidence. After the installed apps'
-  next automatic index run, R4's count is still 0. The upgrade is required: an older server that runs after a newer
+  next automatic index run, R4's count is still 0. Also: the obsidian-kb LaunchAgent is unloaded and its index
+  retired (D5), and no `libexec/server/server.py` MCP process of an older version is running when the indexes are
+  cleaned (`pgrep -fl server.py` empty, or all of them the upgraded version). The upgrade is required: an older server that runs after a newer
   one cleaned an index computes a stamp without the version, sees a mismatch and re-reads every item unguarded (the
   rejected text comes back); no code on the branch can stop code that is already installed.
 - **R22.** Chat history is checked without printing it: `kb.py audit-chats` lists, by path only, chats that name a

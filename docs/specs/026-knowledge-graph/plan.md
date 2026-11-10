@@ -100,33 +100,70 @@ main tree's interpreter (`server/.venv` and `server/models` symlinked into the w
 - Not run, by the hard limits: no re-index of a served folder, no deletion, no release, no upgrade, no service
   start or stop.
 
-R21, exact commands for Joseph (not performed; order matters, since an installed server that runs after a cleaned
-index re-reads it unguarded):
+Second round, 2026-11-10 (after an adversarial review found the first round incomplete; guard version 3):
+
+- Guard v3 (`server/zotero.py`): DOI matched as a whole (`10.1021/ja035` no longer matches `10.1021/ja0357902`); a
+  title alone must sit in the first `TITLE_NEAR_CHARS` = 1,200 folded characters; a text with a CV or
+  publication-list marker in its head is rejected (`listing`); the title verbatim near the top admits a non-Latin
+  title (`title_exact`); a text nothing can be judged by (blank or non-Latin title, no usable author) is `unknown`
+  and not admitted, instead of the benefit of the doubt. The index stamp also carries `zotero.overrides_stamp()`, so
+  an overrides edit re-reads Zotero.
+- Measured read-only on `~/Zotero` (1,125 cached texts; keys and numbers only, `VERITAS_DATA` on a scratch folder):
+  v2 -> v3, 15 decisions changed: 4 accepted -> `foreign` or `listing` by the near-top title rule and markers, 8
+  `title_short` accepts -> `unknown` (among them E3MSU439, a text v1 and v2 accepted wrongly), and 3 -> `listing`.
+  Totals: mine 843, foreign 56, unknown 8, empty 218. Likely false rejects, now override candidates: IY342BMQ
+  (`listing`, title 1.00, authors 1.00, 145k chars), LIC7G6N9 (`listing`), and the Cowtan page NAMPLC9N. 58 items
+  have a rejected attachment; 57 of them keep no accepted text.
+- Tests: `pytest tests/test_text_guard_effect.py tests/test_zotero_text_match.py tests/test_chat_audit.py`: 42 passed.
+  Mutation runs in a temporary copy (removed afterwards), each must make a test fail: guard version out of the stamp
+  (2 failed), overrides out of the stamp (1), guard removed from `documents()` (7), from `item_detail()` (2), from
+  `/zotero/pdf` (1), DOI match without boundaries (1), `unknown` admitted (1), listing markers off (2). All eight
+  were caught.
+- `check.sh`: missing pytest now fails the run instead of skipping the server tests. Full `./check.sh` 2026-11-10: "all parts passed"; server 478 passed, 3 skipped; app `cargo check` skipped by the script (sidecars not built).
+- Paper notes: 0 notes in the vault's `Papers/` and `Second Brain/` folders carry the `zotero-key` of a rejected item.
+- `audit-chats` now also reads `~/.claude/projects` and Claude Desktop's session folders, where tool results are
+  stored. 5 files name a rejected key, all Claude Code transcripts (this session, and four from the
+  `frimpsjoek-github-io` project, two of them subagent transcripts). Whether each holds the text itself takes Joseph
+  opening it (D11).
+- `zotero_web.fulltext` has no caller (`grep -n "\.fulltext(" server/*.py`: only `radar_api.fulltext`, which reads
+  arXiv), so online libraries do not index attachment text today.
+
+R21, exact commands for Joseph (not performed). Order matters: an old server that runs after an index was cleaned
+puts the text back, and three kinds of old code can start one: the Homebrew service, the desktop app, the
+obsidian-kb LaunchAgent, plus any Claude session whose old MCP `veritas` server restarts `kb.py serve`.
 
 ```
-# 1. Nothing unguarded may index while the upgrade is under way.
-brew services stop veritas            # launchd shows "error"; stop it anyway so it cannot retry
-#   quit Veritas.app (menu > Quit); then confirm no server is left:
-pgrep -fl 'veritas-server|kb.py serve' ; echo "none above means stopped"
-# 2. Merge and cut the release (release.mjs commits "Release <v>" and tags; it never pushes).
+# 0. Stopgap, safe at once: stop and keep stopped the pre-Veritas server (KeepAlive would restart it).
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.frimpsjoe.second-brain-dev.plist
+mkdir -p ~/Library/LaunchAgents.disabled && mv ~/Library/LaunchAgents/com.frimpsjoe.second-brain-dev.plist ~/Library/LaunchAgents.disabled/
+# 1. Quit every Claude Code and Claude Desktop session (their MCP veritas server can start an old kb.py serve),
+#    quit Veritas.app, stop the Homebrew service, then confirm nothing is left:
+brew services stop veritas
+pgrep -fl 'veritas-server|kb.py serve|libexec/server/server.py|obsidian-kb' ; echo "nothing above = stopped"
+# 2. Merge and release (release.mjs commits and tags; it never pushes).
 cd ~/Documents/second-brain-dev/veritas && git checkout dev && git merge --no-ff ai/026-text-guard-effect && ./check.sh
-node tools/release.mjs 0.55.0        # then, as it prints:  git push origin dev v0.55.0   (starts release.yml: plugins, GitHub Release, Homebrew tap bump)
-# 3. Upgrade both installs once release.yml has finished.
+node tools/release.mjs 0.55.0      # then, as it prints: git push origin dev v0.55.0
+# 3. Upgrade both installs after release.yml finishes.
 brew update && brew upgrade veritas
-grep -c TEXT_GUARD_VERSION /opt/homebrew/opt/veritas/libexec/server/zotero.py      # expect >= 1
-#   Desktop app: install the 0.55.0 Veritas.app from the GitHub Release (or the app's own update), open it, and read
-#   the version in Settings; the sidecar is a PyInstaller bundle, so grep is not a reliable check there.
-# 4. Start, let each install run its ordinary index (the stamp mismatch re-reads Zotero; N1), then V4 "after":
-brew services start veritas
+grep -c TEXT_GUARD_VERSION /opt/homebrew/opt/veritas/libexec/server/zotero.py    # expect >= 1
+#    install the 0.55.0 Veritas.app and check its version in Settings
+# 4. Start, let each install index once (the stamp re-reads Zotero), then count, reading no text:
+brew services start veritas    # and open Veritas.app
+python3 ~/Documents/second-brain-dev/veritas/server/kb.py audit-text --only foreign | awk '{print $1}' > /tmp/fk
+python3 ~/Documents/second-brain-dev/veritas/server/kb.py audit-text --only unknown | awk '{print $1}' >> /tmp/fk
 for db in /opt/homebrew/var/veritas/kb.sqlite "$HOME/Library/Application Support/io.github.frimpsjoek.veritas/kb.sqlite"; do
-  for k in $(python3 ~/Documents/second-brain-dev/veritas/server/kb.py audit-text --only foreign | awk '{print $1}' | sort -u); do
+  sort -u /tmp/fk | while read k; do
     sqlite3 "file:$db?mode=ro" "SELECT '$k', count(*) FROM chunks WHERE path='zotero/$k' AND heading LIKE '%Full text%'"
-  done | awk '$2 > 0' | wc -l      # expect 0 (items that also have an accepted attachment keep that text: check those by hand)
+  done | awk -F'|' '$2 > 0' | wc -l     # expect 0 (or only the one item that also has an accepted attachment)
 done
-#   Repeat step 4's query after the next automatic index run (5 minutes) and record both numbers in V4 and V29.
-# 5. D5: only after step 4 reads 0 in both served folders:
-#   rm ~/Documents/second-brain-dev/veritas/server/data/kb.sqlite  (or mv to a folder no server reads)
-#   rm -r /opt/homebrew/var/veritas/backup-2026-10-28-before-import  (or mv likewise); then ls -la both paths into V5.
+rm /tmp/fk
+#    repeat step 4's count after the next automatic index run (5 minutes) and record both in V4 and V29
+# 5. D5, only after step 4 reads 0 in both served folders (moving is the reversible choice):
+#    mv ~/Documents/second-brain-dev/veritas/server/data/kb.sqlite ~/veritas-retired/
+#    mv /opt/homebrew/var/veritas/backup-2026-10-28-before-import ~/veritas-retired/
+#    mv ~/Documents/second-brain-dev/obsidian-kb/data ~/veritas-retired/obsidian-kb-data
+#    (then delete ~/veritas-retired when you are sure; record ls -la in V5)
+# 6. D11: open the five transcripts audit-chats lists and decide (delete, or keep).
 ```
 
 ## TG1: three-paper trial and the pilot table (phase 1)
@@ -232,7 +269,7 @@ Not run.
 | V2 | R2 | `python server/kb.py audit-text \| awk 'length > 200' \| wc -l` and the sentinel test | `0`; sentinel test passes | 2026-11-04: `0` on the real library (1,124 lines); `test_audit_text_lists_decisions_and_prints_no_text` passed |
 | V3 | R3 | `pytest server/tests -k text_overrides` (4 tests) | forced reject and accept honoured in `documents()` and `item_detail()` | 2026-11-04: 4 tests `test_override_*` passed, plus malformed file and unknown value tests |
 | V4 | R4 | for each served data folder and each `audit-text` foreign row: `sqlite3 <data>/kb.sqlite "SELECT count(*) FROM chunks WHERE path='zotero/<KEY>' AND heading LIKE '%Full text%'"`; fixture sentinel through `/search` and MCP `search_notes` | `0` when no accepted attachment remains on the item; sentinel not found | Fixture: passed 2026-11-04 (`test_rejected_text_is_absent_from_every_store_and_every_search_path`, `test_an_already_indexed_foreign_text_is_removed_by_the_next_run_after_a_guard_bump`: chunks, FTS, vecs, Tantivy on first sync, `/search` as agent, MCP `search_notes`, `read_note`). Live: "before" = 43 of 43 foreign-only items with text in every served index (evidence block); "after" Not run: needs R21 (no re-index of a served folder on this branch) |
-| V5 | R5 | `ls -la server/data/kb.sqlite /opt/homebrew/var/veritas/backup-2026-10-28-before-import/` after D5 | absent, or moved to a folder no server reads | Not run: D5 is Joseph's; "before" sizes in the evidence block |
+| V5 | R5 | `ls -la server/data/kb.sqlite /opt/homebrew/var/veritas/backup-2026-10-28-before-import/ ~/Documents/second-brain-dev/obsidian-kb/data/kb.sqlite` after D5 | absent, or moved to a folder no server reads | Not run: D5 is Joseph's; "before" sizes in the evidence block |
 | V6 | N1 | `kb.py index` log line for zotero | one run; "new or changed" count equals the rejected + changed items, not the whole library | Fixture: `zotero_changed == 1` after the bump with one foreign and one clean item (test passed 2026-11-04). Live: Not run (needs R21); expect about 43 + 218 near-empty + re-judged items, not 3,564 |
 | V7 | R6 | `gold/trial.csv` and the 3-sample results note | one row per gold value; cells scored verified/correct/source_kind | Not run |
 | V8 | R7 | pilot results note; 40-cell sheet with seed | p40 as k/40 with Wilson interval; verified-quote fraction; share of papers with a value | Not run |
