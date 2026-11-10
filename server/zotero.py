@@ -17,6 +17,7 @@ import shutil
 import sqlite3
 import tempfile
 import time
+import unicodedata
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -48,6 +49,31 @@ PREFIX = "zotero/"  # index paths look like zotero/ABCD1234; they are not vault 
 SKIP_TYPES = ("attachment", "note", "annotation")
 # Status tags written by Zotero plugins (#broken, #nosource, /unread, linter/error, zotmoov, notion): not topics.
 HOUSEKEEPING_TAG = re.compile(r"^([#/]|linter/)|^(zotmoov|notion)$", re.I)
+_TITLE_STOPWORDS = frozenset("the and for with from into using based study their this that".split())
+MIN_TITLE_WORDS = 3  # a shorter title says too little to judge a text by
+MIN_TITLE_MATCH = 0.5  # the share of the title's words a text must contain to count as this item's
+
+
+def _folded(text: str) -> str:
+    """Lower case letters and digits only, words kept apart, tags and accents dropped, for comparing text."""
+    plain = unicodedata.normalize("NFKD", re.sub(r"<[^>]+>", " ", html.unescape(text or "")))
+    return re.sub(r"[^a-z0-9]+", " ", plain.encode("ascii", "ignore").decode().lower())
+
+
+def text_belongs_to_item(title: str, doi: str, text: str) -> bool:
+    """False when an attachment's cached text is plainly not this item's: no DOI, and under half the title's words.
+
+    Zotero keeps an attachment's .zotero-ft-cache even after the file has moved or been replaced, so a cache can hold
+    another document, including a private one. Such text must not be indexed, shown or cited under this item's name.
+    A title too short to judge by is given the benefit of the doubt.
+    """
+    body = _folded(text)
+    if doi and _folded(doi).strip() in body:
+        return True
+    words = [w for w in _folded(title).split() if len(w) > 3 and w not in _TITLE_STOPWORDS]
+    if len(words) < MIN_TITLE_WORDS:
+        return True
+    return sum(f" {w} " in f" {body} " for w in words) / len(words) >= MIN_TITLE_MATCH
 
 
 @dataclass
@@ -224,7 +250,9 @@ def documents() -> list[ZoteroDoc]:
             cache = root() / "storage" / keys[attachment] / ".zotero-ft-cache"
             if cache.is_file():
                 signature = max(signature, cache.stat().st_mtime)
-                full_texts.append(cache.read_text(encoding="utf-8", errors="replace"))
+                cached_text = cache.read_text(encoding="utf-8", errors="replace")
+                if text_belongs_to_item(title, f.get("DOI", ""), cached_text):
+                    full_texts.append(cached_text)
         if highlights:
             parts += ["## Highlights"] + highlights
         for text in full_texts:
@@ -321,7 +349,12 @@ def item_detail(key: str, full_text: bool = False) -> dict | None:
                      "has_full_text": cache.is_file(),
                      "open_uri": f"zotero://open-pdf/library/items/{att_key}" if content_type == "application/pdf" else ""}
             if full_text and cache.is_file():
-                entry["full_text"] = cache.read_text(encoding="utf-8", errors="replace")
+                cached_text = cache.read_text(encoding="utf-8", errors="replace")
+                if text_belongs_to_item(fields.get("title") or fields.get("shortTitle") or key, fields.get("DOI", ""), cached_text):
+                    entry["full_text"] = cached_text
+                else:
+                    entry["has_full_text"] = False
+                    entry["full_text_mismatch"] = True
             attachments.append(entry)
         return {
             "key": key, "type": type_name, "title": fields.get("title") or fields.get("shortTitle") or key,
