@@ -23,6 +23,7 @@ import tantivy
 # 3/11 on eval.py); one field ranks like SQLite FTS5 did (6/11), with the repeated title as its title weight.
 FIELDS = ("body",)
 SCHEMA_VERSION = "2"
+GUARD_EPOCH = "text_guard_epoch"  # meta key kb.py changes when a text-guard change re-read a Zotero library
 RARE = 3000  # chunks; a word in more than this many is too common to find anything on its own
 
 
@@ -40,11 +41,14 @@ class KeywordIndex:
         self.ids_file = path / "ids.npy"
         self.index: tantivy.Index | None = None
         self.ids: set[int] = set()
+        self.epoch_file = path / "guard-epoch"
+        self.epoch = ""  # the GUARD_EPOCH this index was built under
         try:
             version = (path / "schema-version").read_text().strip() if (path / "schema-version").exists() else ""
             if (path / "meta.json").exists() and version == SCHEMA_VERSION:
                 self.index = tantivy.Index(_schema(), path=str(path))
                 self.ids = set(np.load(self.ids_file).tolist()) if self.ids_file.exists() else set()
+                self.epoch = self.epoch_file.read_text().strip() if self.epoch_file.exists() else ""
         except Exception:  # noqa: BLE001 - a broken index is rebuilt by the writer
             self.index = None
 
@@ -58,7 +62,11 @@ class KeywordIndex:
                 self.index.reload()
             return 0
         live = {r[0] for r in db.execute("SELECT id FROM chunks")}
-        if self.index is None or (self.ids and not self.ids & live and live):
+        # A guard change removed text: deleting documents only marks them in Tantivy's segments, so the index is
+        # built anew, in an empty folder, and nothing of the removed text is left in its files (spec 026 R24).
+        epoch = (db.execute("SELECT value FROM meta WHERE key=?", (GUARD_EPOCH,)).fetchone() or [""])[0]
+        if self.index is None or (self.ids and not self.ids & live and live) or epoch != self.epoch:
+            self.epoch = epoch
             return self._rebuild(db, live)
         new, gone = live - self.ids, self.ids - live
         if not new and not gone:
@@ -79,6 +87,7 @@ class KeywordIndex:
         os.makedirs(self.path)
         self.index = tantivy.Index(_schema(), path=str(self.path))
         (self.path / "schema-version").write_text(SCHEMA_VERSION)
+        self.epoch_file.write_text(self.epoch)
         writer = self.index.writer(heap_size=300_000_000, num_threads=4)
         self._add(writer, db, None)
         writer.commit()

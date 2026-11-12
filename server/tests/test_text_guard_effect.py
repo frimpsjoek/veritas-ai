@@ -218,8 +218,9 @@ def test_rejected_text_is_absent_from_every_store_and_every_search_path(library,
 
 
 def test_an_already_indexed_foreign_text_is_removed_by_the_next_run_after_a_guard_bump(library, monkeypatch):
-    """Before: an older guard let the text in. After: the bump re-reads; chunks, FTS, vectors and Tantivy drop it
-    on the ordinary sync, not a rebuild (the spec's open question)."""
+    """Before: an older guard let the text in. After: the bump re-reads; chunks, FTS and vectors drop it, the
+    unchanged item keeps its chunk ids, and the Searcher that was open all along stops returning it (since guard
+    version 4 by building the keyword index anew, see the tests at the end of this file)."""
     real_judge = zotero.judge_text
     monkeypatch.setattr(zotero, "judge_text", lambda *a, **k: zotero.TextDecision(True, "old-guard"))
     kb.index(verbose=False)
@@ -237,7 +238,7 @@ def test_an_already_indexed_foreign_text_is_removed_by_the_next_run_after_a_guar
     assert where_is(FOREIGN_SENTINEL) == {"chunks": [], "fts": 0, "vecs": 0}
     assert where_is(HIGHLIGHT_SENTINEL) == {"chunks": [], "fts": 0, "vecs": 0}
     assert {r[0] for r in kb.connect().execute("SELECT id FROM chunks WHERE path=?", (f"zotero/{MINE}",))} == mine_ids
-    assert tantivy_hits(searcher, FOREIGN_SENTINEL) == [], "Tantivy must drop the chunk on sync after the re-store"
+    assert tantivy_hits(searcher, FOREIGN_SENTINEL) == [], "Tantivy must drop the chunk on the first sync after the re-store"
     assert tantivy_hits(searcher, OK_SENTINEL) == [f"zotero/{MINE}"]
 
 
@@ -334,3 +335,135 @@ def test_zotero_status_reports_no_full_text_for_the_rejected_item(library, monke
     status = http_api.zotero_status()["items"]
     assert status[MINE]["full_text"] is True and status[FOREIGN]["full_text"] is False
     time.sleep(0)  # the status is derived from chunks, so it follows the index with no claim of its own
+
+
+# --- review round 3 (guard version 4): chunk ids are never reused, Tantivy is rebuilt and deleted text is purged ---
+
+TWO, ATT_TWO_BAD, ATT_TWO_OK = "TWOA0001", "ATTTWOBD", "ATTTWOOK"
+TWO_TITLE = "Phonon scattering in twisted bilayer graphene superlattices"
+TWO_SENTINEL = "quokkainvoice"  # in the foreign attachment of the two-attachment item
+TWO_BAD_TEXT = f"Tenancy agreement between the parties. Deposit, rent and {TWO_SENTINEL} terms follow. " * 8
+TWO_OK_TEXT = (f"Physical Review. {TWO_TITLE}. doi:10.1000/two.1 Abstract. " + "We measure the phonon linewidths. " * 90)
+
+
+def add_two_attachment_item(root, keep_foreign_item: bool = False) -> None:
+    """The library's last item gets two attachments: the first holds another document, the second its own text.
+    The first fixture's foreign item is removed (unless kept), so this item alone is re-stored after a guard bump
+    and its chunk ids are the highest in the index: the case where SQLite hands the same rowids out again."""
+    db = sqlite3.connect(root / "zotero.sqlite")
+    if not keep_foreign_item:
+        db.executescript("DELETE FROM items WHERE itemID IN (3, 4, 5); DELETE FROM itemAttachments WHERE itemID=4;"
+                         "DELETE FROM itemAnnotations WHERE itemID=5;")
+    db.executescript(f"""
+        INSERT INTO items VALUES (7, 1, 1, '{TWO}', '2026-01-01 00:00:00'), (8, 2, 1, '{ATT_TWO_BAD}', '2026-01-01 00:00:00'),
+                                 (9, 2, 1, '{ATT_TWO_OK}', '2026-01-01 00:00:00');
+        INSERT INTO itemDataValues VALUES (5, '{TWO_TITLE}'), (6, '10.1000/two.1');
+        INSERT INTO itemData VALUES (7, 1, 5), (7, 2, 6);
+        INSERT INTO itemAttachments VALUES (8, 7, 'application/pdf', 'storage:bad.pdf', 1), (9, 7, 'application/pdf', 'storage:ok.pdf', 1);
+    """)
+    db.commit()
+    db.close()
+    for key, text in ((ATT_TWO_BAD, TWO_BAD_TEXT), (ATT_TWO_OK, TWO_OK_TEXT)):
+        (root / "storage" / key).mkdir(parents=True)
+        (root / "storage" / key / ".zotero-ft-cache").write_text(text)
+
+
+def index_under_the_old_guard_then_bump(monkeypatch):
+    """Indexes with a guard that accepts everything, opens a Searcher (Tantivy in step), then bumps the guard and
+    indexes again. Returns the Searcher that lived through both runs."""
+    real_judge = zotero.judge_text
+    monkeypatch.setattr(zotero, "judge_text", lambda *a, **k: zotero.TextDecision(True, "old-guard"))
+    kb.index(verbose=False)
+    searcher = make_searcher()
+    assert tantivy_hits(searcher, TWO_SENTINEL) == [f"zotero/{TWO}"]
+    monkeypatch.setattr(zotero, "judge_text", real_judge)
+    monkeypatch.setattr(zotero, "TEXT_GUARD_VERSION", zotero.TEXT_GUARD_VERSION + 1)
+    kb.index(verbose=False)
+    return searcher
+
+
+def test_tantivy_drops_the_foreign_text_of_an_item_that_keeps_an_accepted_attachment(library, monkeypatch):
+    """The review's reproduction: the item stored last has a foreign and an accepted attachment. Its chunks are
+    deleted and stored again; with plain rowids the new chunks got the old ids, the keyword sync saw nothing new
+    and nothing gone, and Tantivy kept returning the foreign text."""
+    add_two_attachment_item(library[0])
+    db = kb.connect()
+    searcher = index_under_the_old_guard_then_bump(monkeypatch)
+    assert where_is(TWO_SENTINEL) == {"chunks": [], "fts": 0, "vecs": 0}
+    assert full_text_chunks(f"zotero/{TWO}") > 0, "the accepted attachment's text stays"
+    assert tantivy_hits(searcher, TWO_SENTINEL) == [], "Tantivy must not keep the foreign text under a reused id"
+    assert tantivy_hits(searcher, "linewidths") == [f"zotero/{TWO}"]
+    live = {r[0] for r in db.execute("SELECT id FROM chunks")}
+    assert searcher.keywords.ids == live
+
+
+def test_chunk_ids_are_never_handed_out_twice(library):
+    add_two_attachment_item(library[0])
+    kb.index(verbose=False)
+    db = kb.connect()
+    before = {r[0] for r in db.execute("SELECT id FROM chunks WHERE path=?", (f"zotero/{TWO}",))}
+    assert before and max(before) == db.execute("SELECT max(id) FROM chunks").fetchone()[0]
+    kb.delete_note(db, f"zotero/{TWO}")
+    kb.store_note(db, f"zotero/{TWO}", TWO_TITLE, "zotero", "zotero", [], [], 1.0, 1, "", None, "## Full text\n\nnew body")
+    db.commit()
+    after = {r[0] for r in db.execute("SELECT id FROM chunks WHERE path=?", (f"zotero/{TWO}",))}
+    assert after and min(after) > max(before)
+
+
+def test_an_index_with_plain_rowids_is_migrated_and_keeps_its_rows(tmp_path, monkeypatch):
+    """An index an older version built: `chunks.id INTEGER PRIMARY KEY`, where a deleted top id is handed out again."""
+    monkeypatch.setattr(kb, "DB_PATH", tmp_path / "kb.sqlite")
+    old = sqlite3.connect(tmp_path / "kb.sqlite")
+    old.executescript("""
+        CREATE TABLE chunks (id INTEGER PRIMARY KEY, path TEXT, ord INTEGER, heading TEXT, text TEXT);
+        CREATE INDEX chunks_path_heading ON chunks(path, heading);
+        INSERT INTO chunks VALUES (3, 'a.md', 0, '', 'first'), (9, 'b.md', 0, 'H', 'second');
+    """)
+    old.commit()
+    old.close()
+    db = kb.connect()
+    assert "AUTOINCREMENT" in db.execute("SELECT sql FROM sqlite_master WHERE name='chunks'").fetchone()[0].upper()
+    assert db.execute("SELECT id, path, ord, heading, text FROM chunks ORDER BY id").fetchall() == [
+        (3, "a.md", 0, "", "first"), (9, "b.md", 0, "H", "second")]
+    assert db.execute("SELECT count(*) FROM sqlite_master WHERE name='chunks_path_heading'").fetchone()[0] == 1
+    db.execute("DELETE FROM chunks WHERE id=9")
+    assert db.execute("INSERT INTO chunks (path, ord, heading, text) VALUES ('c.md', 0, '', 'third')").lastrowid == 10
+    db.commit()
+    db.close()
+    again = kb.connect()  # a second connect finds nothing to migrate
+    assert again.execute("SELECT count(*) FROM chunks").fetchone()[0] == 2
+
+
+def test_a_guard_change_rebuilds_tantivy_and_purges_the_deleted_text_from_the_files(library, monkeypatch):
+    """Deleting rows leaves their bytes in SQLite's free pages and in Tantivy's old segments. After a re-read that
+    the guard caused, the keyword index is built anew and the database is compacted: the foreign sentinel is in no
+    file of the data folder."""
+    add_two_attachment_item(library[0])
+    data = library[1]
+
+    def files_holding(word: str) -> list[str]:
+        kb.connect().execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        return sorted(p.name for p in data.rglob("*") if p.is_file() and word.encode() in p.read_bytes())
+
+    rebuilds = []
+    from keyword_index import KeywordIndex
+    real_rebuild = KeywordIndex._rebuild
+    monkeypatch.setattr(KeywordIndex, "_rebuild", lambda self, db, live: rebuilds.append(1) or real_rebuild(self, db, live))
+    real_judge = zotero.judge_text
+    monkeypatch.setattr(zotero, "judge_text", lambda *a, **k: zotero.TextDecision(True, "old-guard"))
+    kb.index(verbose=False)
+    searcher = make_searcher()
+    assert tantivy_hits(searcher, TWO_SENTINEL) == [f"zotero/{TWO}"]
+    assert "kb.sqlite" in files_holding(TWO_SENTINEL), "the check must be able to see the text before the purge"
+    built = len(rebuilds)
+    monkeypatch.setattr(zotero, "judge_text", real_judge)
+    monkeypatch.setattr(zotero, "TEXT_GUARD_VERSION", zotero.TEXT_GUARD_VERSION + 1)
+    kb.index(verbose=False)
+    assert tantivy_hits(searcher, TWO_SENTINEL) == []
+    assert len(rebuilds) == built + 1, "a guard change must rebuild the keyword index, not patch it"
+    assert files_holding(TWO_SENTINEL) == []
+    assert kb.connect().execute("SELECT count(*) FROM meta WHERE key='purge_pending'").fetchone()[0] == 0
+    assert tantivy_hits(searcher, "linewidths") == [f"zotero/{TWO}"]
+    kb.index(verbose=False)
+    tantivy_hits(searcher, "linewidths")
+    assert len(rebuilds) == built + 1, "an ordinary run after it rebuilds nothing"

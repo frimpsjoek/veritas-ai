@@ -103,7 +103,7 @@ CREATE TABLE IF NOT EXISTS notes (
   path TEXT PRIMARY KEY, title TEXT, folder TEXT, source TEXT, tags TEXT, mtime REAL, size INTEGER,
   frontmatter TEXT);
 CREATE TABLE IF NOT EXISTS chunks (
-  id INTEGER PRIMARY KEY, path TEXT, ord INTEGER, heading TEXT, text TEXT);
+  id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT, ord INTEGER, heading TEXT, text TEXT);
 CREATE INDEX IF NOT EXISTS chunks_path_heading ON chunks(path, heading);
 DROP INDEX IF EXISTS chunks_path;
 CREATE TABLE IF NOT EXISTS vecs (id INTEGER PRIMARY KEY, path TEXT, vec BLOB NOT NULL);
@@ -139,6 +139,8 @@ def connect(*, keep: bool = False) -> sqlite3.Connection:
         db.execute("ALTER TABLE notes ADD COLUMN meta TEXT")  # Zotero details: authors, year, citekey, DOI
     if "vec" in {r[1] for r in db.execute("PRAGMA table_info(chunks)")}:
         _move_vectors_out(db)
+    if "AUTOINCREMENT" not in db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='chunks'").fetchone()[0].upper():
+        _stop_reusing_chunk_ids(db)
     return db
 
 
@@ -173,6 +175,27 @@ def _move_vectors_out(db: sqlite3.Connection) -> None:
         db.execute("ROLLBACK")
         raise
     db.execute("VACUUM")
+
+
+def _stop_reusing_chunk_ids(db: sqlite3.Connection) -> None:
+    """`chunks.id` was a plain rowid: after the chunks with the highest ids were deleted, SQLite handed the same
+    ids to the next chunks stored. Everything that follows the index by id (the Tantivy keyword index, the vectors
+    held in memory) then saw nothing new and nothing gone, and kept the old text under those ids (spec 026 R23).
+    AUTOINCREMENT never hands an id out twice. SQLite cannot add it in place, so the table is copied once; ids,
+    and with them the FTS rows and vectors keyed by them, stay as they are."""
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        sql = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='chunks'").fetchone()[0]
+        if "AUTOINCREMENT" not in sql.upper():  # another process may have migrated while this one waited
+            db.execute("ALTER TABLE chunks RENAME TO chunks_plain_ids")
+            db.execute("CREATE TABLE chunks (id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT, ord INTEGER, heading TEXT, text TEXT)")
+            db.execute("INSERT INTO chunks (id, path, ord, heading, text) SELECT id, path, ord, heading, text FROM chunks_plain_ids")
+            db.execute("DROP TABLE chunks_plain_ids")
+            db.execute("CREATE INDEX IF NOT EXISTS chunks_path_heading ON chunks(path, heading)")
+        db.execute("COMMIT")
+    except BaseException:
+        db.execute("ROLLBACK")
+        raise
 
 
 # ---------------------------------------------------------------- parsing
@@ -675,6 +698,7 @@ def _index_stages(full: bool, verbose: bool, progress: Progress) -> dict:
     prune_zotero(db)
     stamp(db, "indexed_at")
     db.commit()
+    purge_deleted_text(db, verbose)
     text_seconds = round(time.time() - started, 1)
 
     # Stage 2: vectors for every chunk that has none yet (new chunks, or a run that was interrupted).
@@ -828,6 +852,9 @@ def _index_library(db: sqlite3.Connection, verbose: bool, progress: Progress, pr
     # is the text guard's version: a stricter guard must re-read every item, or rejected text stays indexed (spec 026 R1)
     fingerprint = json.dumps([zotero.fingerprint(), abstracts.stamp(), zotero.TEXT_GUARD_VERSION, zotero.overrides_stamp()])
     row = db.execute("SELECT value FROM meta WHERE key=?", (fingerprint_key,)).fetchone()
+    # The library was indexed under another guard or other overrides: what this run removes must also leave the
+    # keyword index's segments and the database's free pages (purge_deleted_text, spec 026 R24).
+    guard_changed = bool(row) and _guard_part(row[0]) != [zotero.TEXT_GUARD_VERSION, zotero.overrides_stamp()]
     missing_keys = {r[0] for r in db.execute(
         f"SELECT path FROM notes WHERE source='zotero' AND {mine} AND (meta IS NULL OR json_extract(meta, '$.collection_keys') IS NULL)",
         args)}
@@ -859,6 +886,9 @@ def _index_library(db: sqlite3.Connection, verbose: bool, progress: Progress, pr
         db.executemany("UPDATE notes SET meta=? WHERE path=?",
                        [(json.dumps(d.meta, ensure_ascii=False), path_of(d)) for d in backfilled])
     db.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)", (fingerprint_key, fingerprint))
+    if guard_changed:
+        db.execute("INSERT OR REPLACE INTO meta VALUES (?, ?)", (GUARD_EPOCH, repr(time.time())))
+        db.execute("INSERT OR REPLACE INTO meta VALUES ('purge_pending', 'compact')")
     db.commit()
     if verbose:
         print(f"zotero{' ' + prefix if prefix else ''}: {len(docs)} items, {len(changed)} new or changed, "
@@ -869,6 +899,52 @@ def _index_library(db: sqlite3.Connection, verbose: bool, progress: Progress, pr
         if verbose and refreshed:
             print(f"zotero: refreshed {refreshed} paper notes", file=sys.stderr)
     return len(changed)
+
+
+GUARD_EPOCH = "text_guard_epoch"  # meta key: changes when a guard change re-read a library; keyword_index rebuilds on it
+
+
+def _guard_part(stored: str) -> list:
+    """The guard's part of a stored Zotero stamp ([guard version, overrides stamp]); [] for a stamp written before
+    the guard was part of it, or one that cannot be read."""
+    try:
+        value = json.loads(stored)
+    except ValueError:
+        return []
+    return value[2:4] if isinstance(value, list) else []
+
+
+def purge_deleted_text(db: sqlite3.Connection, verbose: bool = False) -> bool:
+    """After a guard change removed text: makes the removed bytes leave the files, not only the tables. A deleted
+    row's bytes stay in SQLite's free pages, and its words in the FTS index's older segments, until they are
+    overwritten. `optimize` merges the FTS index into one segment without the deleted rows, VACUUM writes the
+    database anew without free pages, and the checkpoint moves that into the main file and empties the write-ahead
+    log. (The Tantivy folder is rebuilt by keyword_index on GUARD_EPOCH.) A step that cannot run now, because another
+    process is reading, is left pending in `meta` and tried again by the next index run. True when nothing is
+    pending. Copies outside the data folder (backups, snapshots of the disk) are out of reach."""
+    pending = db.execute("SELECT value FROM meta WHERE key='purge_pending'").fetchone()
+    if not pending:
+        return True
+    try:
+        db.commit()
+        if pending[0] != "checkpoint":
+            db.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('optimize')")
+            db.commit()
+            db.execute("VACUUM")
+            db.execute("INSERT OR REPLACE INTO meta VALUES ('purge_pending', 'checkpoint')")
+            db.commit()
+        busy = db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]
+    except sqlite3.OperationalError as error:
+        print(f"purge of deleted text postponed to the next index run: {error}", file=sys.stderr)
+        return False
+    if busy:
+        print("purge of deleted text: the write-ahead log is in use; the checkpoint is tried again by the next index run", file=sys.stderr)
+        return False
+    db.execute("DELETE FROM meta WHERE key='purge_pending'")
+    db.commit()
+    if verbose:
+        print("purged deleted text: FTS optimized, database compacted, write-ahead log emptied", file=sys.stderr)
+    return True
 
 
 def index_zotero_web(db: sqlite3.Connection, verbose: bool, progress: Progress) -> tuple[int, list[str]]:
