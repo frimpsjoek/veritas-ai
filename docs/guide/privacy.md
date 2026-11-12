@@ -15,9 +15,12 @@ Zotero itself (adding a paper, saving a highlight) go through the Zotero plugin,
 
 **Full text that is not the paper's.** Zotero keeps the text it extracted from an attachment even after the file
 was moved or replaced, so a paper's cache can hold another document. Veritas indexes, shows or serves an
-attachment's text only when its first page names the paper (DOI, title or authors); `kb.py audit-text` lists each
-decision without printing text, and `text_overrides.json` in the data folder settles a wrong one. Every install
-must run a server with this guard: an older server sharing the same index would read the texts back in.
+attachment's text only when its first page names the paper (DOI, title, or title and authors); `kb.py audit-text`
+lists each decision without printing text, and `text_overrides.json` in the data folder settles a wrong one. When
+the rule or the overrides change, the next index run removes what is no longer accepted, rebuilds the keyword
+index and compacts the database, so the text leaves Veritas's files; `kb.py verify-guard` counts what is left
+(it should print "clean"). Veritas cannot reach copies made earlier: backups, Time Machine or disk snapshots. Every
+install must run a server with this guard: an older server sharing the same index would read the texts back in.
 
 **Keys** (API keys and tokens) are stored in the macOS Keychain, not in files.
 

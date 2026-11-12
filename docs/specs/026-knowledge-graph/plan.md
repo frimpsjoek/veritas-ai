@@ -1,7 +1,7 @@
 # Plan: spec 026, knowledge graph (reduced), gated phases
 
 Status: DRAFT 2026-11-04. Decision: Pending. No task group starts until Joseph approves the spec's decisions
-D1-D11. Each task group runs in its own worktree and branch, merged after `./check.sh` passes. Deleting files,
+D1-D14. Each task group runs in its own worktree and branch, merged after `./check.sh` passes. Deleting files,
 re-indexing the live library, installing anything, and any paid API call are gates Joseph confirms.
 
 Gate rule: a phase's task groups start only when the previous phase's evidence block in this file is filled in
@@ -9,7 +9,7 @@ with real numbers, dates and commit ids. "Not run" means not started.
 
 | TG | Phase | Covers | Branch | Joseph's time |
 |---|---|---|---|---|
-| 0 | 0 | R1-R5, R21, R22, N1 | `ai/026-text-guard-effect` | ~2 h (review, release and upgrade, D3/D5/D10/D11 gates) |
+| 0 | 0 | R1-R5, R21-R27, N1 | `ai/026-text-guard-effect` | ~3 h (review, audit-text and overrides, release and upgrade, D3/D5/D10-D14 gates) |
 | 1 | 1 | R6, R7, R10, N2 | `ai/026-pilot-table` | ~4.5 h labelling |
 | 2 | 1 | R8, R9 | none (a note in the vault) | ~4.5 h over 14 days |
 | 3 | 2 | R11, R13, N3 | `ai/026-saved-table` | ~0.5 h |
@@ -23,11 +23,12 @@ TG3 and TG4 need TG1's instructions. TG5 and TG6 need the phase 1 gate.
 
 ## The very next task group: TG0, privacy fix takes effect (phase 0)
 
-Covers R1, R2, R3, R4, R5, R21, R22, N1.
+Covers R1, R2, R3, R4, R5, R21, R22, R23, R24, R25, R26, R27, N1.
 
 1. Failing test first: a fixture library whose fingerprint is unchanged and whose guard version is bumped must run
    the Zotero stage. Then `TEXT_GUARD_VERSION` in `server/zotero.py` and `json.dumps([zotero.fingerprint(),
-   abstracts.stamp(), zotero.TEXT_GUARD_VERSION])` in `_index_library`. (R1) Done: version 2 (1 is the `dev` rule).
+   abstracts.stamp(), zotero.TEXT_GUARD_VERSION, zotero.overrides_stamp()])` in `_index_library`. (R1) Done: the
+   version is now 4 (1 is the `dev` rule; the history is at the constant).
 2. `kb.py audit-text`: walks the same attachments `documents()` reads, prints one line per cached text:
    `item_key attachment_key decision reason doi= title= authors= chars=`. Test asserts every line < 200 characters
    and that a sentinel planted in a fixture cache never appears. Never opens `~/Zotero/storage` in tests. (R2) Done.
@@ -38,10 +39,12 @@ Covers R1, R2, R3, R4, R5, R21, R22, N1.
    install and publish). Record the installed version and `grep -c TEXT_GUARD_VERSION` for each. (R21) Prepared, not
    performed: the commands are in the evidence block.
 5. Let each installed app run its index (the bumped version makes it a Zotero re-read, N1). For every served data
-   folder (`/opt/homebrew/var/veritas`, the app's Application Support folder), run R4's `count(*)` query per foreign
-   row; no text is read or printed. Repeat after the next automatic index run. On a fixture, run the sentinel check
-   through `/search` and MCP `search_notes`, which also answers the Tantivy question. (R4) Fixture part done;
-   "before" counts recorded; the live "after" waits for step 4.
+   folder (`/opt/homebrew/var/veritas`, the app's Application Support folder), run `kb.py verify-guard --index
+   <folder>` with the dev tree's `server/.venv/bin/python` (step 10; it replaces R4's `count(*)` loop, which used
+   the system `python3`, passed on an empty key list, read the dev tree's overrides and saw neither highlights nor
+   Tantivy). No text is printed. Repeat after the next automatic index run. On a fixture, run the sentinel check
+   through `/search` and MCP `search_notes`. (R4) Fixture part done; "before" counts recorded; the live "after"
+   waits for step 4.
 6. `ls -la server/data/kb.sqlite /opt/homebrew/var/veritas/backup-2026-10-28-before-import/` before; Joseph decides
    D5; `ls -la` after is recorded here. (R5) "Before" recorded; nothing deleted.
 7. Chat check: `kb.py audit-chats` lists by path only the chats that name a foreign `zotero/<KEY>`, in
@@ -50,8 +53,20 @@ Covers R1, R2, R3, R4, R5, R21, R22, N1.
 9. Added in implementation: the guard rule was strengthened (head of text, authors, empty caches), `has_full_text`
    judged, highlights of a foreign attachment dropped, `/zotero/pdf` refused for a foreign attachment; each
    measured read-only on the real library and tested on the fixture.
-- [ ] Done when V1-V6, V29 and V30 have real values and `./check.sh` is green. (V1-V3, V30 fixture part, V6 fixture
-  part and `./check.sh` are green; V4 live, V5, V29 and V30's D11 wait for Joseph.)
+10. Third review (2026-11-11), each fix after a test that failed without it. Chunk ids never reused, with a
+    migration for existing indexes (R23). A guard or overrides change rebuilds the keyword index and purges the
+    deleted text from the database file (R24). `kb.py verify-guard` (R25). Guard version 4 (R26). `/zotero/pdf`
+    fails closed (R27). Done; evidence in "Third round" below.
+11. User-only, before the release: `audit-text` under version 4 on the real library, compared with version 3's
+    counts; `"mine"` overrides for the false rejects; the same `text_overrides.json` copied into each install's
+    data folder (each install reads its own). (D3, D13) Not run: the review allowed synthetic fixtures only.
+12. User-only, after the upgrade: the first index run of each install copies the `chunks` table, rebuilds the
+    keyword index and compacts the database (one-time, about 300 MB each; free disk space of the database's size
+    is needed). If the log says the purge was postponed, the next run finishes it; `meta.purge_pending` is absent
+    when it is done. Copies made before the purge are not reached: retire the stale indexes (step 6, D5) and
+    decide about Time Machine and other backups of the data folders. (R24)
+- [ ] Done when V1-V6, V29-V35 have real values and `./check.sh` is green. (V1-V3, V30 fixture part, V6 fixture
+  part, V31-V35 and `./check.sh` are green; V4 live, V5, V29, V30's D11 and the D12-D14 decisions wait for Joseph.)
 
 ### TG0 evidence
 
@@ -128,6 +143,49 @@ Second round, 2026-11-10 (after an adversarial review found the first round inco
 - `zotero_web.fulltext` has no caller (`grep -n "\.fulltext(" server/*.py`: only `radar_api.fulltext`, which reads
   arXiv), so online libraries do not index attachment text today.
 
+Third round, 2026-11-11 (after an independent review of the second round; guard version 4). Synthetic fixtures
+only: no real cache, library, index or chat was opened, and nothing was re-indexed, installed, started or deleted.
+Commits `d413d80` (chunk ids, guard epoch, purge), `80ee8e4` (guard version 4, fail closed), `daf274e`
+(`verify-guard`), then test and rule follow-ups and the docs commit (`git log dev..HEAD`).
+
+- Finding 1, Tantivy kept foreign text under reused chunk ids: reproduced first
+  (`test_tantivy_drops_the_foreign_text_of_an_item_that_keeps_an_accepted_attachment` returned the item for the
+  foreign sentinel on the second-round code). Fixed three ways: `chunks.id` is `AUTOINCREMENT` with a one-time
+  copy of an existing table on `connect()`; a guard or overrides change sets `meta.text_guard_epoch`, on which
+  `keyword_index.sync` rebuilds in an emptied folder; `verify-guard` looks into Tantivy itself.
+- Finding 2 and 4, weak accepts: the verbatim title only for a non-Latin title and whole; a short title needs its
+  wording and the authors; a title alone needs three of its words; DOI matched on the text with its punctuation
+  and only when the field holds a DOI; two surnames to confirm; two CV section headings reject. Bare
+  "Publications" or "Education" anywhere was not added: both stand on real first pages (a publisher's name, a
+  ministry, an article type); only two different heading lines count, and "References" is not one of them.
+- Finding 3, non-Latin texts called empty: "empty" is now fewer than 200 characters of any script. D12 records
+  that an empty cache keeps the user's highlights and its file, and a judged `foreign` or `unknown` one does not.
+- Finding 5, a check that could pass having checked nothing: `kb.py verify-guard --index <data folder>`
+  (`server/guard_verify.py`) and the rewritten step 4 below.
+- Finding 6: `/zotero/pdf` answers 503 when the library cannot be read to judge; the purge (FTS `optimize`,
+  `VACUUM`, write-ahead log emptied, Tantivy rebuilt) runs after a guard-driven re-read and is retried while
+  pending; the spec's three-part stamp, the missing `unknown` and the test docstring's "VERSION 2" are corrected.
+- Tests: `pytest tests/test_text_guard_effect.py tests/test_zotero_text_match.py tests/test_guard_verify.py`: 69
+  passed (23 + 36 + 10; the first two files had 38 before this round). Full `./check.sh` 2026-11-11: "all
+  parts passed"; server 509 passed, 3 skipped (478 before this round); app `cargo check` skipped by the script
+  (sidecars not built).
+- Mutation runs in a scratch copy of `server/` (removed afterwards), 26 changes, each must make a test fail:
+  chunk ids reusable again (2 failed); no Tantivy rebuild on the guard epoch (1); purge without `VACUUM` (3);
+  purge without the FTS `optimize` (2); guard change never detected (1); guard version out of the stamp (7);
+  "empty" measured on folded text (3); non-Latin title without boundaries (1); verbatim title for every title (5);
+  short title confirmed by any one surname (2); short title without its wording (1); title alone on half its
+  words (2); DOI without the boundary after (1) and before (1); DOI field not checked for shape (1); one surname
+  confirms (3); CV headings off (1); one CV heading enough (1); snapshot error fails open (1); highlights kept
+  for a judged-foreign text (7); `verify-guard` without Tantivy (2), without FTS (2), passing on nothing checked
+  (1), with the dev tree's overrides (1), without highlights (1), without the guard-version check (1). All 26
+  were caught. On the first pass three were not (purge without `VACUUM`, purge without `optimize`, any one
+  surname for a short title): the tests were too small or used surnames too short to count, and were
+  strengthened until each mutation failed one.
+- Not measured: guard version 4 on the real library (step 11, D13). Every clause but the non-Latin one can only
+  reject more than version 3 did; the second round's 843 / 56 / 8 / 218 no longer describe the rule.
+- Left open: sole-author items and short surnames (D14); the one-time cost of the first run after the upgrade on
+  a 300 MB index is estimated, not timed (N1); copies outside the data folders are not purged (R24).
+
 R21, exact commands for Joseph (not performed). Order matters: an old server that runs after an index was cleaned
 puts the text back, and three kinds of old code can start one: the Homebrew service, the desktop app, the
 obsidian-kb LaunchAgent, plus any Claude session whose old MCP `veritas` server restarts `kb.py serve`.
@@ -142,23 +200,37 @@ brew services stop veritas
 pgrep -fl 'veritas-server|kb.py serve|libexec/server/server.py|obsidian-kb' ; echo "nothing above = stopped"
 # 2. Merge and release (release.mjs commits and tags; it never pushes).
 cd ~/Documents/second-brain-dev/veritas && git checkout dev && git merge --no-ff ai/026-text-guard-effect && ./check.sh
+# 2b. Before releasing: what does guard version 4 reject on the real library? Keys and numbers only (D3, D13).
+(cd server && .venv/bin/python kb.py audit-text > /dev/null)                  # the counts per decision, on stderr
+(cd server && .venv/bin/python kb.py audit-text --only foreign; .venv/bin/python kb.py audit-text --only unknown)
+#     look the rows up in Zotero; write {"ATTACHMENTKEY": "mine"} for each false reject into text_overrides.json
 node tools/release.mjs 0.55.0      # then, as it prints: git push origin dev v0.55.0
 # 3. Upgrade both installs after release.yml finishes.
 brew update && brew upgrade veritas
 grep -c TEXT_GUARD_VERSION /opt/homebrew/opt/veritas/libexec/server/zotero.py    # expect >= 1
 #    install the 0.55.0 Veritas.app and check its version in Settings
-# 4. Start, let each install index once (the stamp re-reads Zotero), then count, reading no text:
-brew services start veritas    # and open Veritas.app
-python3 ~/Documents/second-brain-dev/veritas/server/kb.py audit-text --only foreign | awk '{print $1}' > /tmp/fk
-python3 ~/Documents/second-brain-dev/veritas/server/kb.py audit-text --only unknown | awk '{print $1}' >> /tmp/fk
-for db in /opt/homebrew/var/veritas/kb.sqlite "$HOME/Library/Application Support/io.github.frimpsjoek.veritas/kb.sqlite"; do
-  sort -u /tmp/fk | while read k; do
-    sqlite3 "file:$db?mode=ro" "SELECT '$k', count(*) FROM chunks WHERE path='zotero/$k' AND heading LIKE '%Full text%'"
-  done | awk -F'|' '$2 > 0' | wc -l     # expect 0 (or only the one item that also has an accepted attachment)
+#    each install reads its own overrides file: copy yours into both data folders before they index
+for data in /opt/homebrew/var/veritas "$HOME/Library/Application Support/io.github.frimpsjoek.veritas"; do
+  cp ~/Documents/second-brain-dev/veritas/server/data/text_overrides.json "$data/" || echo "no overrides file to copy to $data"
 done
-rm /tmp/fk
-#    repeat step 4's count after the next automatic index run (5 minutes) and record both in V4 and V29
-# 5. D5, only after step 4 reads 0 in both served folders (moving is the reversible choice):
+# 4. Start, let each install index once. The stamp re-reads Zotero; this first run also copies the chunks table,
+#    rebuilds the keyword index and compacts the database (R23, R24), so give it a few minutes.
+brew services start veritas    # and open Veritas.app
+#    Then verify both served indexes, printing no text. Run the block as it is: it stops at the first failure,
+#    it uses the server's own interpreter, and verify-guard exits 2 when it checked nothing and 1 when the index
+#    was not read under this guard version, so it cannot pass by accident. Each report names the library it
+#    judged with (it must be ~/Zotero) and ends in "-> clean".
+( set -eu
+  cd ~/Documents/second-brain-dev/veritas/server
+  test -x .venv/bin/python
+  for data in /opt/homebrew/var/veritas "$HOME/Library/Application Support/io.github.frimpsjoek.veritas"; do
+    test -f "$data/kb.sqlite"
+    .venv/bin/python kb.py verify-guard --index "$data"
+    test -z "$(sqlite3 "file:$data/kb.sqlite?mode=ro" "SELECT value FROM meta WHERE key='purge_pending'")"   # the purge finished
+  done
+  echo "both served indexes: clean, purge finished" )
+#    repeat the block after the next automatic index run (5 minutes) and record both reports in V4 and V29
+# 5. D5, only after step 4 prints "clean" for both served folders (moving is the reversible choice):
 #    mv ~/Documents/second-brain-dev/veritas/server/data/kb.sqlite ~/veritas-retired/
 #    mv /opt/homebrew/var/veritas/backup-2026-10-28-before-import ~/veritas-retired/
 #    mv ~/Documents/second-brain-dev/obsidian-kb/data ~/veritas-retired/obsidian-kb-data
@@ -268,7 +340,7 @@ Not run.
 | V1 | R1 | `pytest server/tests -k guard_version` (fixture library, unchanged files, bumped constant) | Zotero stage runs; stamp now holds the version | 2026-11-04: `test_guard_version_is_part_of_the_stamp_and_an_older_stamp_rereads` passed: unchanged library skipped; old-shape stamp re-reads; bumped constant re-reads; stamp JSON `[2]` = `TEXT_GUARD_VERSION` |
 | V2 | R2 | `python server/kb.py audit-text \| awk 'length > 200' \| wc -l` and the sentinel test | `0`; sentinel test passes | 2026-11-04: `0` on the real library (1,124 lines); `test_audit_text_lists_decisions_and_prints_no_text` passed |
 | V3 | R3 | `pytest server/tests -k text_overrides` (4 tests) | forced reject and accept honoured in `documents()` and `item_detail()` | 2026-11-04: 4 tests `test_override_*` passed, plus malformed file and unknown value tests |
-| V4 | R4 | for each served data folder and each `audit-text` foreign row: `sqlite3 <data>/kb.sqlite "SELECT count(*) FROM chunks WHERE path='zotero/<KEY>' AND heading LIKE '%Full text%'"`; fixture sentinel through `/search` and MCP `search_notes` | `0` when no accepted attachment remains on the item; sentinel not found | Fixture: passed 2026-11-04 (`test_rejected_text_is_absent_from_every_store_and_every_search_path`, `test_an_already_indexed_foreign_text_is_removed_by_the_next_run_after_a_guard_bump`: chunks, FTS, vecs, Tantivy on first sync, `/search` as agent, MCP `search_notes`, `read_note`). Live: "before" = 43 of 43 foreign-only items with text in every served index (evidence block); "after" Not run: needs R21 (no re-index of a served folder on this branch) |
+| V4 | R4 | for each served data folder: `server/.venv/bin/python kb.py verify-guard --index <data>` (the block in the evidence section); fixture sentinel through `/search` and MCP `search_notes` | "-> clean", exit 0, every count `0`, `rejected` > 0; sentinel not found | Fixture: passed 2026-11-04 (`test_rejected_text_is_absent_from_every_store_and_every_search_path`, `test_an_already_indexed_foreign_text_is_removed_by_the_next_run_after_a_guard_bump`: chunks, FTS, vecs, Tantivy on first sync, `/search` as agent, MCP `search_notes`, `read_note`). Live: "before" = 43 of 43 foreign-only items with text in every served index (evidence block); "after" Not run: needs R21 (no re-index of a served folder on this branch) |
 | V5 | R5 | `ls -la server/data/kb.sqlite /opt/homebrew/var/veritas/backup-2026-10-28-before-import/ ~/Documents/second-brain-dev/obsidian-kb/data/kb.sqlite` after D5 | absent, or moved to a folder no server reads | Not run: D5 is Joseph's; "before" sizes in the evidence block |
 | V6 | N1 | `kb.py index` log line for zotero | one run; "new or changed" count equals the rejected + changed items, not the whole library | Fixture: `zotero_changed == 1` after the bump with one foreign and one clean item (test passed 2026-11-04). Live: Not run (needs R21); expect about 43 + 218 near-empty + re-judged items, not 3,564 |
 | V7 | R6 | `gold/trial.csv` and the 3-sample results note | one row per gold value; cells scored verified/correct/source_kind | Not run |
@@ -294,6 +366,11 @@ Not run.
 | V27 | R19 | self-agreement sheet (40 items, two weeks later) | agreement rate recorded | Not run |
 | V28 | R20 | 30-question sheet | correct counts for search and graph; difference >= 6 or graph stays a side table | Not run |
 | V29 | R21 | `grep -c TEXT_GUARD_VERSION` on each installed `zotero.py` or bundle; V4 again after the next automatic index run | at least 1 for each, or the service is stopped; counts still `0` | "Before" 2026-11-04: Homebrew `0`, service state `error`; app bundle not greppable. "After": Not run (release and upgrade are Joseph's; commands in the evidence block) |
+| V31 | R23 | `pytest server/tests/test_text_guard_effect.py -k "tantivy_drops or never_handed_out or plain_rowids"` | the two-attachment item loses its foreign text in Tantivy; re-stored chunks get higher ids; an old index is migrated with its rows | 2026-11-11: 3 passed; the first failed on the second-round code (Tantivy returned the item for the foreign sentinel) |
+| V32 | R24 | `pytest server/tests/test_text_guard_effect.py -k "purge or rebuilds_tantivy"`; live: `meta.purge_pending` absent after the upgrade run | the sentinel is in no file of the data folder; a held checkpoint stays pending, then completes | Fixture 2026-11-11: 3 passed (`rebuilds_tantivy_and_purges`, `purge_takes_a_deleted_word_out`, `purge_that_cannot_finish`). Live: Not run (needs R21) |
+| V33 | R25 | `pytest server/tests/test_guard_verify.py` | 10 tests: clean passes, each store's leak is found, nothing checked is exit 2, another guard version is exit 1, no text printed, no file changed | 2026-11-11: 10 passed. Live: Not run (it is V4's command) |
+| V34 | R26 | `pytest server/tests/test_zotero_text_match.py`; mutation runs in a scratch copy | every changed clause has a test that fails when the clause is removed | 2026-11-11: 36 passed; 26 of 26 mutations caught (evidence block, third round). Real-library counts under version 4: Not run (D13) |
+| V35 | R27 | `pytest server/tests/test_text_guard_effect.py -k "cannot_be_read or nothing_to_judge"` | 503 when the library cannot be read; no cache or not in the library is still nothing to judge | 2026-11-11: 2 passed |
 | V30 | R22 | chat listing on a fixture chat, then on the real folders (paths only) | fixture text never printed; real path list recorded; D11 stated | 2026-11-04: `test_chat_audit.py` 4 passed (sentinel never printed); real folders: 0 of 191 files listed (evidence block). D11: nothing to decide on this evidence; the uncited-snippet blind spot is stated |
 
-Every R1-R22 and N1-N5 appears above. Nothing here is accepted; Decision: Pending.
+Every R1-R27 and N1-N5 appears above. Nothing here is accepted; Decision: Pending.
