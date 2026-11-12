@@ -3,6 +3,142 @@
 Each release of Veritas AI. `node tools/release.mjs <version>` adds the next section (the commit subjects since the
 last tag, to edit before pushing); the GitHub Release shows that section as its notes.
 
+## 0.55.0 (2026-11-11)
+
+- Spec 026: third review round, guard version 4, R23-R27, D12-D14, verify-guard in the upgrade steps
+- verify-guard: an index last read under another guard version is not verified
+- Text guard: the authors confirm with two surnames, never one
+- Tests: purge shown on the files, short title with one author's name
+- kb.py verify-guard: counts of rejected text left in chunks, FTS, vectors and Tantivy
+- Text guard v4: non-Latin texts judged, no substring titles, weak accepts closed, fail closed
+- Index: chunk ids are never reused; a guard change rebuilds Tantivy and purges deleted text
+- Spec 026: second-round evidence, the four indexes and safe upgrade order
+- Text guard v3: whole-DOI match, title near the top, list markers, unknown not admitted
+- Spec 027: implementation plan (T0 spike gate, server, plugin, shell, web, harness, install)
+- Spec 027: a paper browser in the desktop app (Browse), with Save PDF to Zotero
+- Reader: a ChemRxiv Engage link opens as its paper, through OpenAlex
+- Specs 025 and 026 as drafts: checkable findings and one-install agent skill; knowledge graph (reduced)
+- Zotero: a cached text that is plainly another document is not the item's
+- Harness: the browser checks follow the app as it is now
+- Reader: a paper's figures, at a size you can read
+- Reader: no TeX leftovers; authors in colour; a queued add says so everywhere
+- Reader: equations drawn as equations
+- Home and reader: less on the page; Worth reading keeps a place for another field
+- Server light: a 503 from the ping reads as starting
+- Radar: a 429 from arXiv ends this run's searches
+- Worth reading looks past the candidates already shown or held
+- Radar: a near-bar ledger, and a short day filled from just under the bar
+- Radar feedback trains a seed radar: Like and Add become seeds, Not relevant sinks what is close
+- Radar: the lower bar never goes below where unrelated papers end
+- Radar sources: arXiv seed search uses the radar's topics; followed authors look back two months
+- Radar judge: AI, agents or software in general do not fit; no default true for them
+- Radar: a paper only one broad seed holds up is left out
+- Radar calibration: measure each seed against the category closest to it
+- Radar: read every arXiv paper past the lower bar, with a per-seed share; journal papers compete
+- Radar calibration: baselines from every seed category and each seed's own
+- Library: a hairline edge on the phone's collections sheet, so it reads in dark mode
+- Harness: checks for the chat history, header, composer line, failed turn, the panel fold and the Library's new states
+- Chat: the history toggle acts on what is on screen (a phone's first tap did nothing); Try again keeps anything attached since
+- Library: an answer to old search words is ignored once the box changes; on a phone the chip stands in for the crumb
+- Harness: the fake host's browser hook takes the radar link
+- Home and reader finish: the light clears the bar, the toast clears the phone bar, a lone source reads as itself; harness shots
+- Home is a judging screen: labelled pills with keys and the collection menu, why chips, the open row, the run line, Try again
+- App: asks for folder access from the window; waits for the server's ready
+- Server: the port opens before the folders and the index
+- Library: a skeleton of 56 px rows while loading; the table's header and cells carry table roles
+- Library: a panel-left button beside the title folds the collections; below 700 px they open as a sheet with a close button and the chosen collection is a toolbar chip
+- Library: the crumb shows the whole path with linked ancestors; the tree's twist is a real button with aria-expanded
+- Library offline: a banner with the saved time and Try again over stored rows; the stored tree stays when collections can't load
+- Library search: Searching <collection> with a spinner, Search isn't working with Try again, Search in <collection>, search-all on no match, a lit Relevance button
+- Chat: Try again on a failed turn's error box, with its attachments and skills
+- Chat results panel: a panel-right toggle beside Artifacts; the list folds when the panel opens below 1200 px and comes back on close unless the user folded it
+- Chat history rows: a real button to open, one ... menu instead of the hover x, a tinted selected row, badges and counts on the meta line
+- Collection target (a chosen collection that still exists), the shown-step label, 'Just under the bar' (pure)
+- Routines data: runStatus and plainRunReason, the line under Home's banner (pure)
+- Server light: up, starting, busy, down; a 24 px target and a popover with since when and Try now
+- Chat history: Find a chat, Today/Yesterday/Earlier groups, a no-match line, and Can't reach the server with Try again
+- Chat header: the title and project always show, a Lucide panel-left toggle, and where the AI runs moves to the composer row
+- Scheduler: a wake settles for five minutes; sleep and quitting cost no try
+- Chat and Library: helpers for the find filter, the where label, folding the list, the search words and stored rows' time
+- Reader: a .pdf link is looked at too; at most three listed copies
+- Radar score: whole given names, content words only, bonuses sized to the margin
+- Icons: Lucide panel-left, panel-right, alert and loader at the shared 16 px box and stroke
+- Reader: a PDF link that was not a PDF falls back to the paper's page once, then a plain card
+- Collection menu behind Add to Zotero: searchable rows (My Library, tree, last used), remembered pick
+- Reader: a PDF link that was not a PDF falls back to the paper's page once, then a plain card
+- Server: no folder listing at import; a folder's kind is found when first needed
+- Radar digest: labelled pills with keys, why chips, the open row, the progress line (pure)
+- Chat and Library: pure helpers for day groups, the find filter, the crumb path and the search and stale lines
+- Spec 026: phase 0 facts, measured guard rule, TG0 evidence and R21 commands
+- kb.py audit-chats: list by path the chats that name a Zotero item the guard rejects
+- Text guard takes effect: version in the index stamp, head-of-text rule, overrides, audit-text
+- Zotero: skip an attachment's cached text that is another document's
+- Radar retries a failed scheduled run; Add to Zotero while reading a PDF
+- Reader: check a listed open-access PDF is one before opening it
+- Reader: figure, plain buttons for the full text and PDF, Add to Zotero
+- Radar: longer issues that come in steps, with arXiv names a reader can read
+- Web: a small light in the top corner says whether the server is up
+- Radar: a calibrated radar ranks on how far a paper is past its bar
+- Radar: one issue a day; leave out title-only finds and thin seeds
+- Radar: never show the "Close to seed (0.86)" line
+- Desktop app: a rebuild under the same version installs its new web files
+- Radar: Redo today rebuilds the latest issue with today's rules
+- Reader panel: a closed paper opens as its landing page (journal and date, authors, the abstract's paragraphs from Crossref without the JATS "Abstract" title, the DOI, Copy citation, a graphical abstract only when one is found); the publisher's page, the DOI and the access note open in the system browser at doi.org, since publishers refuse the panel; harness checks that ← from Home's radar list closes the panel and stays closed
+- Home tidy: opening a radar paper on Home or in the digest table lowers the new-paper count and the rail badge by one; Earlier issues shows one row with Previous and Next a row at a time; no Chats shelf on Home; the Chat history leaves out reading radar issues (Home still has them)
+- Routine news counts down per paper: conversations.markViewed records the rows opened without opening the chat (a `viewed` record, POST /conversations/viewed), and newsOf counts each one less; a run names the rows it added, so a radar's "Worth reading" rows never count, and opening the chat still clears everything
+- Radar profile check: the model drops papers outside the user's field
+- Reading radar: the calibration and whole-paper calls to the library server no longer fail with "fetch failed" after five minutes; Node's fetch gives up when a reply's headers take over 300 s, and calibrating on a real library (500 seeds, 16 PDFs read from arXiv) takes longer, so the agent sends these two calls through a plain HTTP request that waits for the caller's own 20-minute limit
+- Reading radar: calibration reads the newest submissions from the arXiv API when a category's daily RSS listing is empty (at weekends, and between one announcement and the next); an empty listing left it without unrelated papers, so it gave up and the radar stayed on its default threshold
+- Browser harness: the fake host's type lists the server and assets it now has, so the ui typecheck passes
+- Spec 022: the arXiv paper view, the cleaner reader and the panel's back button, with the evidence
+- Reader view: a short line a page without an article prints twice or more ("Read Later") goes as a button's label, and the LaTeXML full text drops its own date line (the header has the dates)
+- Reader view: a title carrying the site's name ("Story | Quanta Magazine") shows without it, and the story's name printed twice at the top of the text goes both times
+- Reading radar: a seed radar with no calibration (the setup's try failed, or it was made elsewhere) calibrates on its next run, scores that run with the new per-seed baselines, and keeps the threshold on the routine; it calibrates again when its seeds change, waits a day after a failed try, and does not ask with fewer than 3 seeds and no collection. Until now such a radar ran on the 0.70 default forever, with every margin equal to the plain similarity
+- Link panel: ← always does something; it shows the page before, and on the first page (or a framed site the panel cannot step through) it closes the panel and returns to where the link was clicked, instead of sitting greyed out. The panel keeps its own history, so the desktop app's web view behaves the same
+- arXiv links open as a paper: abs, pdf (reader asked) and html links, any version or old-style id, answer the title, authors in order, abstract with TeX accents turned into letters and $…$ drawn by KaTeX, subjects, dates and version, from the arXiv API (kept a day) with the abstract page for subject names, the HTML full text and a fallback; PDF and Full text are quiet header buttons, the full text is the LaTeXML article under the same header; a DOI's abstract answer has the same shape
+- Browser harness: the fake web host has the server and same-origin assets the shell now asks for (the web checks stopped at "revokeAll" of undefined), and the link menu check expects "Open in Veritas"
+- Reading radar: items of the seed collections whose title says they are not papers (a "Supplementary information for:" or thesis front-page item, a one- or two-word web page or program, a file name, a bare link) are no longer seeds, unless they have a DOI; their whole-text vectors were close to everything and became the closest seed of unrelated papers. Papers picked by hand are kept whatever their title
+- Reading radar: a paper still without an abstract after the lookups is ranked 0.08 lower and must clear the floor, or a seed radar's cut, by as much; its why says "titleOnly". A title shares one noun phrase with a seed and scores as if it were about the seed's topic: on a real issue, papers scored by title alone came out 0.04-0.13 closer than with their abstract
+- Reading radar: papers that came without an abstract are looked up before the final ranking (OpenAlex, then Crossref's record, Semantic Scholar and the arXiv API, all keyless, one request a second per host, at most 20 papers a run, best ranked first), instead of being ranked on their title alone; found abstracts and misses are kept in the radar's state so a paper is not asked again for 30 days
+- Reader view: a page without an article loses its furniture (link lists, toggles, breadcrumbs, "Loading...", submission history), loose text becomes paragraphs, the title shows once, glued "Title:/Authors:/Abstract:" labels go and an abstract sits under a small label, a "Last, First" byline reads "First Last", MathML becomes TeX the panel draws; the reader is one font family
+- Index import: a folder with no chats or routines of its own brings those of the found index that has the most, so taking the Homebrew offer no longer leaves Home empty; --find reports each index's chats, radar issues and routines, and the first-start offer counts the chats
+- Reading radar: seed collections with more than 500 papers no longer fail every run; the hand-picked seeds are kept and the collections fill the rest, most recently changed first, and the score reply says how many of how many were used
+- Home: a quiet "Run now" beside Sources under today's radar banner; it reads "Running…" while the radar runs, shows a refusal in its place for a moment, and today's issue appears when the run is recorded
+- Reading radar: a radar that has never run starts at once (on save and on the first tick after start) instead of waiting for its first slot, so Home is not empty
+- Spec 024: TG2 evidence and installer sizes
+- Spec 024 plan: TG5 plan and evidence (Windows shims, cooperative stop, self-update), check.sh counts before and after
+- Windows: self-update frees the port and starts the new server instead of leaving the old one running
+- check.sh: cargo check of the desktop app where Rust and the sidecars are present
+- Install the desktop app: download, opening an unsigned app on each system, first start, where data lives
+- release-app workflow: unsigned .dmg (both Macs), setup.exe, AppImage and .deb with latest.json on each tag
+- Windows: Stop lets the indexing run finish its batch instead of killing it
+- Windows: claude.cmd, codex.cmd and npx.cmd start as node <script> instead of failing with EINVAL
+- Desktop app (Tauri): window on the bundled server, tray menu, start at login, updater, first-start index reuse
+- import-data: a new install reuses an index this computer already has (Homebrew, Second Brain) instead of embedding again
+- Spec 024 TG3 evidence: release dry run and scratch release, tests, brew upgrade path, what waits for a tag, the tap token
+- Spec 024 plan: TG1 evidence (check.sh counts before and after, what only CI on a push can show, open items)
+- Release workflow: adds its files when the desktop workflow made the tag's release first
+- CI checks every part on Ubuntu, macOS and Windows (Git Bash); check.sh finds a Windows venv's Python; the xpi builds without zip
+- veritas.cmd: the veritas command for Windows (serve, open, status, model), checked against bin/veritas; .gitattributes keeps sh scripts LF and cmd files CRLF
+- Index lock with msvcrt on Windows (kb.py imported fcntl unconditionally); the indexing process starts without taskpolicy off macOS
+- release.mjs: the CHANGELOG date is the local day, not UTC's
+- Desktop app sidecars: the server as one PyInstaller executable, the agent as a Node single executable
+- Server Zotero keys in the Keychain, Windows Credential Manager or the Secret Service (key on stdin), else the agent's owner-only file; key texts no longer say Keychain
+- Updating guide: Homebrew, desktop app, Zotero and Obsidian plugins, source installs, and cutting a release (tap token once); README links it
+- Release workflow: a v* tag runs check.sh, makes the GitHub Release (Zotero xpi, update.json, Obsidian zip) and bumps the Homebrew tap
+- Spec 024: TG4 evidence (deferred review minors)
+- Agent keys in Windows Credential Manager and the Linux Secret Service (key on stdin), the owner-only file when neither works; the Node platform finds .cmd/.exe on Windows and takes the home folder from the OS
+- Homebrew formula: says how releases update the tap; caveats say to restart the service after brew upgrade (Homebrew does not)
+- OCR off macOS: Tesseract when installed, else text-layer PDFs only; Settings On this Mac is now On this computer and says which engine reads scans
+- check.sh parses the Zotero scripts as classic scripts, as Zotero loads them, so a stray export fails the check
+- check.sh builds obsidian/styles.css to a temp file and compares it, never rewriting the tracked copy
+- tools/release.mjs cuts a release: every part's version in lockstep, a CHANGELOG section, commit and tag, never a push (--dry-run prints the diff)
+- Zotero's profile folder per system (macOS, Windows %APPDATA%, Linux ~/.zotero); zotero_files reads prefs when needed and lists PDFs without find on Windows
+- test(server): the Zotero key reaches a fake security binary on stdin, never in its argv
+- Chat mirror lists the chats folder only on a chat's first write or a rename, not on every append
+- Spec 024: D3-D5 decided (unsigned app, model on first start, parallel agents); G4 updates; plan.md
+- Homebrew: install steps in README and guide; formula revision 2 (Python env and uv cache in var/veritas)
+
 ## 0.54.0 (2026-10-23)
 
 - Install with Homebrew on macOS and Linux: `brew install frimpsjoek/veritas/veritas`, `brew services start veritas`.
