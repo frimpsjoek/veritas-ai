@@ -255,6 +255,7 @@ def test_add_account_refuses_a_listed_user_and_reports_keychain_failure(tmp_path
 
 def test_store_key_runs_a_real_security_with_the_command_on_stdin(tmp_path, monkeypatch):
     """A fake `security` on PATH records what a real process would see: its argv and its stdin."""
+    monkeypatch.setattr(zotero_web.sys, "platform", "darwin")  # store_key picks `security` on macOS only
     fake = tmp_path / "security"
     fake.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$0.argv"\ncat > "$0.stdin"\n'
                     '[ -e "$0.fail" ] && { echo "denied" >&2; exit 44; }\nexit 0\n')
