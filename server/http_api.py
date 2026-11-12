@@ -1,6 +1,8 @@
 """HTTP API over the index, for the Obsidian plugin on the Mac and on the phone.
 
-GET  /ping                                     is the server up (no database work)
+GET  /ping                                     is the server up (no database work): {ok, ready}. While it starts the port
+                                                is open before the folders and the index (listen_first.py): ready is false,
+                                                and every other route waits a while, then answers 503 "starting"
 GET  /status                                   index counts, and which OCR engine reads scans and images
 GET  /links?path=...   GET /recent?days=&folder=&limit=
 GET  /search?q=...&limit=&source=&exclude_source=&folder=&tag=&collections=K1,K2&year_from=&year_to=
@@ -47,7 +49,7 @@ POST /radar/score {"scope","positives","negatives","items"}   similarity to the 
 POST /radar/profile {"scope"}                   seed profile: top terms, authors, journals of a scope
 POST /radar/score {..., "seeds"}               with seeds (spec 021): also seed_max and seed_best (closest seed) per item; at most 500 seeds, hand-picked first (reply "seeds": {used, of})
 POST /radar/fulltext {"seeds","items":[{id,arxiv}]}  new arXiv papers read whole (PDF text, cached) and compared with the seeds
-POST /radar/calibrate {"seeds","unrelated"}    thresholds for abstracts and whole papers from seed-seed and seed-unrelated similarity
+POST /radar/calibrate {"seeds","unrelated","field"}    thresholds for abstracts and whole papers from seed-seed and seed-unrelated similarity
 PUT  /digests/<file> {"text"}                   save Second Brain/Digests/<file>.md (atomic; 413 over 512 KB)
 POST /index                                    re-index changed notes now
 GET  /setup/suggest                            what a new user could add: Zotero, Obsidian vaults, PDF folders (spec 023)
@@ -92,11 +94,13 @@ import time
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Literal, Mapping
+from typing import Mapping
 from urllib.parse import parse_qs, unquote, urlparse
 
 import agent_api
 import kb
+import listen_first
+from listen_first import request_class
 import zotero
 import zotero_files
 import paper_notes
@@ -123,7 +127,6 @@ ZOTERO_ONLY = {"/zotero", "/zotero/pdf", "/zotero/files", "/paper-note", "/paper
 AGENT_ROUTES = {"/ping", "/status", "/search", "/related", "/links", "/recent", "/note", "/zotero", "/similar", "/zotero/items", "/radar/score", "/radar/profile", "/radar/fulltext", "/radar/calibrate", "/digests"}  # one SQLite connection and one model, shared by all request threads
 SEARCHER: kb.Searcher | None = None
 TOKEN_FILE = kb.data_dir() / "api-token"
-LOCAL_HOSTS = ("127.0.0.1", "localhost")
 CONFLICT = re.compile(r"\.conflict-macos-(\d{8}T\d{6}Z)\.md$")
 AGENT_SIDECAR: agent_api.Sidecar | None = None  # set by serve(); None means /agent/* answers 503
 LISTENER: ThreadingHTTPServer | None = None  # set by serve(); closed before a Windows self-update (replace_self)
@@ -136,35 +139,10 @@ def token() -> str:
     return TOKEN_FILE.read_text().strip()
 
 
-RequestClass = Literal["foreign", "proxied", "local", "app"]
-PROXY_HEADERS = ("x-forwarded-", "tailscale-", "forwarded")
 SESSIONS_FILE = kb.data_dir() / "web" / "sessions.json"
 SESSION_SECONDS = 365 * 24 * 3600
 SESSION_COOKIE = "sb_session"
 _sessions_lock = threading.Lock()
-
-
-def request_class(headers: Mapping[str, str]) -> RequestClass:
-    h = {name.lower(): value for name, value in headers.items()}
-    host = h.get("host", "")
-    proxied = any(name.startswith(PROXY_HEADERS) for name in h)
-    local = host.rsplit(":", 1)[0] in LOCAL_HOSTS and not proxied
-    # Behind tailscale serve the page may be on http:// or https:// (an http port does not always say which);
-    # either scheme on this same host is this app, not another website.
-    own_origins = {f"http://{host}", f"https://{host}"} if proxied else {f"http://{host}"} if local else set()
-    origin = h.get("origin", "")
-    # A listed web-app origin (the hosted web app, a Tauri window; web_origins.py): CORS, and the token always.
-    if origin and origin != "null":
-        try:
-            if web_origins.normalise(origin) in web_origins.allowed():
-                return "app"
-        except ValueError:
-            pass
-    # Only http(s) origins are websites; the plugins send no Origin, or an app:// / "null" one.
-    if h.get("sec-fetch-site") in ("cross-site", "same-site") or (
-            origin.startswith(("http://", "https://")) and origin not in own_origins):
-        return "foreign"
-    return "local" if local else "proxied"
 
 
 def _session_hash(session: str) -> str:
@@ -558,7 +536,7 @@ class Handler(BaseHTTPRequestHandler):
             if self._needs_zotero(route):
                 return
             if route == "/ping":
-                return self._send(200, {"ok": True})
+                return self._send(200, {"ok": True, "ready": True})
             if route == "/app" or route.startswith("/app/"):
                 return web_app.serve(self, route)
             if route == "/web/phone-link":
@@ -969,7 +947,7 @@ class Handler(BaseHTTPRequestHandler):
 def restart_when_code_changes() -> None:
     """A server outlives the Obsidian that started it and serves the phone, so after an update it replaces itself
     with the new code (same process, same port) instead of leaving the phone with nothing."""
-    files = [kb.HOME / name for name in ("kb.py", "http_api.py", "zotero.py", "mlx_embed.py", "keyword_index.py", "media.py", "zotero_files.py", "paper_notes.py", "agent_api.py", "plugin_updates.py", "skills.py", "radar_api.py", "web_app.py", "pdf_route.py", "pending_adds.py", "paper_figures.py", "sources.py", "site_icons.py")]
+    files = [kb.HOME / name for name in ("kb.py", "http_api.py", "zotero.py", "mlx_embed.py", "keyword_index.py", "media.py", "zotero_files.py", "paper_notes.py", "agent_api.py", "plugin_updates.py", "skills.py", "radar_api.py", "web_app.py", "pdf_route.py", "pending_adds.py", "paper_figures.py", "sources.py", "site_icons.py", "listen_first.py")]
     files.append(kb.HOME / agent_api.AGENTD_ENTRY)  # a rebuilt sidecar is an update too
     started = {f: f.stat().st_mtime for f in files if f.exists()}
     while True:
@@ -1001,8 +979,20 @@ def sidecar_kb_url(port: int) -> str:
     return f"http://127.0.0.1:{int(port)}"
 
 
+def open_index() -> None:
+    """Opens the index once (and migrates it, if it must) before the routes that need it answer. A failure is left for
+    those routes to report: the server stays up, and the log says why."""
+    try:
+        kb.connect().close()
+        listen_first.stage("index opened")
+    except Exception as error:
+        listen_first.stage(f"index not opened: {type(error).__name__}: {error}")
+
+
 def serve(port: int) -> None:
     global AGENT_SIDECAR, LISTENER
+    server = LISTENER = listen_first.listen(port)  # already open when started as `kb.py serve`
+    listen_first.stage("sources read")  # kb resolved the folder list at import
     token()  # create it on first start, so the Mac plugin can hand it to the phone
     try:
         # The sidecar reaches the library through this server, on the port it actually runs on (it used to be told
@@ -1019,8 +1009,10 @@ def serve(port: int) -> None:
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     threading.Thread(target=restart_when_code_changes, daemon=True).start()
-    server = LISTENER = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    open_index()
+    listen_first.ready(server, Handler)
     threading.Thread(target=kb.keep_fresh, kwargs={"on_check": lambda: LAST_CHECK.update(at=time.time())},
                      daemon=True).start()
     threading.Thread(target=lambda: searcher().search("warm up"), daemon=True).start()  # load model + vectors now
-    server.serve_forever()
+    while True:  # the listener has its own thread; this one stays for the signal handlers
+        time.sleep(3600)

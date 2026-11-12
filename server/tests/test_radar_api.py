@@ -285,8 +285,10 @@ def test_a_seed_close_to_everything_stops_winning_by_default():
     labels = ["zotero/SPECIFIC", "zotero/HUB"]
     paper = np.array([0.8, 0.6], dtype=np.float32)  # specific 0.80, hub 0.96
     assert radar_api._closest(matrix, labels, paper)[1] == "zotero/HUB"
-    margin, label, raw = radar_api._closest(matrix, labels, radar_api._unit(paper), np.array([0.2, 0.6], dtype=np.float32))
+    margin, label, raw, second = radar_api._closest(matrix, labels, radar_api._unit(paper), np.array([0.2, 0.6], dtype=np.float32))
     assert label == "zotero/SPECIFIC" and abs(raw - 0.8) < 1e-5 and abs(margin - 0.6) < 1e-5, "the margin decides, the similarity is shown"
+    assert abs(second - 0.36) < 1e-5, "and the next seed's margin says whether a second seed agrees"
+    assert radar_api._closest(matrix[:1], labels[:1], paper)[3] is None, "one seed has no second"
     base = radar_api._baseline({"baseline": {"labels": labels, "abstract": [0.2, 0.6]}}, labels, "abstract")
     assert radar_api._closest(matrix, labels, paper, base)[1] == "zotero/SPECIFIC"
     assert radar_api._baseline({}, labels, "abstract") is None
@@ -301,7 +303,7 @@ def test_calibration_with_the_field_sets_baselines_and_keeps_its_closest_tenth(s
     assert base["labels"] == ["zotero/AAA", "zotero/BBB", "zotero/CCC"]
     assert base["abstract"][0] > base["abstract"][2], "the field is chemistry, so the bread seed has the lowest baseline"
     a = result["abstract"]
-    assert "field_cut" in a and a["threshold"] >= a["field_cut"]
+    assert "field_cut" in a and a["threshold"] >= min(a["field_cut"], a["related"]["p50"])
     assert result["field"]["abstracts"] == 20
 
 
@@ -376,3 +378,68 @@ def test_seeds_from_collections_leave_out_items_that_are_not_papers(searcher):
     assert set(labels) == {"zotero/CCC", "zotero/SHORT", "zotero/FULL"} and total == 3, "a thin item without DOI or abstract is left out"
     _, picked, _ = radar_api.seed_matrix(searcher, {"keys": ["JUNK0"], "collections": ["OTHER"]}, threading.Lock())
     assert "zotero/JUNK0" in picked, "a paper picked by hand is kept whatever its title"
+
+
+def test_a_seed_is_measured_against_the_category_closest_to_it(searcher, tmp_path):
+    # Half the field is about force fields and half about bread: one mean over both would be low for either kind of seed.
+    bread = [{"title": f"Bread {i}", "abstract": "wild yeast dough rising bakery flour", "category": "food.bake"} for i in range(5)]
+    forces = [{"title": f"Forces {i}", "abstract": "learning force fields from quantum chemistry data", "category": "ml.forces"} for i in range(5)]
+    unrelated = [{"title": "Medieval trade routes", "abstract": "merchants silk caravans markets history"}]
+    seeds = {"keys": ["AAA", "BBB", "CCC"]}
+    calibrate = lambda field: radar_api.calibrate(searcher, {"seeds": seeds, "unrelated": unrelated, "field": field}, threading.Lock(), cache_path=tmp_path / "ft.sqlite")["baseline"]  # noqa: E731
+    base = calibrate(bread + forces)
+    by = dict(zip(base["labels"], base["abstract"]))
+    only = {k: dict(zip(b["labels"], b["abstract"])) for k, b in (("bread", calibrate(bread)), ("forces", calibrate(forces)))}
+    assert by["zotero/BBB"] == only["forces"]["zotero/BBB"], "the force-field seed against the force-field papers"
+    assert by["zotero/CCC"] == only["bread"]["zotero/CCC"], "the bread seed against the bread papers"
+    assert by["zotero/BBB"] > only["bread"]["zotero/BBB"] + 0.3
+
+
+def test_the_field_cut_never_raises_the_bar_past_the_seeds_own_median():
+    stats = radar_api._threshold([0.08, 0.12, 0.14], [0.0, 0.01])
+    assert stats["threshold"] < stats["related"]["p50"]
+    radar_api._apply_field_cut(stats, 0.30)
+    assert stats["threshold"] == stats["related"]["p50"] and stats["field_cut"] == 0.30
+    low = radar_api._threshold([0.08, 0.12, 0.14], [0.0, 0.01])
+    before = low["threshold"]
+    radar_api._apply_field_cut(low, before - 0.05)
+    assert low["threshold"] == before, "a field cut below the separation changes nothing"
+
+
+def test_a_seed_score_says_how_close_the_next_seed_is_and_whether_the_best_stands_alone(searcher):
+    scores = _score(searcher, seeds={"keys": ["AAA", "BBB", "CCC"]})
+    assert scores["on"]["seed_second"] < scores["on"]["seed_max"]
+    assert scores["off"]["seed_best"] == "zotero/CCC" and scores["off"]["seed_lonely"] is True, "the bread seed has no neighbour among the seeds"
+    assert scores["on"]["seed_lonely"] is False
+
+
+def test_the_least_connected_seeds_are_lonely():
+    near = np.array([[1, 0, 0], [0.99, 0.14, 0], [0.98, 0.2, 0], [0.97, 0.24, 0], [0, 0, 1]], dtype=np.float32)
+    assert radar_api._lonely(np.array([radar_api._unit(v) for v in near])).tolist() == [False, False, False, False, True]
+    assert radar_api._lonely(near[:1]).tolist() == [True]
+
+
+def test_a_liked_paper_is_a_seed_at_a_lower_weight_with_the_baseline_of_its_closest_seed(searcher, tmp_path, monkeypatch):
+    seeds = {"keys": ["AAA", "CCC"]}
+    baseline = {"labels": ["zotero/AAA", "zotero/CCC"], "abstract": [0.1, 0.2], "full": [0.1, 0.2]}
+    liked = {"title": "Liked paper", "text": "graphene moire superlattice flat bands"}
+    far = {"id": "new", "text": "graphene moire superlattice flat bands"}
+    body = {"scope": {"collections": None}, "positives": [], "negatives": [], "items": [far], "baseline": baseline}
+    before = radar_api.score(searcher, {**body, "seeds": seeds}, threading.Lock())["scores"]["new"]
+    after = radar_api.score(searcher, {**body, "seeds": {**seeds, "taught": [liked]}}, threading.Lock())["scores"]["new"]
+    assert before["seed_max"] < 0.1 and after["seed_best"] == "liked:Liked paper"
+    # identical text, similarity 1: its margin is the weight times (1 - the baseline of the seed it sits closest to)
+    assert 0.8 * (1 - 0.2) - 1e-3 < after["seed_max"] < radar_api.TAUGHT_WEIGHT * (1 - 0.1) + 1e-3
+    assert after["seed_max"] < 1 - 0.2, "less than the same text as a seed the user chose"
+    assert after["seed_lonely"] is True, "the two-seed rule does not hold back what the user liked"
+
+
+def test_liked_papers_count_for_whole_papers_and_never_for_the_calibration(searcher, tmp_path, monkeypatch):
+    monkeypatch.setattr(radar_api, "ARXIV_SPACING", 0.0)
+    monkeypatch.setattr(radar_api.media, "pdf_text", lambda path, max_pages=300, ocr=True: "## Page 1\n\n" + "graphene moire superlattice flat bands " * 30)
+    taught = [{"title": "Liked paper", "text": "graphene moire superlattice flat bands"}]
+    seeds = {"keys": ["AAA", "CCC"], "taught": taught}
+    out = radar_api.fulltext(searcher, {"seeds": seeds, "items": [{"id": "p", "arxiv": "2410.01234"}]}, threading.Lock(), cache_path=tmp_path / "ft.sqlite", fetch=lambda a: b"%PDF")["scores"]["p"]
+    assert out["seed_best"] == "liked:Liked paper"
+    matrix, labels, total = radar_api.seed_matrix(searcher, seeds, threading.Lock())
+    assert labels == ["zotero/AAA", "zotero/CCC"] and total == 2, "the seed list itself is what was calibrated"

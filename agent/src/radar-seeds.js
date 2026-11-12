@@ -5,7 +5,7 @@
 // user typed; a failed lookup comes back as a plain sentence.
 import { politeFetch } from './radar-sources.js';
 import { fetchFeed } from './feeds.js';
-import { openAlexWorks, arxivCategoryOf, arxivCategoryFeed, arxivQuery } from './scholarly.js';
+import { openAlexWorks, arxivCategoryOf, arxivCategoriesOf, arxivCategoryFeed, arxivQuery } from './scholarly.js';
 import { normTitle, isNonPaper, seedBody, seedsKey } from './radar.js';
 import { nameKey } from './radar-score.js';
 
@@ -23,6 +23,12 @@ const PER_CONTRAST = 10;
 const FULL_UNRELATED = 8;
 /** Papers from the seeds' own field per category, for the baselines and the field cut. */
 const PER_FIELD = 40;
+/** Seed titles looked up on arXiv for their categories; at most this many categories beyond the radar's own are read. */
+const SEED_LOOKUPS = 30;
+const OWN_FIELDS = 6;
+/** Bumped when the calibration's logic changes: a run calibrates a radar made by older logic again (radar-run.js).
+ *  2: each seed measured against the category closest to it, of all the seeds' own, and the field cut capped at the median seed. */
+export const CALIBRATION_VERSION = 2;
 
 const message = (/** @type {any} */ e) => String(e?.message ?? e);
 const shortId = (/** @type {string} */ id) => String(id ?? '').replace(/^https?:\/\/openalex\.org\//, '');
@@ -114,6 +120,26 @@ export async function seedCategories(fetchFn, titles) {
 }
 
 /**
+ * Categories the radar does not read but its seeds are posted or cross-listed in, most used first. The server measures
+ * each seed against the category closest to it, so these can only raise the baseline of a seed that belongs there: the
+ * closest seed of most rows on a materials radar was on agents, and cs.AI is what shows how close it is to everything
+ * in that field, though only its neighbours are listed there. A seed not on arXiv (or a failed lookup) adds nothing.
+ * @param {typeof fetch} api a polite fetch for export.arxiv.org @param {import("./tools").LibraryBackend} library @param {RadarSeeds} seeds
+ * @returns {Promise<string[]>}
+ */
+async function seedFields(api, library, seeds) {
+  const items = library.items && seeds.papers.length ? await library.items({ collections: null }).catch(() => []) : [];
+  const titles = new Map(items.map((it) => [it.key, it.title]));
+  const named = [...seeds.mine.map((m) => m.title), ...seeds.papers.map((k) => titles.get(k) ?? '')].filter(Boolean);
+  /** @type {Map<string, number>} */
+  const uses = new Map();
+  for (const title of named.slice(0, SEED_LOOKUPS)) {
+    for (const c of await arxivCategoriesOf(api, title.replace(/<[^>]+>/g, '')).catch(() => [])) if (!seeds.categories.includes(c)) uses.set(c, (uses.get(c) ?? 0) + 1);
+  }
+  return [...uses.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).slice(0, OWN_FIELDS).map(([c]) => c);
+}
+
+/**
  * Recent papers of one arXiv category: its daily RSS listing, or, when that is empty (no announcement at weekends, and
  * between a listing and the next), the newest submissions from the arXiv API. An empty listing left calibration
  * without unrelated papers, and the radar on its default threshold.
@@ -138,20 +164,23 @@ export async function calibrateRadar(q) {
   if (!q.library.radarCalibrate) return { threshold: null, problem: 'The library server is too old to calibrate the radar.' };
   const own = new Set(q.seeds.categories.map((c) => c.split('.')[0]));
   const contrast = CONTRAST.filter((c) => !own.has(c.split('.')[0])).slice(0, 4);
-  const api = politeFetch(q.fetch, contrast.length + 2, q.sleep ? { sleep: q.sleep } : {}).fetch;
+  const main = q.seeds.categories;
+  const api = politeFetch(q.fetch, contrast.length + main.length + OWN_FIELDS + SEED_LOOKUPS, q.sleep ? { sleep: q.sleep } : {}).fetch;
   /** @type {{ title: string, abstract: string, arxiv: string | null }[]} */
   const unrelated = [];
   for (const category of contrast) unrelated.push(...(await categoryPapers(q.fetch, api, category, PER_CONTRAST)).slice(0, PER_CONTRAST));
   if (unrelated.length < 10) return { threshold: null, problem: "Couldn't fetch enough unrelated papers from arXiv to calibrate; the radar uses 0.70 until the next try." };
   // Today's papers in the seeds' own categories: most are not for this person, so they set each seed's baseline
   // and the cut that keeps only the closest tenth of the field.
-  /** @type {{ title: string, abstract: string, arxiv: string | null }[]} */
+  /** @type {{ title: string, abstract: string, arxiv: string | null, category: string }[]} */
   const field = [];
-  for (const category of q.seeds.categories.slice(0, 2)) field.push(...(await categoryPapers(q.fetch, api, category, PER_FIELD)).slice(0, PER_FIELD));
+  for (const category of [...main, ...await seedFields(api, q.library, q.seeds)]) {
+    for (const p of (await categoryPapers(q.fetch, api, category, PER_FIELD)).slice(0, PER_FIELD)) field.push({ ...p, category });
+  }
   try {
     const r = await q.library.radarCalibrate({ seeds: seedBody(q.seeds), unrelated, field, full_papers: FULL_UNRELATED });
     return {
-      threshold: { abstract: r.abstract.threshold, full: r.full?.threshold ?? null, calibration: { abstract: r.abstract, full: r.full, seeds: r.seeds, at: new Date(r.at * 1000).toISOString(), baseline: r.baseline ?? null, seedsKey: seedsKey(q.seeds), ...(r.field ? { field: r.field } : {}) } },
+      threshold: { abstract: r.abstract.threshold, full: r.full?.threshold ?? null, calibration: { abstract: r.abstract, full: r.full, seeds: r.seeds, at: new Date(r.at * 1000).toISOString(), baseline: r.baseline ?? null, seedsKey: seedsKey(q.seeds), version: CALIBRATION_VERSION, ...(r.field ? { field: r.field } : {}) } },
       problem: r.abstract.overlap ? 'Your seed papers are about as close to unrelated papers as to each other; the threshold is set just above the unrelated ones. More seeds help.' : null,
     };
   } catch (e) { return { threshold: null, problem: `Calibration failed (${message(e)}).` }; }

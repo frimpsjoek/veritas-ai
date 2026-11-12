@@ -35,7 +35,7 @@ function normaliseLedger(raw) {
 /** Tolerant read: unknown shapes become the empty value, so a half-written or older file never stops a run. @param {any} raw @returns {RadarState} */
 export function normaliseState(raw) {
   const r = obj(raw), ex = obj(r.examples);
-  return { seen: obj(r.seen), sourceStatus: obj(r.sourceStatus), feedCache: obj(r.feedCache), refs: obj(r.refs), examples: { positive: list(ex.positive), negative: list(ex.negative) }, shown: obj(r.shown), learned: list(r.learned), streaks: obj(r.streaks), undo: obj(r.undo), phrases: normaliseLedger(r.phrases), abstracts: obj(r.abstracts), ...(typeof r.calibrateTried === 'string' ? { calibrateTried: r.calibrateTried } : {}) };
+  return { seen: obj(r.seen), sourceStatus: obj(r.sourceStatus), feedCache: obj(r.feedCache), refs: obj(r.refs), examples: { positive: list(ex.positive), negative: list(ex.negative) }, shown: obj(r.shown), learned: list(r.learned), streaks: obj(r.streaks), undo: obj(r.undo), phrases: normaliseLedger(r.phrases), abstracts: obj(r.abstracts), ...(typeof r.calibrateTried === 'string' ? { calibrateTried: r.calibrateTried } : {}), ...(Array.isArray(r.nearBar?.rows) ? { nearBar: r.nearBar } : {}) };
 }
 
 /** Trims the oldest seen entries, examples, row details and undo records. @param {RadarState} state @returns {RadarState} */

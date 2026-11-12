@@ -29,3 +29,10 @@ test('the seen set keeps the newest entries past the cap', () => {
   assert.equal(Object.keys(trimmed.seen).length, MAX_SEEN);
   assert.ok(trimmed.seen[`doi:${MAX_SEEN + 9}`] || trimmed.seen['doi:59'], 'recent entries survive');
 });
+
+test('the near-bar ledger survives a read', async () => {
+  const { normaliseState } = await import('../src/radar-state.js');
+  const nearBar = { at: '2026-11-04T01:00:00Z', rows: [{ title: 'Invented', seed: 'Invented seed', margin: 0.04, stage: 'bar' }] };
+  assert.deepEqual(normaliseState({ nearBar }).nearBar, nearBar);
+  assert.equal(normaliseState({}).nearBar, undefined);
+});

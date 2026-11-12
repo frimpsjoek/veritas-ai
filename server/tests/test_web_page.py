@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sqlite3
+import urllib.parse
 
 import pytest
 
@@ -441,3 +442,190 @@ def test_a_blocked_copy_gives_way_to_the_next_one_that_is_a_pdf(web):
     pages[REAL_PDF_URL] = Response(REAL_PDF_URL, 200, {"content-type": "application/pdf"}, b"%PDF-1.7 ...")
     answer = web_page.page(f"https://doi.org/{DOI}", get=get)
     assert answer["mode"] == "pdf" and answer["url"] == REAL_PDF_URL
+
+
+def test_a_publisher_pdf_link_that_serves_a_web_page_falls_back_to_the_abstract(web):
+    """The link says .pdf, the site answers with its sign-in wall: PDF.js would fail on it."""
+    pages, _calls, get = web
+    wall = "https://publisher.example/doi/10.1/x.pdf"
+    pages[openalex_url(DOI)] = Response("x", 200, {}, json.dumps(_copies(wall)).encode())
+    pages[wall] = Response(wall, 200, {"content-type": "text/html"}, b"<html>Sign in to read</html>")
+    answer = web_page.page(f"https://doi.org/{DOI}", get=get)
+    assert answer["mode"] == "reader" and "We show it" in answer["abstract"]
+
+
+def test_a_pdf_link_refused_by_its_site_gives_way_to_the_next_copy(web):
+    pages, _calls, get = web
+    refused, real = "https://publisher.example/x.pdf", "https://repository.example/y.pdf"
+    pages[openalex_url(DOI)] = Response("x", 200, {}, json.dumps(_copies(refused, real)).encode())
+    pages[refused] = Response(refused, 403, {"content-type": "text/html"}, b"Forbidden")
+    pages[real] = Response(real, 200, {"content-type": "application/pdf"}, b"%PDF-1.7 ...")
+    answer = web_page.page(f"https://doi.org/{DOI}", get=get)
+    assert answer["mode"] == "pdf" and answer["url"] == real
+
+
+def test_a_pdf_link_that_cannot_be_reached_now_is_still_taken_at_its_word(web):
+    """Nothing says it is not a PDF; the reader's own request may get through, and /web/pdf answers 415 if not."""
+    pages, _calls, get = web
+    away = "https://repository.example/away.pdf"
+    pages[openalex_url(DOI)] = Response("x", 200, {}, json.dumps(_copies(away)).encode())
+    answer = web_page.page(f"https://doi.org/{DOI}", get=get)
+    assert answer["mode"] == "pdf" and answer["url"] == away
+
+
+def test_arxiv_stays_trusted_without_a_request(web):
+    pages, calls, get = web
+    pages[openalex_url(DOI)] = Response("x", 200, {}, json.dumps(WORK_GREEN).encode())
+    answer = web_page.page(f"https://doi.org/{DOI}", get=get)
+    assert answer["mode"] == "pdf" and "https://arxiv.org/pdf/2301.06171" not in calls
+
+
+def test_at_most_three_listed_copies_are_tried(web):
+    pages, calls, get = web
+    urls = [f"https://repository.example/item/{n}" for n in range(5)]
+    pages[openalex_url(DOI)] = Response("x", 200, {}, json.dumps(_copies(*urls)).encode())
+    for url in urls[:4]:
+        pages[url] = Response(url, 200, {"content-type": "text/html"}, b"<html>landing page</html>")
+    pages[urls[4]] = Response(urls[4], 200, {"content-type": "application/pdf"}, b"%PDF-1.7 ...")
+    answer = web_page.page(f"https://doi.org/{DOI}", get=get)
+    assert answer["mode"] == "reader"
+    assert [u for u in calls if u in urls] == urls[:3]
+
+
+def test_an_equation_table_becomes_display_math_with_its_number():
+    words = "Words about the method go here, enough to keep as text. " * 8
+    page = (f"<article><p>{words}</p>"
+            '<table class="ltx_equation ltx_eqn_table"><tbody><tr class="ltx_equation ltx_eqn_row"><td class="ltx_eqn_cell"></td>'
+            '<td class="ltx_eqn_cell"><math alttext="a=b\\\\\n=c" display="block"><mi>a</mi></math></td>'
+            '<td class="ltx_eqn_cell ltx_eqn_eqno"><span class="ltx_tag">(15)</span></td></tr></tbody></table>'
+            '<p>And <math alttext="x" display="inline"><mi>x</mi></math> follows.</p>'
+            '<table><tr><td>Plain</td><td>table</td></tr></table></article>')
+    read = web_page.reader("https://arxiv.org/html/1", f"<html><body>{page}</body></html>".encode())
+    assert "<p>$$a=b\\\\ =c$$ (15)</p>" in read["html"], "one line, display, with its number"
+    assert "$x$ follows" in read["html"]
+    assert read["html"].count("<table>") == 1, "an ordinary table stays a table"
+    assert read["math"] is True
+
+
+def _latexml(body: str):
+    words = "Words about the method go here, enough to keep as text. " * 8
+    return web_page.reader("https://arxiv.org/html/1", f"<html><body><article><p>{words}</p>{body}</article></body></html>".encode())["html"]
+
+
+def test_a_preamble_latexml_could_not_convert_goes_whole():
+    macro = lambda name: f'<span class="ltx_ERROR undefined">\\{name}</span>'
+    html = _latexml(f'<div>{macro("labname")}<p>Some Lab {macro("labshort")}SL {macro("school")}XYZ {macro("site")}example.org</p></div>')
+    assert "labname" not in html and "Some Lab" not in html and "example.org" not in html
+
+
+def test_a_macro_in_a_sentence_goes_and_the_sentence_stays():
+    html = _latexml('<p>Seven tiers (<span class="ltx_ERROR undefined">\\cref</span>sch:tiers) follow, with <span class="ltx_ERROR undefined">\\mybold</span>care.</p>')
+    assert "<p>Seven tiers follow, with care.</p>" in html
+    assert "\x02" not in html and "\x03" not in html
+
+
+def test_a_figure_whose_picture_did_not_convert_keeps_its_caption_and_says_so():
+    html = _latexml('<figure class="ltx_float"><span class="ltx_ERROR undefined">{tikzpicture}</span><p>[ tier/.style=ddnode ] '
+                    '<span class="ltx_ERROR undefined">\\node</span>[fill=DDNavy!9] (t1) Tier 1</p>'
+                    '<figcaption>Scheme 1: the seven tiers.</figcaption></figure><p>Text after the figure.</p>')
+    assert "ddnode" not in html and "tikzpicture" not in html and "DDNavy" not in html
+    assert web_page.FIGURE_NOT_DRAWN in html
+    assert "Scheme 1: the seven tiers." in html and "Text after the figure." in html
+
+
+def test_a_colour_name_does_not_run_into_the_words_after_it():
+    html = _latexml('<div><span class="ltx_ERROR undefined">\\color</span> <p><span class="ltx_text">DDNavyGenerate credible structures.</span></p></div>')
+    assert "<p>Generate credible structures.</p>" in html
+
+
+def test_a_figure_keeps_its_picture_with_an_absolute_address():
+    read = web_page.reader("https://arxiv.org/html/2608.23130v2", (
+        "<html><body><article><p>" + "Words about the method go here, enough to keep as text. " * 8 + "</p>"
+        '<figure id="S3.F1" class="ltx_figure"><img src="2608.23130v2/Figure1.png" class="ltx_graphics" width="357" height="339" '
+        'alt="Refer to caption"><figcaption>Figure 1: the clusters.</figcaption></figure></article></body></html>').encode())
+    assert ('<figure><img src="https://arxiv.org/html/2608.23130v2/Figure1.png" alt="Refer to caption" width="357" height="339">'
+            "<figcaption>Figure 1: the clusters.</figcaption></figure>") in read["html"]
+
+
+def test_a_picture_with_no_caption_survives_a_page_without_an_article():
+    words = "<p>" + "A paragraph of the story with enough words to count as text. " * 6 + "</p>"
+    read = web_page.reader("https://blog.example/post/one", (
+        f'<html><body>{words}<div><img src="/media/plot.png" alt="A plot"></div>{words}</body></html>').encode())
+    assert '<img src="https://blog.example/media/plot.png" alt="A plot">' in read["html"]
+
+
+def test_pixels_icons_hidden_and_odd_pictures_go_and_a_lazy_one_takes_its_real_address():
+    words = "Words about the method go here, enough to keep as text. " * 8
+    read = web_page.reader("https://blog.example/post/", (
+        f"<html><body><article><p>{words}</p>"
+        '<img src="https://track.example/p.gif" width="1" height="1">'
+        '<img src="/icons/share.svg" width="24" height="24" alt="Share">'
+        '<img src="/hidden.png" hidden><img src="javascript:alert(1)"><img src="data:image/png;base64,AAAA" alt="inline">'
+        '<figure><img src="data:image/gif;base64,R0lGOD" data-src="figs/lazy.png" alt="Lazy"></figure>'
+        "</article></body></html>").encode())
+    html = read["html"]
+    assert "track.example" not in html and "share.svg" not in html and "hidden.png" not in html
+    assert "javascript" not in html and "base64" not in html
+    assert '<figure><img src="https://blog.example/post/figs/lazy.png" alt="Lazy"></figure>' in html
+
+
+def test_subfigures_close_in_order_and_a_tikz_panel_still_drops_its_source():
+    html = _latexml('<figure class="ltx_figure"><div class="ltx_flex_figure">'
+                    '<figure class="ltx_figure_panel"><img src="a.png" alt="a"></figure>'
+                    '<figure class="ltx_figure_panel"><span class="ltx_ERROR undefined">{tikzpicture}</span><p>\\node (t1) x</p></figure>'
+                    '</div><figcaption>Figure 2: two panels.</figcaption></figure><p>Text after the figure.</p>')
+    assert '<img src="https://arxiv.org/html/a.png" alt="a">' in html and "node (t1)" not in html
+    assert html.endswith("<p>Text after the figure.</p>"), "the text after the figure is not inside it"
+    assert html.count("<figure>") == html.count("</figure>")
+
+
+def test_an_svg_figure_in_an_object_becomes_a_picture_and_other_objects_still_go():
+    html = _latexml('<figure class="ltx_figure"><object type="image/svg+xml" data="2608.1/abs.svg" width="476" height="310">'
+                    'fallback text</object><figcaption>Figure 3: spectra.</figcaption></figure>'
+                    '<object type="application/x-shockwave-flash" data="game.swf">old plugin</object>')
+    assert '<figure><img src="https://arxiv.org/html/2608.1/abs.svg" alt="" width="476" height="310"><figcaption>' in html
+    assert "fallback text" not in html and "swf" not in html and "old plugin" not in html
+
+
+# --- ChemRxiv's Engage links: chemrxiv.org answers only browsers (Cloudflare), so the DOI comes from OpenAlex --------
+
+ENGAGE_ID = "66c9d14420ac769e5fb4ddd1"
+ENGAGE = f"https://chemrxiv.org/engage/chemrxiv/article-details/{ENGAGE_ID}"
+CHEMRXIV_DOI = "10.26434/chemrxiv-2024-wdv4b"
+
+
+def engage_lookup(url=ENGAGE):
+    return f"https://api.openalex.org/works?filter=locations.landing_page_url:{url}&select=doi"
+
+
+@pytest.mark.parametrize("url", [ENGAGE, f"https://www.chemrxiv.org/engage/chemrxiv/article-details/{ENGAGE_ID}?x=1",
+                                 f"{ENGAGE}/", f"https://chemrxiv.org/engage/api-gateway/chemrxiv/assets/orp/resource/item/{ENGAGE_ID}/original/x.pdf"])
+def test_engage_ids(url):
+    assert web_page.engage_id(url) == ENGAGE_ID
+
+
+def test_not_an_engage_link():
+    assert web_page.engage_id("https://chemrxiv.org/doi/full/10.26434/chemrxiv.15000484/v1") is None
+    assert web_page.engage_id(f"https://example.org/engage/chemrxiv/article-details/{ENGAGE_ID}") is None
+
+
+def test_an_engage_link_opens_as_its_paper_without_asking_chemrxiv(web):
+    pages, calls, get = web
+    pages[engage_lookup()] = Response("x", 200, {}, json.dumps({"results": [{"doi": f"https://doi.org/{CHEMRXIV_DOI}"}]}).encode())
+    pages[openalex_url(CHEMRXIV_DOI)] = Response("x", 200, {}, json.dumps(WORK_CLOSED).encode())
+    answer = web_page.page(ENGAGE, get=get)
+    assert answer["mode"] == "reader" and answer["source"] == "openalex"
+    assert answer["paper"]["doi"] == CHEMRXIV_DOI
+    assert not any("chemrxiv.org" in urllib.parse.urlparse(c).netloc for c in calls)
+    # the DOI is remembered: a second open asks OpenAlex for the work only (itself kept a day)
+    calls.clear()
+    web_page.page(ENGAGE, get=get)
+    assert engage_lookup() not in calls
+
+
+def test_an_engage_link_openalex_does_not_know_still_says_why(web):
+    pages, _, get = web
+    pages[engage_lookup()] = Response("x", 200, {}, json.dumps({"results": []}).encode())
+    pages[ENGAGE] = Response(ENGAGE, 403, {"cf-mitigated": "challenge", "server": "cloudflare"}, b"")
+    answer = web_page.page(ENGAGE, get=get)
+    assert answer["mode"] == "blocked" and answer["reason"] == web_page.BOT

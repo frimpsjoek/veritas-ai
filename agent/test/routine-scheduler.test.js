@@ -242,7 +242,7 @@ test('a pause or edit made during a run survives; only lastRun is written', asyn
   } finally { mock.timers.reset(); }
 });
 
-test('dispose stops the interval and aborts the running run as failed/stopped', async () => {
+test('dispose stops the interval and aborts the running run, recorded as cut off by the app closing', async () => {
   mock.timers.enable({ apis: ['setInterval'] });
   try {
     let signalSeen;
@@ -259,7 +259,7 @@ test('dispose stops the interval and aborts the running run as failed/stopped', 
     await s.dispose();
     assert.equal(signalSeen.aborted, true);
     const saved = await t.store.read('r1');
-    assert.deepEqual([saved.lastRun.status, saved.lastRun.reason], ['failed', 'stopped']);
+    assert.deepEqual([saved.lastRun.status, saved.lastRun.reason], ['failed', 'app closed']);
     assert.equal((await t.store.read('r2')).lastSlot, null, 'the next due routine was not claimed after dispose');
     // After dispose no timer fires and nothing new starts.
     const before = t.runs.length;
@@ -450,10 +450,114 @@ test('after the computer has slept, nothing starts until it has been awake a whi
     await pulse(s, t.clock);
     assert.equal(t.runs.length, 0, 'not due yet');
     await pulse(s, t.clock, 2 * 60 * 60_000);
-    assert.equal(t.runs.length, 0, 'a short wake in the night starts nothing');
+    assert.equal(t.runs.length, 0, 'a wake in the night starts nothing');
+    for (let minute = 1; minute < 5; minute++) await pulse(s, t.clock);
+    assert.equal(t.runs.length, 0, 'nor does a dark wake of a few minutes');
     await pulse(s, t.clock);
-    assert.equal(t.runs.length, 1, 'still awake a minute later: it runs');
+    assert.equal(t.runs.length, 1, 'still awake five minutes later: it runs');
     await s.dispose();
+  } finally { mock.timers.reset(); }
+});
+
+/** A radar run that hangs until it is aborted, as a real one does when the app quits. */
+const hangsUntilAborted = (t) => (r, ctx) => new Promise((resolve, reject) => {
+  t.runs.push(ctx);
+  ctx.signal.addEventListener('abort', () => reject(new Error('stopped')));
+});
+const started = () => new Promise((r) => setImmediate(r));
+
+test('a run the computer slept through costs no try, however many nights it happens', async () => {
+  mock.timers.enable({ apis: ['setInterval'] });
+  try {
+    const t = setup({ wakeGapMs: 5 * 60_000, run: async (r, ctx) => { t.runs.push(ctx); t.clock.now += 2 * 60 * 60_000; throw new Error('timed out'); } });
+    await t.store.write(failedRadar({ lastSlot: iso(local(2026, 5, 3, 7, 30)), lastRun: { at: iso(local(2026, 5, 3, 7, 31)), slot: iso(local(2026, 5, 3, 7, 30)), status: 'failed', reason: 'timed out', tries: 3 } }));
+    t.clock.now = local(2026, 5, 4, 8, 0);
+    const s = createRoutineScheduler(t.deps);
+    await pulse(s, t.clock);
+    assert.equal(t.runs.length, 1);
+    assert.equal((await t.store.read('rad')).lastRun.tries, 0);
+    for (let night = 2; night <= 5; night++) {
+      for (let minute = 0; minute < 31 && t.runs.length < night; minute++) await pulse(s, t.clock);
+      assert.equal(t.runs.length, night, 'tried again');
+      assert.equal((await t.store.read('rad')).lastRun.tries, 0);
+    }
+    await s.dispose();
+  } finally { mock.timers.reset(); }
+});
+
+test('a run that fails while awake still counts when an earlier one was slept through', async () => {
+  mock.timers.enable({ apis: ['setInterval'] });
+  try {
+    const t = setup({ wakeGapMs: 5 * 60_000, run: async (r, ctx) => { t.runs.push(ctx); throw new Error('timed out'); } });
+    const slot = iso(local(2026, 5, 4, 7, 30));
+    await t.store.write(failedRadar({ lastRun: { at: iso(local(2026, 5, 4, 7, 31)), slot, status: 'failed', reason: 'timed out', tries: 0 } }));
+    t.clock.now = local(2026, 5, 4, 9, 0);
+    const s = createRoutineScheduler(t.deps);
+    await pulse(s, t.clock);
+    assert.equal((await t.store.read('rad')).lastRun.tries, 1);
+    await s.dispose();
+  } finally { mock.timers.reset(); }
+});
+
+test('the app quitting during a scheduled run: the slot is tried again at the next start, at no cost in tries', async () => {
+  mock.timers.enable({ apis: ['setInterval'] });
+  try {
+    const t = setup();
+    t.deps.run = hangsUntilAborted(t);
+    const yesterday = iso(local(2026, 5, 3, 7, 30));
+    await t.store.write(failedRadar({ lastSlot: yesterday, lastRun: { at: iso(local(2026, 5, 3, 7, 31)), slot: yesterday, status: 'done', tries: 1 } }));
+    const first = createRoutineScheduler(t.deps);
+    t.clock.now += 60_000;
+    mock.timers.tick(60_000);
+    await started();
+    assert.equal(first.runningId(), 'rad');
+    await first.dispose();
+    const saved = await t.store.read('rad');
+    assert.deepEqual([saved.lastRun.status, saved.lastRun.reason, saved.lastRun.tries], ['failed', 'app closed', 0]);
+
+    const second = createRoutineScheduler(t.deps);
+    t.clock.now += 60_000; // a minute later: no half-hour wait, since nothing is wrong with the source
+    mock.timers.tick(60_000);
+    await started();
+    assert.equal(second.runningId(), 'rad');
+    assert.equal(t.runs[1].slot, t.runs[0].slot);
+    await second.dispose();
+    assert.equal((await t.store.read('rad')).lastRun.tries, 0);
+  } finally { mock.timers.reset(); }
+});
+
+test('the app quitting during a run the user started does not retry it', async () => {
+  mock.timers.enable({ apis: ['setInterval'] });
+  try {
+    const t = setup();
+    t.deps.run = hangsUntilAborted(t);
+    await t.store.write(failedRadar({ lastRun: { at: iso(local(2026, 5, 4, 7, 31)), slot: iso(local(2026, 5, 4, 7, 30)), status: 'done' } }));
+    const first = createRoutineScheduler(t.deps);
+    await first.runNow('rad');
+    await first.dispose();
+    assert.equal((await t.store.read('rad')).lastRun.reason, 'app closed');
+    const second = createRoutineScheduler(t.deps);
+    await pulse(second, t.clock);
+    assert.equal(t.runs.length, 1);
+    await second.dispose();
+  } finally { mock.timers.reset(); }
+});
+
+test('a crash during a retry counts as a try, and the next one waits', async () => {
+  mock.timers.enable({ apis: ['setInterval'] });
+  try {
+    const t = setup();
+    t.deps.run = (r, ctx) => { t.runs.push(ctx); return new Promise(() => {}); }; // never recorded: the process dies here
+    await t.store.write(failedRadar({ lastRun: { ...failedRadar().lastRun, tries: 2 } }));
+    t.clock.now = local(2026, 5, 4, 9, 0);
+    const s = createRoutineScheduler(t.deps);
+    t.clock.now += 60_000;
+    mock.timers.tick(60_000);
+    await started();
+    assert.equal(t.runs.length, 1);
+    const saved = await t.store.read('rad');
+    assert.equal(saved.lastRun.tries, 3, 'written before the run starts');
+    assert.equal(saved.lastRun.at, iso(t.clock.now));
   } finally { mock.timers.reset(); }
 });
 

@@ -165,7 +165,7 @@ function scriptedAgentService(calls, reply, store, providers) {
   return {
     where: /** @type {"local"} */ ('local'),
     conversations: {
-      list: async () => (store?.conversations ? store.conversations.map((c) => ({ ...c })) : []),
+      list: async () => { if (store?.listFail) throw new Error('HTTP 503'); return store?.conversations ? store.conversations.map((c) => ({ ...c })) : []; },
       load: async (id) => store?.recordsBy?.[id] ?? store?.records ?? [],
       create: async () => {
         if (!store?.conversations) return 'conv1';
@@ -297,7 +297,7 @@ export const LOCAL_MODELS = [
  * leaves the host without `saveFile` (the Download fallbacks), whose calls are otherwise recorded in `_saved`.
  * @returns {import("../../src/host").UiHost & { _saved: { name: string, text: string, mime: string }[], _setWhere(next: "server" | "local" | "offline"): void,
  *           _setContext(items: import("../../src/host").ContextItem[]): void,
- *           ready: Promise<void>, json(): Promise<any>, setContext(items: import("../../src/host").ContextItem[]): void, setOpenRef(): void, setBrowser(fn: ((url: string) => void) | null): void,
+ *           ready: Promise<void>, json(): Promise<any>, setContext(items: import("../../src/host").ContextItem[]): void, setOpenRef(): void, setBrowser(fn: ((url: string, radar?: any) => void) | null): void,
  *           server: { url: string, sameOrigin: boolean }, assets: { sameOrigin: boolean, url(path: string): Promise<string>, bytes(path: string): Promise<ArrayBuffer>, frame(route: string, query: Record<string, string>): Promise<string>, revokeAll(): void } }}
  */
 export function createFakeHost(opts = {}) {
@@ -309,7 +309,7 @@ export function createFakeHost(opts = {}) {
   let contextItems = opts.context ?? [];
   const candidates = opts.candidates;
   const saved = [];
-  /** @type {((url: string) => void) | null} */ let browserHook = null;
+  /** @type {((url: string, radar?: any) => void) | null} */ let browserHook = null;
 
   return {
     kind: opts.kind ?? 'zotero',
@@ -362,7 +362,7 @@ export function createFakeHost(opts = {}) {
     openRef() {},
     openLink(url, o) {
       // mirrors the web host (src/web/host.js): inside goes to the shell's browser panel, outside is recorded
-      if (opts.kind === 'web' && !o?.outside && browserHook) browserHook(url);
+      if (opts.kind === 'web' && !o?.outside && browserHook) browserHook(url, o?.radar);
       else (globalThis.__opened ??= []).push({ kind: 'url', url, outside: true });
     },
     setBrowser(fn) { browserHook = fn; },
@@ -370,7 +370,7 @@ export function createFakeHost(opts = {}) {
     ...(opts.kind === 'web' ? {} : { openInTab() {} }),
 
     async searchOutside() { return { papers: OUTSIDE_PAPERS, failed: [] }; },
-    async addToLibrary(papers) { opts.calls?.push({ kind: 'add-to-library', titles: papers.map((p) => p.title), dois: papers.map((p) => p.doi) }); return { items: papers.map((_, i) => ({ key: `fake-${i}`, citekey: `fake${i}2026` })) }; },
+    async addToLibrary(papers, options) { opts.calls?.push({ kind: 'add-to-library', titles: papers.map((p) => p.title), dois: papers.map((p) => p.doi), collection: options?.collection ?? null }); return { items: papers.map((_, i) => ({ key: `fake-${i}`, citekey: `fake${i}2026` })) }; },
 
     notice(text) { opts.calls?.push({ kind: 'notice', text }); },
     // the web host's extras (src/web/host.js), used by the shell

@@ -1,12 +1,15 @@
 // @ts-check
 // ui-src/src/chat/radar-digest.js. Spec 012 R4: the reading radar's digest drawn on a papers result. The summary line above
-// the table, a "why read this" line under each title, and row actions, as icons (Add to Zotero or Read later, Like, Dislike), that
+// the table, a "why read this" line under each title, and row actions (Add to Zotero or Read later, Like, Not for me), that
 // each tell the engine through `radar.feedback` and offer Undo for five seconds. A settled row says what happened and keeps
-// an Undo link. The table renderer asks this class for the bits; the words and rules are in radar-digest-data.js.
+// an Undo link. The table renderer asks this class for the bits, as icons; Home's judging asks for labelled pills with their
+// keys and the collection menu (`judging`). The words and rules are in radar-digest-data.js.
 import { h } from '../dom.js';
 import { lucide } from '../icons.js';
 import { LOGOS, logoSvg } from '../logos.js';
 import { digestOf, keyOf, rowLine, actionList, settledLabel, toastText, outsidePaper } from './radar-digest-data.js';
+import { collectionMenu, COLLECTION_PREF } from '../home/collection-menu.js';
+import { collectionLabel, collectionTarget } from '../home/collection-data.js';
 
 /** @typedef {import("../host").UiHost} UiHost */
 /** @typedef {import("../../../agent/src/domain").PaperRow} PaperRow */
@@ -49,13 +52,20 @@ export async function markViewed(host, session, rowId) {
 }
 
 export class RadarDigest {
-  /** @param {UiHost} host @param {Document} doc @param {HTMLElement} mount the panel, which holds the toast @param {{ routine: string, summary: string }} digest */
+  /** @param {UiHost} host @param {Document} doc @param {HTMLElement} mount the panel, which holds the toast @param {{ routine: string, summary: string, judging?: boolean }} digest */
   constructor(host, doc, mount, digest) {
     this.host = host;
     this.doc = doc;
     this.mount = mount;
     this.routine = digest.routine;
     this.summary = digest.summary;
+    this.judging = !!digest.judging;
+    /** @type {Map<string, string>} the collection a paper was just added to, for its settled line */
+    this.placed = new Map();
+    /** Added while Zotero or its plugin could not take them: queued, not yet in the library. @type {Set<string>} */
+    this.waiting = new Set();
+    /** @type {Promise<any> | null} */ this.collections = null;
+    /** @type {(() => void) | null} a verdict was loaded, given or taken back */ this.onChange = null;
     /** @type {Map<string, Verdict>} what was done with each paper, by radar key */
     this.verdicts = new Map();
     /** @type {Map<string, Set<HTMLElement>>} the action boxes drawn for each paper */
@@ -82,6 +92,7 @@ export class RadarDigest {
       const done = await ai.radar?.verdicts?.(this.routine);
       for (const [key, verdict] of Object.entries(done ?? {})) if (!this.verdicts.has(key) && verdict !== 'shown' && verdict !== 'off') this.verdicts.set(key, verdict);
       for (const key of this.boxes.keys()) this.paint(key);
+      this.onChange?.();
     } catch (error) { this.host.logError(error); }
   }
 
@@ -121,8 +132,8 @@ export class RadarDigest {
     for (const box of this.boxes.get(key) ?? []) {
       // A box drawn into a list that is not on the page yet (Home builds the issue first) is kept, not dropped: only
       // one that was on the page and left it is gone for good.
-      if (!box.isConnected) { if (/** @type {any} */ (box).__shown) this.boxes.get(key)?.delete(box); continue; }
-      /** @type {any} */ (box).__shown = true;
+      if (!box.isConnected && /** @type {any} */ (box).__shown) { this.boxes.get(key)?.delete(box); continue; }
+      if (box.isConnected) /** @type {any} */ (box).__shown = true;
       const row = /** @type {PaperRow | undefined} */ (/** @type {any} */ (box).__row);
       if (row) this.fill(box, row, key);
     }
@@ -138,11 +149,64 @@ export class RadarDigest {
     box.replaceChildren();
     if (verdict) {
       const state = h(this.doc, 'span', `sb-dg-state${verdict === 'dismissed' ? ' is-dismissed' : ''}`);
-      state.append(markSvg(this.doc, SETTLED_MARK[verdict]), this.doc.createTextNode(settledLabel(verdict)));
+      const placed = verdict === 'added' ? this.placed.get(key) : '';
+      const said = verdict === 'added' && this.waiting.has(key) ? 'Waiting for Zotero' : settledLabel(verdict);
+      state.append(markSvg(this.doc, SETTLED_MARK[verdict]), this.doc.createTextNode(placed ? `${said} \u00B7 ${placed}` : said));
       box.append(state, this.button('Undo', () => this.undo(row), false, busy, null, 'Take this back'));
       return;
     }
-    for (const a of actionList(this.canAdd)) box.append(this.button(a.label, () => this.choose(row, a.verdict), a.primary, busy, a.mark, a.hint, true));
+    for (const a of actionList(this.canAdd)) {
+      const b = this.button(a.label, () => this.choose(row, a.verdict), a.primary, busy, a.mark, a.hint, true);
+      if (!this.judging) { box.append(b); continue; }
+      b.dataset.key = a.key;
+      b.setAttribute('aria-keyshortcuts', a.key);
+      if (a.verdict !== 'added') { box.append(b); continue; }
+      const split = h(this.doc, 'span', 'sb-split');
+      split.append(b, collectionMenu(this.doc, this.host, { buttonClass: 'sb-dg-chev', list: this.collectionList() }).el);
+      box.append(split);
+    }
+  }
+
+  /** One request for the collections, however many rows ask. */
+  collectionList() {
+    return (this.collections ??= new Promise((resolve) => { resolve(this.host.collections()); }).catch(() => []));
+  }
+
+  /** Papers among `rows` that have a verdict. @param {PaperRow[]} rows */
+  judged(rows) {
+    return rows.filter((row) => this.verdicts.has(keyOf(row) ?? '')).length;
+  }
+
+  /** @param {PaperRow} row */
+  settled(row) {
+    return this.verdicts.has(keyOf(row) ?? '');
+  }
+
+  /** A key pressed on Home: `added` is the row's save action, Read later where there is no Zotero. A settled row is left
+   *  alone (Undo is the way to change it). @param {PaperRow} row @param {Verdict} verdict */
+  judgeKey(row, verdict) {
+    if (this.settled(row)) return;
+    void this.choose(row, verdict === 'added' && !this.canAdd ? 'later' : verdict);
+  }
+
+  /** What the reader needs to judge a paper opened from this issue, the same verdicts as the row's.
+   *  @param {PaperRow} row @returns {import("../host").RadarLink | null} */
+  readerLink(row) {
+    const key = keyOf(row);
+    if (!key) return null;
+    return { routine: this.routine, key, paper: outsidePaper(row), verdict: () => this.verdicts.get(key) ?? null, tell: (verdict) => this.tell(row, verdict) };
+  }
+
+  /** Tells the engine a verdict given elsewhere (the reader) and shows it here too. Throws if the engine could not be told.
+   *  @param {PaperRow} row @param {Verdict | 'undo'} verdict @returns {Promise<Verdict | null>} */
+  async tell(row, verdict) {
+    const key = /** @type {string} */ (keyOf(row));
+    const ai = await this.host.ai();
+    const out = await ai.radar.feedback(this.routine, key, verdict);
+    if (out.verdict === 'shown') this.verdicts.delete(key); else this.verdicts.set(key, /** @type {Verdict} */ (out.verdict));
+    this.paint(key);
+    this.onChange?.();
+    return this.verdicts.get(key) ?? null;
   }
 
   /** @param {string} label @param {() => void} run @param {boolean} primary @param {boolean} disabled
@@ -168,8 +232,12 @@ export class RadarDigest {
     this.paint(key);
     try {
       if (verdict === 'added') {
-        const out = await this.host.addToLibrary?.([outsidePaper(row)]);
+        const list = this.judging ? await this.collectionList() : null;
+        const collection = collectionTarget(list, String(this.host.prefs?.get(COLLECTION_PREF) ?? ''));
+        const out = await this.host.addToLibrary?.([outsidePaper(row)], collection ? { collection } : undefined);
         if (!out?.items?.[0]) { this.host.notice("Couldn't add that paper to Zotero."); return; }
+        if (String(out.items[0].key).startsWith('queued-')) this.waiting.add(key); else this.waiting.delete(key);
+        if (collection) this.placed.set(key, collectionLabel(list, collection));
       }
       const ai = await this.host.ai();
       await ai.radar.feedback(this.routine, key, verdict);
@@ -181,6 +249,7 @@ export class RadarDigest {
     } finally {
       this.busy.delete(key);
       this.paint(key);
+      this.onChange?.();
     }
   }
 
@@ -203,6 +272,7 @@ export class RadarDigest {
     } finally {
       this.busy.delete(key);
       this.paint(key);
+      this.onChange?.();
     }
   }
 

@@ -87,9 +87,10 @@ export async function runWebPhoneChecks(browser, port, outDir) {
   {
     const page = await newPage(360);
     await page.route('**/web/state', (route) => route.fulfill({ status: 401, contentType: 'application/json', body: '{"error":"a valid token is required"}' }));
-    await page.route('**/dist-web/login', (route) => route.fulfill(html('<p>sign in</p>')));
-    await page.goto(`${origin}/dist-web/index.html#/home`);
-    await page.waitForURL('**/dist-web/login');
+    // the server serves the app at /app/ (web/src/connection.js isServedByServer); its sign-in page sits next to it
+    await page.route('**/app/login', (route) => route.fulfill(html('<p>sign in</p>')));
+    await page.goto(`${origin}/app/index.html#/home`);
+    await page.waitForURL('**/app/login');
     check('a 401 on /web/state sends the app to login next to index.html', true);
     await page.close();
   }

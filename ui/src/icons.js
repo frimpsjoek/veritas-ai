@@ -53,6 +53,11 @@ export const ICONS = {
   home: 'M2.75 7.5 8 2.75l5.25 4.75 M4.25 6.5v6.75h7.5V6.5 M6.75 13.25v-3.5h2.5v3.5',
   folder: 'M2.75 4.25h3.75l1.25 1.5h5.5v6.5H2.75z',
   grip: 'M6 4v.01 M6 8v.01 M6 12v.01 M10 4v.01 M10 8v.01 M10 12v.01',
+  // ---------- Lucide's panel-left / panel-right, circle-alert and loader-circle, scaled to the 16 px box and this stroke ----------
+  panelLeft: 'M3.25 2.75h9.5a1 1 0 0 1 1 1v8.5a1 1 0 0 1-1 1h-9.5a1 1 0 0 1-1-1v-8.5a1 1 0 0 1 1-1z M6 2.75v10.5',
+  panelRight: 'M3.25 2.75h9.5a1 1 0 0 1 1 1v8.5a1 1 0 0 1-1 1h-9.5a1 1 0 0 1-1-1v-8.5a1 1 0 0 1 1-1z M10 2.75v10.5',
+  alert: 'M8 1.75a6.25 6.25 0 1 0 0 12.5 6.25 6.25 0 0 0 0-12.5z M8 5v3.5 M8 11v.01',
+  loader: 'M14 8a6 6 0 1 1-4.15-5.7',
 
   // ---------- Settings sections (spec 016 U2): same 1.5 stroke; the sidebar draws them at 20 px ----------
   settingsGeneral: 'M2.75 5h5.25 M11 5h2.25 M9.5 3.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z M2.75 11h2.25 M8 11h5.25 M6.5 9.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z',
@@ -92,6 +97,20 @@ export const LUCIDE = {
   thumbsUp: 'M7 10v12 M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z',
   thumbsDown: 'M17 14V2 M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z',
   bookmark: 'm19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z',
+  // Home's judging and the reader (2026-11-04): the open row, the collection menu, the run line, the server light
+  chevronDown: 'm6 9 6 6 6-6',
+  chevronUp: 'm18 15-6-6-6 6',
+  check: 'M20 6 9 17l-5-5',
+  x: 'M18 6 6 18 M6 6l12 12',
+  refreshCw: 'M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8 M21 3v5h-5 M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16 M8 16H3v5',
+  bookOpen: 'M12 7v14 M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z',
+  fileText: 'M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z M14 2v4a2 2 0 0 0 2 2h4 M10 9H8 M16 13H8 M16 17H8',
+  text: 'M17 6.1H3 M21 12.1H3 M15.1 18H3',
+  externalLink: 'M15 3h6v6 M10 14 21 3 M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6',
+  folder: 'M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z',
+  circleAlert: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z M12 8v4 M12 16h.01',
+  search: 'm21 21-4.34-4.34 M11 3a8 8 0 1 0 0 16 8 8 0 0 0 0-16z',
+  square: 'M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z',
 };
 
 /** A Lucide icon, drawn in the text colour. @param {Document} doc @param {keyof typeof LUCIDE} name @param {number} [size] */

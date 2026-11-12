@@ -40,6 +40,15 @@ export interface OutsidePaper {
 /** Spec 008 Z1/Z4: one row of the Zotero collection tree, for the "Where to look" picker. `parent` is the
  *  parent's key, or null at the root; `count` is the collection's own item count, not its descendants' rolled up
  *  (the tree component sums those itself when it needs one). */
+/** A paper opened from a radar issue, for the reader: how to judge it there. The verdicts are the issue's own. */
+export interface RadarLink {
+  routine: string;
+  key: string;
+  paper: OutsidePaper;
+  verdict(): "added" | "later" | "liked" | "dismissed" | null;
+  tell(verdict: "added" | "later" | "liked" | "dismissed" | "undo"): Promise<"added" | "later" | "liked" | "dismissed" | null>;
+}
+
 export interface CollectionNode { key: string; name: string; parent: string | null; count: number }
 
 export interface UiHost {
@@ -98,7 +107,7 @@ export interface UiHost {
   /** Spec 015: every web link goes through here. `outside: true` is the system browser whatever the setting says;
    *  otherwise the host decides (the web app's browser panel, Obsidian's Web viewer, or, in Zotero, the system browser).
    *  The `openLinks` pref ('inside' | 'outside') is read by the host; see links.js. */
-  openLink(url: string, opts?: { outside?: boolean }): void;
+  openLink(url: string, opts?: { outside?: boolean; radar?: RadarLink }): void;
   revealFile(path: string): void;
   openInTab?(): void;
 

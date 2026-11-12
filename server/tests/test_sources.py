@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import json
+import os
+from dataclasses import replace
 
 import pytest
 
+import connectors
 import sources
 
 
@@ -103,6 +106,30 @@ def test_disabled_and_missing_folders_are_not_read(home):
                   {"name": "gone", "path": str(home / "gone"), "enabled": True}])
     layout = sources.resolved()
     assert [f.name for f in layout.others] == ["v"] and [f.name for f in layout.ignored] == ["gone"]
+
+
+def test_kind_is_detected_when_first_asked_and_kept(home, monkeypatch):
+    """resolved() needs no walk (a PDF folder and a notes folder are both read as notes); a folder's kind is found
+    when first asked for, once per folder until the folder changes; a disabled folder is never looked at."""
+    papers, off = home / "papers", home / "off"
+    papers.mkdir()
+    (papers / "a.pdf").write_bytes(b"%PDF")
+    off.mkdir()
+    walked = []
+    pdf = connectors.REGISTRY["pdf"]
+    looked = replace(pdf, detect=lambda path: walked.append(path) is None and pdf.detect(path))
+    monkeypatch.setattr(connectors, "REGISTRY", {**connectors.REGISTRY, "pdf": looked})
+    sources.save([{"name": "papers", "path": str(papers), "enabled": True},
+                  {"name": "off", "path": str(off), "enabled": False}])
+    layout = sources.resolved()
+    assert [f.name for f in layout.others] == ["papers"] and walked == []
+    assert layout.others[0].kind == "pdf" and walked == [papers]
+    assert sources.resolved().others[0].kind == "pdf" and walked == [papers]  # kept for the next layout
+    (papers / "b.md").write_text("# b\n")
+    stamp = papers.stat().st_mtime + 2  # the write changed the folder's mtime; a coarse clock could still tie
+    os.utime(papers, (stamp, stamp))
+    assert sources.resolved().others[0].kind == "plain" and walked == [papers, papers]
+    assert off not in walked
 
 
 def test_add_update_remove(home):

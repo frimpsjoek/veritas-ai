@@ -22,8 +22,8 @@ export const JUDGE_SCHEMA = {
 
 /**
  * @param {RadarItem[]} rows
- * @param {{ topics: string[], seeds: string[], rejected: string[] }} profile `seeds`: titles of papers the user picked
- *   as typical of their work; `rejected`: titles they marked not relevant
+ * @param {{ topics: string[], seeds: string[], rejected: string[], liked?: string[] }} profile `seeds`: titles of papers the user picked
+ *   as typical of their work; `rejected`: titles they marked not relevant; `liked`: titles they liked or added
  */
 export function judgePrompt(rows, profile) {
   const list = (/** @type {string[]} */ xs) => xs.slice(0, MAX_TITLES).map((t) => `- ${t}`).join('\n');
@@ -31,10 +31,12 @@ export function judgePrompt(rows, profile) {
     'You screen new papers for a researcher. Their interests:',
     profile.topics.length ? list(profile.topics) : '- (not stated)',
     ...(profile.seeds.length ? ['Papers typical of their own work:', list(profile.seeds)] : []),
+    ...(profile.liked?.length ? ['Papers they liked recently:', list(profile.liked.slice(-MAX_TITLES))] : []),
     ...(profile.rejected.length ? ['Papers they marked as not relevant:', list(profile.rejected)] : []),
     'For each paper below, decide whether this researcher would plausibly want to read it.',
     'fits=false when its main subject is a different field (biology, medicine, clinical work, unrelated engineering, for example), even if it shares a material, a method or a word with their interests.',
-    'fits=true when it is in their field or a close neighbour of it. When unsure, answer true.',
+    'fits=false when it is about AI, agents or software in general, with no application to chemistry, materials or physics: a framework, a benchmark, a harness, agent memory or safety. Interest in AI for science does not cover those, and being unsure does not make them fit.',
+    'fits=true when it is in their field or a close neighbour of it. When unsure about a paper in chemistry, materials or physics, answer true.',
     'Answer with JSON: {"papers":[{"n":<paper number>,"fits":true|false}]}, one entry per paper.',
     ...rows.map((r, i) => `\n### Paper ${i + 1}\nTitle: ${r.title}${r.venue ? `\nVenue: ${r.venue}` : ''}\nAbstract: ${String(r.abstract ?? '').trim().slice(0, MAX_ABSTRACT) || '(none)'}`),
   ].join('\n');
@@ -42,7 +44,7 @@ export function judgePrompt(rows, profile) {
 
 /**
  * @param {RadarItem[]} pool the best-ranked candidates
- * @param {{ turn: (prompt: string, schema: object) => Promise<unknown>, topics: string[], seeds: string[], rejected: string[] }} ctx
+ * @param {{ turn: (prompt: string, schema: object) => Promise<unknown>, topics: string[], seeds: string[], rejected: string[], liked?: string[] }} ctx
  * @returns {Promise<{ off: Set<string>, error: string | null }>} ids judged off the profile; none when the call failed
  */
 export async function judgeFit(pool, ctx) {

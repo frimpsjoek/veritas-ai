@@ -38,6 +38,7 @@ import zotero
 
 FOLDER = "web-pages"
 TIMEOUT = 15
+MAX_PDF_COPIES = 3  # listed copies looked at before settling for the abstract: each may take TIMEOUT
 PAGE_MAX_BYTES = 3_000_000
 PDF_MAX_BYTES = 80_000_000
 OPENALEX_DAYS = 1
@@ -125,6 +126,47 @@ def doi_of(url: str) -> str | None:
     if not found:
         return None
     return found.group(1).rstrip("/.").lower()
+
+
+ENGAGE = re.compile(r"/engage/(?:chemrxiv/article-details|api-gateway/chemrxiv/assets/orp/resource/item)/([0-9a-f]{24})(?:[/?#]|$)")
+
+
+def engage_id(url: str) -> str | None:
+    """The item id in a ChemRxiv Engage link (an article page or its PDF asset), or None."""
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        return None
+    if (parsed.hostname or "").lower().removeprefix("www.") != "chemrxiv.org":
+        return None
+    found = ENGAGE.search(parsed.path.lower() + "/")
+    return found.group(1) if found else None
+
+
+def engage_doi(item: str, get=fetch) -> str | None:
+    """The DOI of a ChemRxiv Engage item, from OpenAlex's record of its landing page, kept for good once found.
+
+    chemrxiv.org answers only web browsers (a Cloudflare challenge), its public API too, and an Engage link holds no
+    DOI; OpenAlex lists the Engage page among the work's locations.
+    """
+    path = folder("openalex") / f"engage-{item}.json"
+    try:
+        known = json.loads(path.read_text())
+        if known.get("doi"):
+            return known["doi"]
+    except (OSError, ValueError):
+        pass
+    landing = f"https://chemrxiv.org/engage/chemrxiv/article-details/{item}"
+    try:
+        answer = get(f"https://api.openalex.org/works?filter=locations.landing_page_url:{landing}&select=doi",
+                     200_000, "application/json")
+        results = json.loads(answer.body).get("results", []) if answer.status == 200 else []
+    except (OSError, Refused, ValueError):
+        return None
+    found = doi_of(results[0].get("doi") or "") if len(results) == 1 else None
+    if found:
+        path.write_text(json.dumps({"doi": found}))
+    return found
 
 
 def library_pdf(doi: str) -> tuple[str, str] | None:
@@ -217,15 +259,18 @@ def oa_pdf(work: dict) -> dict | None:
 
 
 def _serves_pdf(url: str, get) -> bool:
-    """Whether a listed PDF is one. OpenAlex's pdf_url is at times a repository's web page, or a site that refuses us
-    (pymatgen's eScholarship copy, 2026-11-03); the reader would open PDF.js on it and fail. A link that says what it
-    is, and arXiv's, are taken at their word; a look at the first bytes of the others keeps the open quick."""
+    """Whether a listed PDF is one. OpenAlex's pdf_url is at times a repository's web page, a publisher's sign-in wall
+    behind a link ending .pdf, or a site that refuses us (pymatgen's eScholarship copy, 2026-11-03); the reader would
+    open PDF.js on it and fail. arXiv's are taken at their word, which keeps the open quick; a look at the first bytes
+    settles the others. A .pdf link that cannot be reached right now keeps the benefit of the doubt."""
     parts = urllib.parse.urlparse(url)
-    if parts.path.lower().endswith(".pdf") or (parts.hostname or "").endswith("arxiv.org"):
+    if (parts.hostname or "").endswith("arxiv.org"):
         return True
     try:
         answer = get(url, 8192)
-    except (OSError, Refused):
+    except OSError:
+        return parts.path.lower().endswith(".pdf")
+    except Refused:
         return False
     return answer.status < 400 and _is_pdf(answer)
 
@@ -412,7 +457,7 @@ def _paper(url: str, doi: str, get) -> dict | None:
     if not work:
         return None
     title = work.get("title") or work.get("display_name") or doi
-    pdf = next((p for p in oa_pdfs(work) if _serves_pdf(p["url"], get)), None)
+    pdf = next((p for p in oa_pdfs(work)[:MAX_PDF_COPIES] if _serves_pdf(p["url"], get)), None)
     if pdf:
         return {"mode": "pdf", "url": pdf["url"], "title": title, "source": "open access", "version": pdf["version"],
                 "where": pdf["where"], "byline": byline_of(work), "abstract": abstract_of(work), "paper": _pdf_paper(doi, work)}
@@ -453,16 +498,33 @@ def _blocked_reason(answer: Response) -> str:
 
 
 KEEP = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "blockquote", "pre", "code", "em", "strong", "b",
-        "i", "sub", "sup", "a", "br", "figcaption", "table", "thead", "tbody", "tr", "th", "td", "dl", "dt", "dd"}
-BLOCK = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "blockquote", "pre", "figcaption", "table", "thead",
-         "tbody", "tr", "th", "td", "dl", "dt", "dd"}
+        "i", "sub", "sup", "a", "br", "figure", "figcaption", "table", "thead", "tbody", "tr", "th", "td", "dl", "dt", "dd"}
+BLOCK = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "blockquote", "pre", "figure", "figcaption", "table",
+         "thead", "tbody", "tr", "th", "td", "dl", "dt", "dd"}
 # Elements that are not kept but end a run of text: loose text between two of them becomes its own paragraph.
-BOUNDARY = {"div", "section", "article", "main", "figure", "center", "address", "details", "summary", "hgroup",
+BOUNDARY = {"div", "section", "article", "main", "center", "address", "details", "summary", "hgroup",
             "fieldset", "body"}
 SKIP = {"script", "style", "noscript", "svg", "nav", "header", "footer", "aside", "form", "button", "iframe", "template",
         "select", "textarea", "head", "object", "canvas", "dialog", "menu"}
 # Text only screen readers get, and LaTeXML's author block, dates and footer (the header shows authors and dates).
 SKIP_CLASSES = {"sr-only", "visually-hidden", "screen-reader-text", "ltx_authors", "ltx_dates", "ltx_page_footer"}
+# LaTeXML writes what it could not convert as <span class="ltx_ERROR">\macro</span> and carries on with the macro's
+# arguments as text. The macro goes; a paragraph that is mostly such leftovers (a custom preamble) goes whole.
+TEX_ERROR = "\x02"
+TEX_LABEL = "\x03"  # where a cross-reference's label was: "(\\cref sch:tiers)" should leave no empty brackets
+REFERENCE_MACROS = {"\\cref", "\\Cref", "\\autoref", "\\ref", "\\eqref", "\\cite", "\\citep", "\\citet"}
+LEFTOVER_MIN, LEFTOVER_ANY, LEFTOVER_CHARS = 3, 8, 150  # at least this many, and this many in any length or one per so many characters
+TEX_LABEL_TEXT = re.compile(r"^\s*[\w-]+:[\w:.-]+")
+COLOR_MACROS = {"\\color", "\\textcolor"}
+TEX_COLOR_TEXT = re.compile(r"^\s*[\w!.-]*?[a-z0-9](?=[A-Z][a-z])")  # "DDNavyGenerate credible": the name runs into the words
+FIGURE_NOT_DRAWN = "A figure here is drawn in TeX, which this view cannot show. The PDF has it."
+# A picture is kept with an absolute http(s) address, its alt text and its size. One whose given sizes are all under
+# ICON_MAX pixels, or any of them PIXEL_MAX or less, is an icon or a tracking pixel and goes. A lazy-loading page puts
+# the real address in a data- attribute and a placeholder (often a data: URI) in src. An <object> of an image type
+# (LaTeXML's SVG figures) is read as a picture of its data address; its fallback content is skipped with it.
+IMAGE_ATTRS = ("src", "alt", "width", "height")
+LAZY_SRC = ("data-src", "data-lazy-src", "data-original")
+ICON_MAX, PIXEL_MAX = 48, 2
 VOID = {"br", "img", "hr", "meta", "link", "input", "source", "wbr", "area", "base", "col", "embed", "param", "track"}
 HEADING = re.compile(r"h[1-6]")
 LABEL = re.compile(r"^\s*(Title|Authors?|Abstract)\s*:\s*")
@@ -484,7 +546,10 @@ class _Reader(html.parser.HTMLParser):
     subtrees and hidden ones, and keeps one copy per <article>/<main> so the main text can be chosen over the whole
     body. A skipped subtree ends at its own closing tag, so unclosed tags inside it (real pages have many) cannot
     swallow the page. Text outside any kept block (a <div> of text) is wrapped in <p>, so every piece of the page is a
-    block the pruning can weigh. A <math> becomes $TeX$ from its alttext (or TeX annotation) for the client to draw."""
+    block the pruning can weigh. A <math> becomes $TeX$ from its alttext (or TeX annotation) for the client to draw, or
+    $$TeX$$ for a display one. LaTeXML lays out a numbered equation as a table: each of its rows becomes one paragraph,
+    "$$TeX$$ (15)", which the client draws as an equation with its number rather than as a table. An <img> is kept as
+    _image allows; a <figure> is kept as a block, and one opened inside a figure being dropped is not."""
 
     def __init__(self, base: str) -> None:
         super().__init__(convert_charrefs=True)
@@ -500,6 +565,13 @@ class _Reader(html.parser.HTMLParser):
         self.blocks: list[str] = []  # kept block tags open now
         self.loose: list[str] = []  # inline text waiting for its paragraph
         self.math: dict | None = None
+        self.equation: dict | None = None  # the row being read of a LaTeXML equation table
+        self.tex_error: list[str] | None = None  # the text of the ltx_ERROR span being read
+        self.figure_depth = 0
+        self.dropping_figure = False  # in a figure whose picture did not convert: nothing but its caption is kept
+        self.figures: list[bool] = []  # the figures open now, each whether it was written (not while dropping)
+        self.after_macro: re.Pattern | None = None  # what the text after an unconverted macro starts with, to take off
+        self.in_equation = False
         self.has_math = False
 
     def _write(self, text: str) -> None:
@@ -515,7 +587,7 @@ class _Reader(html.parser.HTMLParser):
 
     def _flush(self) -> None:
         run, self.loose = "".join(self.loose), []
-        if _text_length(run):
+        if _text_length(run) or "<img " in run:
             self._write(f"<p>{run.strip()}</p>")
 
     def _open(self, tag: str) -> None:
@@ -552,12 +624,36 @@ class _Reader(html.parser.HTMLParser):
             if tag == "annotation" and a.get("encoding", "").lower() in ("application/x-tex", "tex"):
                 self.math["in_tex"] = True
             return
+        if self.dropping_figure:
+            if tag == "figcaption":
+                self.dropping_figure = False
+            else:
+                if tag == "figure":
+                    self.figure_depth += 1
+                    self.figures.append(False)
+                return
+        if tag == "span" and "ltx_ERROR" in a.get("class", "").split():
+            self.tex_error = []
+            return
         hidden = "hidden" in a or a.get("aria-hidden") == "true" or SKIP_CLASSES & set(a.get("class", "").split())
+        if tag == "img":
+            if not hidden:
+                self._image(a)
+            return
+        if tag == "object" and a.get("type", "").lower().startswith("image/") and not hidden:
+            self._image({**a, "src": a.get("data", "")})  # LaTeXML's SVG figures; an <img> draws SVG without its scripts
         if tag in SKIP or (hidden and tag not in VOID):
             self.skip_tag, self.skip_n = tag, 1
             return
         if tag == "math":
-            self.math = {"tex": a.get("alttext", "").strip(), "buf": [], "in_tex": False}
+            self.math = {"tex": a.get("alttext", "").strip(), "buf": [], "in_tex": False, "display": a.get("display") == "block"}
+            return
+        if tag == "table" and "ltx_eqn_table" in a.get("class", "").split():
+            self.in_equation = True
+            return
+        if self.in_equation:
+            if tag == "tr":
+                self.equation = {"tex": [], "number": []}
             return
         if tag in BOUNDARY:
             if not self.blocks:
@@ -569,9 +665,28 @@ class _Reader(html.parser.HTMLParser):
             ok = urllib.parse.urlparse(href).scheme in ("http", "https")
             self._emit(f'<a href="{html.escape(href, quote=True)}">' if ok else "<a>")
         elif tag in BLOCK:
+            if tag == "figure":
+                self.figure_depth += 1
+                self.figures.append(True)
             self._open(tag)
         elif tag in KEEP:
             self._emit(f"<{tag}>")
+
+    def _image(self, a: dict[str, str]) -> None:
+        src = a.get("src", "").strip()
+        lazy = next((a[k].strip() for k in LAZY_SRC if a.get(k, "").strip()), "")
+        if lazy and (not src or src.lower().startswith("data:")):
+            src = lazy
+        if not src:
+            return
+        src = urllib.parse.urljoin(self.base, src)
+        if urllib.parse.urlparse(src).scheme not in ("http", "https"):
+            return
+        sizes = [int(a[k]) for k in ("width", "height") if a.get(k, "").strip().isdigit()]
+        if sizes and (max(sizes) < ICON_MAX or min(sizes) <= PIXEL_MAX):
+            return
+        kept = {"src": src, "alt": a.get("alt", "").strip(), **{k: a[k].strip() for k in ("width", "height") if a.get(k, "").strip().isdigit()}}
+        self._emit("<img" + "".join(f' {k}="{html.escape(v, quote=True)}"' for k, v in kept.items()) + ">")
 
     def handle_endtag(self, tag):
         if tag == "title":
@@ -584,11 +699,50 @@ class _Reader(html.parser.HTMLParser):
             if tag == "annotation":
                 self.math["in_tex"] = False
             elif tag == "math":
-                tex = self.math["tex"] or "".join(self.math["buf"]).strip()
+                tex = " ".join((self.math["tex"] or "".join(self.math["buf"])).split())  # the client's $ does not cross lines
+                display = self.math["display"]
                 self.math = None
                 if tex:
                     self.has_math = True
-                    self._emit(html.escape(f"${tex}$", quote=False))
+                    if self.equation is not None:
+                        self.equation["tex"].append(tex)
+                    else:
+                        mark = "$$" if display else "$"
+                        self._emit(html.escape(f"{mark}{tex}{mark}", quote=False))
+            return
+        if self.in_equation:
+            if tag == "table":
+                self.in_equation = False
+                self.equation = None
+            elif tag == "tr" and self.equation is not None:
+                row, self.equation = self.equation, None
+                if row["tex"]:
+                    number = " ".join("".join(row["number"]).split())
+                    self._open("p")
+                    self._emit(html.escape(f"$${' '.join(row['tex'])}$$" + (f" {number}" if number else ""), quote=False))
+                    self._close("p")
+            return
+        if self.tex_error is not None:
+            if tag == "span":
+                name, self.tex_error = "".join(self.tex_error).strip(), None
+                self._emit(TEX_ERROR)
+                self.after_macro = TEX_LABEL_TEXT if name in REFERENCE_MACROS else TEX_COLOR_TEXT if name in COLOR_MACROS else None
+                if name.startswith("{") and self.figure_depth:  # \begin{tikzpicture}: the source of a picture follows
+                    self.dropping_figure = True
+                    self._open("p")
+                    self._emit(f"<em>{FIGURE_NOT_DRAWN}</em>")
+                    self._close("p")
+            return
+        if tag == "figure":
+            if not self.figures:
+                return
+            self.figure_depth -= 1
+            if not self.figure_depth:
+                self.dropping_figure = False
+            if self.figures.pop():
+                self._close(tag)
+            return
+        if self.dropping_figure:
             return
         if tag in BOUNDARY:
             if not self.blocks:
@@ -611,6 +765,18 @@ class _Reader(html.parser.HTMLParser):
             if self.math["in_tex"]:
                 self.math["buf"].append(data)
             return
+        if self.tex_error is not None:
+            self.tex_error.append(data)
+            return
+        if self.dropping_figure:
+            return
+        if self.after_macro and data.strip():
+            data = self.after_macro.sub(TEX_LABEL, data, count=1)
+            self.after_macro = None
+        if self.in_equation:
+            if self.equation is not None and not self.skip_n:
+                self.equation["number"].append(data)
+            return
         if not self.skip_n:
             self._emit(html.escape(data, quote=False))
 
@@ -631,6 +797,10 @@ class _Node:
     href: str = ""
     cls: str = ""
     kids: list = field(default_factory=list)  # _Node or str (unescaped text)
+    image: tuple = ()  # an <img>'s (name, value) pairs, in IMAGE_ATTRS order
+
+    def has_image(self) -> bool:
+        return self.tag == "img" or any(isinstance(k, _Node) and k.has_image() for k in self.kids)
 
     def text(self) -> str:
         return "".join(k if isinstance(k, str) else k.text() for k in self.kids)
@@ -643,11 +813,13 @@ class _Node:
         if self.tag == "#root":
             return inner
         attrs = (f' href="{html.escape(self.href, quote=True)}"' if self.href else "") + (f' class="{self.cls}"' if self.cls else "")
+        attrs += "".join(f' {k}="{html.escape(v, quote=True)}"' for k, v in self.image)
         return f"<{self.tag}{attrs}>" if self.tag in VOID else f"<{self.tag}{attrs}>{inner}</{self.tag}>"
 
 
 class _Tree(html.parser.HTMLParser):
-    """Parses the reader's own output back (known tags, an href at most); a stray closing tag is ignored."""
+    """Parses the reader's own output back (known tags, an href or an image's attributes at most); a stray closing tag
+    is ignored."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -656,6 +828,9 @@ class _Tree(html.parser.HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         node = _Node(tag, dict(attrs).get("href") or "")
+        if tag == "img":
+            given = dict(attrs)
+            node.image = tuple((k, given[k] or "") for k in IMAGE_ATTRS if k in given)
         self.stack[-1].kids.append(node)
         if tag not in VOID:
             self.stack.append(node)
@@ -688,7 +863,9 @@ def _same(a: str, b: str) -> bool:
 
 def _is_chrome(node: _Node, repeated: frozenset = frozenset()) -> bool:
     """A leaf block that is site furniture: empty, mostly links, a short line the page repeats, or a known short
-    phrase."""
+    phrase. A block with a picture in it is never furniture."""
+    if node.has_image():
+        return False
     text = _words(node.text())
     if not text or text in repeated:
         return True
@@ -886,13 +1063,24 @@ def reader(url: str, page: bytes, kind_charset: str = "") -> dict | None:
     if not zoned or tag != "article":
         _prune_chrome(root)
     _tidy(root, title, byline)
-    body = root.html()
+    body = _without_tex_errors(root.html())
     # drop the empty tags a stripped page leaves behind
     for _ in range(3):
         body = re.sub(r"<(\w+)>\s*</\1>", "", body)
     if _text_length(body) < MIN_TEXT:
         return None
     return {"title": title, "byline": byline, "html": body.strip(), **({"math": True} if parser.has_math else {})}
+
+
+def _without_tex_errors(body: str) -> str:
+    """Takes out the marks _Reader left for what LaTeXML could not convert, and any paragraph that is mostly that."""
+    def paragraph(found: re.Match) -> str:
+        count = found.group(1).count(TEX_ERROR)
+        leftovers = count >= LEFTOVER_ANY or (count >= LEFTOVER_MIN and _text_length(found.group(1)) / count < LEFTOVER_CHARS)
+        return "" if leftovers else found.group(0)
+    body = re.sub(r"<p>(.*?)</p>", paragraph, body, flags=re.S)
+    body = re.sub(rf"\s*\(\s*{TEX_ERROR}?{TEX_LABEL}\s*\)", "", body)
+    return body.replace(TEX_ERROR, "").replace(TEX_LABEL, "")
 
 
 def _is_pdf(answer: Response) -> bool:
@@ -906,7 +1094,8 @@ def page(url: str, prefer: str | None = None, get=fetch) -> dict:
     except Refused as error:
         return {"mode": "blocked", "url": url, "title": url, "reason": str(error)}
     host = urllib.parse.urlparse(url).hostname or url
-    doi = doi_of(url)
+    engage = engage_id(url)
+    doi = doi_of(url) or (engage_doi(engage, get) if engage else None)
     arxiv = arxiv_of(url) or ((radar_api.arxiv_id(doi[len(ARXIV_DOI):]), "abs") if doi and doi.startswith(ARXIV_DOI) else None)
     if arxiv and arxiv[0]:
         found = _arxiv(url, arxiv[0], arxiv[1], prefer, get)

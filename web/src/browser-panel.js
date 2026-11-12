@@ -7,15 +7,20 @@ import { icon } from '../../ui/src/icons.js';
 import { logoFor, logoSvg } from '../../ui/src/logos.js';
 import { interceptLinks, isPdfUrl } from '../../ui/src/links.js';
 import { noteFragment } from '../../ui/src/sources/view-kit.js';
+import { collectionMenu } from '../../ui/src/home/collection-menu.js';
+import { lucide } from '../../ui/src/icons.js';
+import { actionList, settledLabel } from '../../ui/src/chat/radar-digest-data.js';
 import { PdfViewer } from './pdf-viewer.js';
 import { mathNode } from '../../ui/src/chat/markdown.js';
-import { addressOf, blockedReason, createHistory, fileNameOf, firstPrefer, collectionOptions, mathParts, pageQuery, paperToAdd, readerPlan, sourceOf, stepBack } from './browser-state.js';
+import { addressOf, blockedReason, createHistory, fileNameOf, displayTex, equationOf, firstPrefer, mathParts, pageQuery, paperToAdd, readerPlan, sourceOf, stepBack } from './browser-state.js';
 
 const FRAME_SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox';
+// A full text's figure: LaTeXML gives the printed size, small on screen; scaled up, within a width and a share of the window.
+const FIGURE_SCALE = 1.6, FIGURE_MAX_WIDTH = 640, FIGURE_MAX_HEIGHT = 70; // FIGURE_MAX_HEIGHT in vh
 
 /**
  * @param {{ host: any, doc: Document, win: Window, into: HTMLElement }} o `into` is the shell's content area (position: relative)
- * @returns {{ open(url: string): void, close(): void, readonly isOpen: boolean, el: HTMLElement }}
+ * @returns {{ open(url: string, radar?: import('../../ui/src/host').RadarLink | null): void, close(): void, readonly isOpen: boolean, el: HTMLElement }}
  */
 export function createBrowserPanel({ host, doc, win, into }) {
   const root = h(doc, 'section', 'sbw-browser');
@@ -55,6 +60,10 @@ export function createBrowserPanel({ host, doc, win, into }) {
   let shownUrl = '';
   let token = 0;
   /** @type {HTMLElement | null} */ let returnTo = null;
+  /** The paper's place in a radar issue, when the page shown was opened from one. @type {import('../../ui/src/host').RadarLink | null} */
+  let radar = null;
+  /** Repaints the "For the radar" row after Add to Zotero counted as a verdict. @type {(() => void) | null} */
+  let repaintTeach = null;
 
   /** Links inside the reader view stay in the panel; a modified click goes to the system browser. */
   const innerHost = { can: { linksInside: true }, openLink: (/** @type {string} */ url, /** @type {{ outside?: boolean } | undefined} */ opts) => { if (opts?.outside) host.openLink(url, { outside: true }); else api.open(url); } };
@@ -86,13 +95,17 @@ export function createBrowserPanel({ host, doc, win, into }) {
   async function show(entry, push) {
     const mine = ++token;
     if (push) history.push(entry); else history.replace(entry);
+    radar = entry.radar ?? null;
+    repaintTeach = null;
     head('', entry.url);
     modeButton.hidden = true;
     barSave.replaceChildren();
     if (isPdfUrl(entry.url) && !entry.prefer) {
-      const name = fileNameOf(entry.url);
+      const name = radar?.paper.title || fileNameOf(entry.url);
       head(name, entry.url);
-      return pdf(entry.url, name);
+      // From an issue the paper is known even though /web/page was not asked.
+      if (radar && host.can.addToLibrary) barSave.replaceChildren(saveControl(radar.paper));
+      return pdf(entry.url, name, entry);
     }
     body.replaceChildren(h(doc, 'p', 'sbw-hint sbw-browser-status', 'Opening…'));
     /** @type {any} */ let answer = null;
@@ -102,7 +115,7 @@ export function createBrowserPanel({ host, doc, win, into }) {
     if (!answer || answer.mode === 'blocked') return card(blockedReason(answer, failure), answer?.url ?? entry.url, answer?.title);
     head(answer.title, answer.url, sourceOf(answer));
     if (answer.mode === 'pdf') {
-      const adding = host.can.addToLibrary ? paperToAdd(answer) : null;
+      const adding = host.can.addToLibrary ? paperToAdd(answer) ?? radar?.paper : null;
       if (adding) barSave.replaceChildren(saveControl(adding));
       return pdf(answer.url, answer.title);
     }
@@ -120,7 +133,7 @@ export function createBrowserPanel({ host, doc, win, into }) {
     body.replaceChildren(frame);
     modeButton.hidden = false;
     modeButton.textContent = 'Reader view';
-    modeButton.onclick = () => { if (history.current) void show({ url: history.current.url, prefer: 'reader' }, false); };
+    modeButton.onclick = () => { if (history.current) void show({ url: history.current.url, prefer: 'reader', radar }, false); };
   }
 
   /** @param {{ url: string, title: string, html: string, byline?: string, abstract?: string, math?: boolean }} page */
@@ -128,7 +141,8 @@ export function createBrowserPanel({ host, doc, win, into }) {
     const plan = readerPlan(page);
     // inline TeX ($…$, \(…\)) drawn as MathML, only for answers the server marked as having math
     const words = (/** @type {string} */ value) => plan.math ? withMath(value) : doc.createTextNode(value);
-    const article = h(doc, 'article', plan.articleClass);
+    // A paper's page has no long text to keep narrow: it takes the width, with the figure beside the abstract.
+    const article = h(doc, 'article', `${plan.articleClass}${plan.html ? (plan.math || plan.paper ? ' is-math' : '') : ' is-wide'}`);
     const top = h(doc, 'header', 'sbw-reader-head');
     const heading = h(doc, 'h1', 'sbw-reader-title');
     heading.append(words(plan.title));
@@ -144,7 +158,7 @@ export function createBrowserPanel({ host, doc, win, into }) {
       }
       top.append(chips);
     }
-    const adding = host.can.addToLibrary ? paperToAdd(page) : null;
+    const adding = host.can.addToLibrary ? paperToAdd(page) ?? radar?.paper : null;
     if (plan.links.length || plan.citation || adding) {
       const row = h(doc, 'div', 'sbw-reader-links');
       // The way into the paper leads: its full text where there is one, else the first link.
@@ -156,7 +170,7 @@ export function createBrowserPanel({ host, doc, win, into }) {
         b.append(icon(doc, link.outside ? 'open' : link.kind === 'pdf' ? 'paper' : 'note', 'sb-p-icon sbw-reader-out'), link.label);
         // the PDF goes to the PDF reader and the full text to this reader, both in the panel (Back returns here); a
         // publisher's page goes to the system browser, since publishers refuse to load here (bot protection)
-        b.addEventListener('click', () => (link.outside ? host.openLink(link.url, { outside: true }) : api.open(link.url)));
+        b.addEventListener('click', () => (link.outside ? host.openLink(link.url, { outside: true }) : api.open(link.url, radar)));
         row.append(b);
       }
       if (adding) row.append(saveControl(adding));
@@ -168,6 +182,7 @@ export function createBrowserPanel({ host, doc, win, into }) {
         cite.addEventListener('click', () => copyText(plan.citation, 'Citation copied'));
         row.append(cite);
       }
+      if (radar) row.append(teachRow());
       top.append(row);
     }
     article.append(top);
@@ -184,6 +199,7 @@ export function createBrowserPanel({ host, doc, win, into }) {
       text.append(h(doc, 'h2', 'sbw-reader-label', plan.abstractLabel), abstract);
     }
     text.append(noteFragment(doc, plan.html, host));
+    sizeFigures(text);
     if (plan.math) drawMath(text);
     // links in the article are relative to the page; the server already made them absolute
     interceptLinks(text, innerHost);
@@ -197,7 +213,7 @@ export function createBrowserPanel({ host, doc, win, into }) {
     // a paper answer comes back for its own address whatever is asked (arXiv refuses frames), so its page opens outside
     modeButton.onclick = plan.paper
       ? () => host.openLink(page.url, { outside: true })
-      : () => { if (history.current) void show({ url: history.current.url }, false); };
+      : () => { if (history.current) void show({ url: history.current.url, radar }, false); };
   }
 
   /** Under a paper's abstract: its DOI, and that only the abstract is open here, with the publisher's page (outside).
@@ -227,48 +243,91 @@ export function createBrowserPanel({ host, doc, win, into }) {
     return foot;
   }
 
-  /** Add to Zotero, beside a picker of collections. The collection last picked is the one offered next time.
-   *  @param {NonNullable<ReturnType<typeof paperToAdd>>} paper */
+  /** Like and Not for me, as icons, on a paper opened from a radar issue: the same verdicts as its row on Home; a
+   *  verdict given shows what happened and an Undo. */
+  function teachRow() {
+    const link = /** @type {import('../../ui/src/host').RadarLink} */ (radar);
+    const row = h(doc, 'div', 'sbw-reader-teach');
+    /** @param {'liked' | 'dismissed' | 'undo'} verdict */
+    const tell = async (verdict) => {
+      for (const b of Array.from(row.querySelectorAll('button'))) b.disabled = true;
+      try { await link.tell(verdict); } catch (error) {
+        host.logError(error);
+        host.notice("Couldn't save that. Try again.");
+      }
+      paint();
+    };
+    /** @param {string} label @param {() => void} run */
+    const pill = (label, run) => {
+      const b = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sb-dg-act'));
+      b.setAttribute('type', 'button');
+      b.append(label);
+      b.addEventListener('click', run);
+      return b;
+    };
+    const paint = () => {
+      const verdict = link.verdict();
+      row.replaceChildren();
+      if (verdict) {
+        // The Zotero button beside it already says whether an add went through or is waiting.
+        if (verdict !== 'added') row.append(h(doc, 'span', 'sb-dg-state', settledLabel(verdict)));
+        row.append(pill('Undo', () => void tell('undo')));
+        return;
+      }
+      for (const a of actionList(false).filter((x) => x.verdict === 'liked' || x.verdict === 'dismissed')) {
+        const b = pill('', () => void tell(/** @type {'liked' | 'dismissed'} */ (a.verdict)));
+        b.title = a.hint;
+        b.setAttribute('aria-label', a.label);
+        if ('lucide' in a.mark) b.append(lucide(doc, a.mark.lucide, 16));
+        row.append(b);
+      }
+    };
+    paint();
+    repaintTeach = paint;
+    return row;
+  }
+
+  /** Add to Zotero, split from the menu of collections; the collection last picked is the one used next time. From a
+   *  radar issue, adding also tells the radar, once: it counts as a like.
+   *  @param {import('../../ui/src/host').OutsidePaper} paper */
   function saveControl(paper) {
-    const box = h(doc, 'span', 'sbw-reader-save');
+    const link = radar;
+    const box = h(doc, 'span', 'sbw-reader-save sb-split');
     const add = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sb-button sbw-reader-action'));
     add.setAttribute('type', 'button');
     const logo = logoFor('zotero');
     add.append(...(logo ? [logoSvg(doc, logo, 14)] : []), 'Add to Zotero');
-    const picker = /** @type {HTMLSelectElement} */ (h(doc, 'select', 'sbw-reader-collection'));
-    picker.setAttribute('aria-label', 'Zotero collection');
-    picker.title = 'Which Zotero collection to add it to';
-    picker.hidden = true;
-    const choice = (/** @type {string} */ value, /** @type {string} */ label) => {
-      const option = /** @type {HTMLOptionElement} */ (h(doc, 'option', '', label));
-      option.value = value;
-      return option;
+    const menu = collectionMenu(doc, host, { buttonClass: 'sb-button sbw-reader-action sbw-reader-chev' });
+    const done = (/** @type {string} */ words) => {
+      if (add.lastChild) add.lastChild.textContent = words;
+      add.disabled = true;
+      menu.toggle.disabled = true;
     };
-    picker.append(choice('', 'My Library'));
-    host.json('/zotero/collections').then((/** @type {any} */ found) => {
-      const options = collectionOptions(found);
-      if (!options.length) return;
-      picker.append(...options.map((o) => choice(o.key, o.label)));
-      const saved = String(host.prefs.get('zoteroCollection') ?? '');
-      if (options.some((o) => o.key === saved)) picker.value = saved;
-      picker.hidden = false;
-    }, () => {});
-    picker.addEventListener('change', () => host.prefs.set('zoteroCollection', picker.value));
+    if (link?.verdict() === 'added') done('Added to Zotero');
     add.addEventListener('click', async () => {
       add.disabled = true;
-      const label = add.lastChild;
+      /** @type {any} */ let out = null;
       try {
-        const out = await host.addToLibrary?.([paper], { collection: picker.value || null });
+        out = await host.addToLibrary?.([paper], { collection: await menu.target() });
         if (!out?.items?.[0]) throw new Error('not added');
-        if (label) label.textContent = String(out.items[0].key).startsWith('queued-') ? 'Waiting for Zotero' : 'Added to Zotero';
-        picker.disabled = true;
       } catch (error) {
         host.logError(error);
         host.notice("Couldn't add this paper to Zotero.");
         add.disabled = false;
+        return;
+      }
+      done(String(out.items[0].key).startsWith('queued-') ? 'Waiting for Zotero' : 'Added to Zotero');
+      if (!link || link.verdict() === 'added') return;
+      try {
+        await link.tell('added');
+        repaintTeach?.();
+      } catch (error) {
+        // the paper is in Zotero; only the radar's lesson was lost
+        host.logError(error);
+        host.notice("Added to Zotero, but the radar couldn't be told.");
       }
     });
-    box.append(add, picker);
+    box.append(add, menu.el);
     return box;
   }
 
@@ -292,6 +351,17 @@ export function createBrowserPanel({ host, doc, win, into }) {
     }, () => {});
   }
 
+  /** A full text's figures: the size the page gives (LaTeXML's is the printed size, small on screen) times
+   *  FIGURE_SCALE, at most FIGURE_MAX_WIDTH, the column, or what keeps the height under FIGURE_MAX_HEIGHT of the
+   *  window; the width and height attributes keep the shape. @param {HTMLElement} root */
+  function sizeFigures(root) {
+    for (const img of /** @type {HTMLImageElement[]} */ (Array.from(root.querySelectorAll('figure img[width][height]')))) {
+      const w = Number(img.getAttribute('width')), tall = Number(img.getAttribute('height'));
+      if (!(w > 0 && tall > 0)) continue;
+      img.style.width = `min(100%, ${Math.round(Math.min(w * FIGURE_SCALE, FIGURE_MAX_WIDTH))}px, ${((w / tall) * FIGURE_MAX_HEIGHT).toFixed(2)}vh)`;
+    }
+  }
+
   /** @param {string} value @param {string} done */
   function copyText(value, done) {
     const clip = /** @type {any} */ (win.navigator)?.clipboard;
@@ -306,18 +376,25 @@ export function createBrowserPanel({ host, doc, win, into }) {
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       if (/[$\\]/.test(node.nodeValue ?? '') && !node.parentElement?.closest('code, pre')) found.push(/** @type {Text} */ (node));
     }
-    for (const node of found) node.replaceWith(withMath(node.nodeValue ?? ''));
+    for (const node of found) {
+      const paragraph = node.parentElement;
+      const equation = paragraph?.tagName === 'P' && paragraph.childNodes.length === 1 ? equationOf(node.nodeValue ?? '') : null;
+      if (!equation) { node.replaceWith(withMath(node.nodeValue ?? '')); continue; }
+      paragraph?.classList.add('sbw-eq');
+      paragraph?.replaceChildren(mathNode(doc, displayTex(equation.tex), true), ...(equation.number ? [h(doc, 'span', 'sbw-eq-number', equation.number)] : []));
+    }
   }
 
   /** A text with its TeX drawn as MathML (KaTeX, as in chat). @param {string} text */
   function withMath(text) {
     const out = doc.createDocumentFragment();
-    for (const part of mathParts(text)) out.append('tex' in part ? mathNode(doc, part.tex, false) : part.text);
+    for (const part of mathParts(text)) out.append('tex' in part ? mathNode(doc, part.display ? displayTex(part.tex) : part.tex, Boolean(part.display)) : part.text);
     return out;
   }
 
-  /** @param {string} url @param {string} title */
-  function pdf(url, title) {
+  /** @param {string} url @param {string} title @param {import('./browser-state.js').Entry} [entry] the link as asked, for the one fallback */
+  function pdf(url, title, entry) {
+    const mine = token;
     modeButton.hidden = true;
     // /web/page already fetched this and saw a PDF, so there is no probe; PDF.js reports a later failure through `ready`
     const path = `/web/pdf?${new URLSearchParams({ url })}`;
@@ -329,9 +406,16 @@ export function createBrowserPanel({ host, doc, win, into }) {
       src, data: host.server.sameOrigin ? undefined : host.assets.bytes(path),
       title: title || 'PDF', marks: [], openRaw: () => host.openLink(url, { outside: true }),
       failed: (message) => { problem.textContent = message; problem.hidden = false; },
+      tools: radar ? teachRow() : null,
     });
     body.replaceChildren(viewer.el, problem);
-    viewer.ready.catch((error) => card(`PDF.js couldn't open it (${error?.message ?? error}).`, url, title));
+    viewer.ready.catch((error) => {
+      if (mine !== token) return;
+      // A link that looked like a PDF but was not one (a publisher's page behind it, 415 from /web/pdf): ask for the
+      // paper's page instead, once; `fell` keeps a second failure from asking again.
+      if (entry && !entry.fell) return void show({ url, prefer: 'reader', fell: true, radar }, false);
+      card(`The link did not give a PDF. Publishers often answer with a web page for links that are not open access. (${error?.message ?? error})`, url, title || 'The PDF did not open here');
+    });
   }
 
   const onKey = (/** @type {KeyboardEvent} */ event) => { if (event.key === 'Escape' && !root.hidden) api.close(); };
@@ -340,11 +424,11 @@ export function createBrowserPanel({ host, doc, win, into }) {
   const api = {
     el: root,
     get isOpen() { return !root.hidden; },
-    /** @param {string} url */
-    open(url) {
+    /** @param {string} url @param {import('../../ui/src/host').RadarLink | null} [from] the paper's place in a radar issue, when opened from one */
+    open(url, from) {
       if (root.hidden) { returnTo = /** @type {HTMLElement | null} */ (doc.activeElement); history.clear(); }
       root.hidden = false;
-      void show({ url, prefer: firstPrefer(url, win.location.protocol) }, true);
+      void show({ url, prefer: firstPrefer(url, win.location.protocol), radar: from ?? null }, true);
     },
     close() {
       token++;

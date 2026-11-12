@@ -31,12 +31,17 @@ const root = fileURLToPath(new URL('..', import.meta.url)); // ui/
 const repoRoot = fileURLToPath(new URL('../../zotero', import.meta.url)); // zotero/
 const webRoot = fileURLToPath(new URL('../../web', import.meta.url)); // web/
 // The web app lives in ../web: its bundle is served as /dist-web/… and its sources as /src/web/… (their old place).
+// The shell sets its mark as a page-relative 'veritas-mark-180.png'; in the real app that file sits beside index.html in
+// dist-web/, so the harness pages in dev/harness/ get dist-web's images under their own path. The server serves the app at
+// /app/ (server/http_api.py), and only there does the app use its own origin (web/src/connection.js isServedByServer).
 const webFile = (/** @type {string} */ path) => path.startsWith('/dist-web/') ? join(webRoot, path)
-  : path.startsWith('/src/web/') ? join(webRoot, 'src', path.slice('/src/web/'.length)) : null;
+  : path.startsWith('/app/') ? join(webRoot, 'dist-web', path.slice('/app/'.length))
+  : path.startsWith('/src/web/') ? join(webRoot, 'src', path.slice('/src/web/'.length))
+  : /^\/dev\/harness\/veritas-[a-z0-9-]+\.png$/.test(path) ? join(webRoot, 'dist-web', path.slice('/dev/harness/'.length)) : null;
 const outDir = fileURLToPath(new URL('out', import.meta.url));
 await import('node:fs/promises').then((fs) => fs.mkdir(outDir, { recursive: true }));
 
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json', '.woff2': 'font/woff2', '.webp': 'image/webp' };
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json', '.woff2': 'font/woff2', '.webp': 'image/webp', '.png': 'image/png' };
 
 const server = createServer(async (req, res) => {
   try {

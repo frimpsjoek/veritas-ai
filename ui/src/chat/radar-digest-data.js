@@ -34,37 +34,48 @@ export function rowLine(row) {
 /** @typedef {{ logo: "zotero" } | { lucide: "bookmark" | "thumbsUp" | "thumbsDown" }} Mark the action's icon: a brand logo, or a Lucide icon */
 
 /**
- * The row's actions, drawn as icons alone; each says in its tooltip (and to a screen reader) what it does and teaches.
- * The first saves the paper: Add to Zotero where this setup has a Zotero library, Read later where it has none.
+ * The row's actions; each says in its tooltip (and to a screen reader) what it does and teaches, and `key` is the
+ * letter that does the same from the keyboard on Home. The first saves the paper: Add to Zotero where this setup has
+ * a Zotero library, Read later where it has none.
  * @param {boolean} canAdd whether this host can add to the library
- * @returns {{ verdict: Verdict, label: string, primary: boolean, mark: Mark, hint: string }[]}
+ * @returns {{ verdict: Verdict, label: string, key: string, primary: boolean, mark: Mark, hint: string }[]}
  */
 export function actionList(canAdd) {
-  /** @type {{ verdict: Verdict, label: string, primary: boolean, mark: Mark, hint: string }} */
+  /** @type {{ verdict: Verdict, label: string, key: string, primary: boolean, mark: Mark, hint: string }} */
   const save = canAdd
-    ? { verdict: 'added', label: 'Add to Zotero', primary: true, mark: { logo: 'zotero' }, hint: 'Add to Zotero: save this paper to your library (more like this)' }
-    : { verdict: 'later', label: 'Read later', primary: true, mark: { lucide: 'bookmark' }, hint: 'Read later: keep this paper on your reading list (more like this)' };
+    ? { verdict: 'added', label: 'Add to Zotero', key: 'a', primary: true, mark: { logo: 'zotero' }, hint: 'Add to Zotero: save this paper to your library (more like this)' }
+    : { verdict: 'later', label: 'Read later', key: 'a', primary: true, mark: { lucide: 'bookmark' }, hint: 'Read later: keep this paper on your reading list (more like this)' };
   return [
     save,
-    { verdict: 'liked', label: 'Like', primary: false, mark: { lucide: 'thumbsUp' }, hint: 'Like: show me more papers like this' },
-    { verdict: 'dismissed', label: 'Dislike', primary: false, mark: { lucide: 'thumbsDown' }, hint: 'Dislike: not relevant, show fewer papers like this' },
+    { verdict: 'liked', label: 'Like', key: 'l', primary: false, mark: { lucide: 'thumbsUp' }, hint: 'Like: show me more papers like this' },
+    { verdict: 'dismissed', label: 'Not for me', key: 'd', primary: false, mark: { lucide: 'thumbsDown' }, hint: 'Not for me: show fewer papers like this' },
   ];
 }
 
-/** What a settled row says in place of its actions. @param {Verdict} verdict */
-export const settledLabel = (verdict) => (verdict === 'added' ? 'Added to Zotero' : verdict === 'later' ? 'Saved to read later' : verdict === 'liked' ? 'Liked' : 'Disliked');
+/** What a settled row says in place of its actions: what happened, and what the radar took from it. @param {Verdict} verdict */
+export const settledLabel = (verdict) => (verdict === 'added' ? 'Added to Zotero' : verdict === 'later' ? 'Saved to read later' : verdict === 'liked' ? 'Liked: more like this' : 'Not for me: fewer like this');
 
 /** The toast after a click, and after Undo. @param {Verdict | 'undo'} verdict */
 export function toastText(verdict) {
   if (verdict === 'undo') return 'Undone';
-  return verdict === 'added' ? 'Added to Zotero' : verdict === 'later' ? 'Saved to read later' : verdict === 'liked' ? 'Liked: more like this' : 'Disliked: fewer like this';
+  return verdict === 'added' ? 'Added to Zotero' : verdict === 'later' ? 'Saved to read later' : settledLabel(verdict);
+}
+
+/** Home's keys: j / k move between papers, a / l / d judge the current one. Nothing while typing or with a modifier.
+ *  @param {{ key: string, target: any, metaKey: boolean, ctrlKey: boolean, altKey: boolean }} event
+ *  @returns {'next' | 'prev' | Verdict | null} */
+export function keyAction(event) {
+  if (event.metaKey || event.ctrlKey || event.altKey) return null;
+  const tag = String(event.target?.tagName ?? '').toUpperCase();
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || event.target?.isContentEditable) return null;
+  return event.key === 'j' ? 'next' : event.key === 'k' ? 'prev' : event.key === 'a' ? 'added' : event.key === 'l' ? 'liked' : event.key === 'd' ? 'dismissed' : null;
 }
 
 /** A row as the host's "add to library" takes it. @param {PaperRow} row @returns {OutsidePaper} */
 export function outsidePaper(row) {
   return {
     title: row.title, authors: row.authors, year: row.year, venue: row.venue, doi: row.doi, abstract: row.abstract,
-    url: row.doi ? `https://doi.org/${row.doi}` : row.url, source: row.foundBy[0] ?? 'radar',
+    url: row.doi ? `https://doi.org/${row.doi}` : row.url, source: row.foundBy?.[0] ?? 'radar',
     arxiv: row.pdfUrl?.match(/arxiv\.org\/pdf\/([^?#]+)/i)?.[1] ?? null, citations: row.citations,
   };
 }

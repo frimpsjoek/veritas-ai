@@ -110,6 +110,28 @@ export const WAITING = { id: 'q1', kind: 'annotation', key: 'ATTOK001', done: fa
 
 const json = (body, status = 200) => ({ status, contentType: 'application/json', body: JSON.stringify(body) });
 
+/** A full text's figures as the server gives them: LaTeXML's printed sizes, one wide and one tall, each captioned. The
+ *  pictures have those shapes too (a loaded image keeps its own shape, whatever its attributes say). */
+const picture = (w, h) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="${w}" height="${h}" fill="#cde"/><circle cx="${w / 2}" cy="${h / 2}" r="${Math.min(w, h) / 3}" fill="#357"/></svg>`)}`;
+const FIGURES = [
+  `<p>${'The burrows were mapped over two winters, and the plots below show where the voles went and how deep. '.repeat(4)}</p>`,
+  `<figure><img src="${picture(238, 183)}" alt="Refer to caption" width="238" height="183"><figcaption>Figure 1: burrow depth against the week of winter.</figcaption></figure>`,
+  '<p>The tall panel stacks the two winters.</p>',
+  `<figure><img src="${picture(215, 404)}" alt="Refer to caption" width="215" height="404"><figcaption>Figure 2: the two winters, one above the other.</figcaption></figure>`,
+].join('');
+
+/** A paper's full text as the server gives it: numbered equations in paragraphs of their own, inline math in the sentences. */
+const EQUATIONS = [
+  '<p>We then take the matrix $\\mathbf{M}$ to be the first $f$ columns of $\\mathbf{Q}^{-1}$, so that the fractions of the burrows follow from one another, and the sum over $\\alpha$ stays bounded for every choice of the mixture studied here.</p>',
+  '<p>$$\\mathbf{Q}^{-1}\\begin{bmatrix}\\tilde{\\mathbf{x}}\\\\ \\hline\\cr 1\\end{bmatrix}=\\mathbf{x}.$$ (13)</p>',
+  '<p>$$\\frac{\\partial x_{i}}{\\partial\\tilde{x}_{j}}=\\mathbf{M}_{ij}.$$ (14)</p>',
+  '<p>Next, we define the matrix $\\Gamma$ with elements</p>',
+  '<p>$$\\Gamma_{\\alpha\\beta}=\\left(\\dfrac{\\partial\\mu_{\\alpha}}{\\partial\\tilde{x}_{\\beta}}\\right)_{\\tilde{x}\\neq\\tilde{x}_{\\beta}}=\\sum_{i=1}^{C}\\left(\\dfrac{\\partial\\mu_{\\alpha}}{\\partial n_{i}}\\right)\\left(\\dfrac{\\partial n_{i}}{\\partial\\tilde{x}_{\\beta}}\\right)_{\\tilde{x}\\neq\\tilde{x}_{\\beta}}\\\\ =\\sum_{i=1}^{C}N\\left(\\dfrac{\\partial\\mu_{\\alpha}}{\\partial n_{i}}\\right)\\left(\\dfrac{\\partial x_{i}}{\\partial\\tilde{x}_{\\beta}}\\right)_{\\tilde{x}\\neq\\tilde{x}_{\\beta}}+\\sum_{i=1}^{C}\\frac{n_{i}}{N}\\left(\\dfrac{\\partial\\mu_{\\alpha}}{\\partial n_{i}}\\right)\\left(\\dfrac{dN}{d\\tilde{x}_{\\beta}}\\right)_{\\tilde{x}\\neq\\tilde{x}_{\\beta}},$$ (15)</p>',
+  '<p>where the second term in the last line sums to zero.</p>',
+  '<p>$$\\Gamma=\\mathbf{U}\\mathbf{M}.$$ (16)</p>',
+  '<p>$$d\\mu_{\\alpha}=\\sum_{i=1}^{f}\\Gamma_{\\alpha i}d\\tilde{x}_{i},$$ (17)</p>',
+].join('');
+
 /** GET /web/page for the invented sites of dev/browser-checks.mjs (spec 015). @param {string} url @param {string | null} prefer */
 function webPage(url, prefer) {
   const host = new URL(url).hostname;
@@ -127,6 +149,8 @@ function webPage(url, prefer) {
   if (host === 'shop.example') return json({ mode: 'reader', url, title: 'Tickets', byline: '', html: `<p>Tickets cost $5 and $10 at the door. ${'The late show is cheaper on weekdays. '.repeat(8)}</p>` });
   if (host === 'frame.example' || host === 'reader.example') {
     const html = `<p>Voles cache seeds in autumn and shift to roots in winter, which is why the study followed them for ${'a long season '.repeat(12)}.</p><p>Read <a href="https://reader.example/other">the other article</a>, <a href="https://files.example/paper.pdf">the preprint</a> or <a href="https://reader.example/blocked">a closed one</a>.</p>`;
+    if (url.endsWith('/figures')) return json({ mode: 'reader', url, title: 'Vole burrows in pictures', byline: 'Ann Chen', html: FIGURES });
+    if (url.endsWith('/equations')) return json({ mode: 'reader', url, title: 'Vole burrows as a mixture', byline: 'Ann Chen', html: EQUATIONS, math: true });
     return json({ mode: 'reader', url: url.replace('/other', '/other'), title: url.endsWith('/other') ? 'The other article' : 'Voles in the reader', byline: 'Ann Chen, Bo Ruiz', html });
   }
   if (host === 'slow.example') return json({ mode: 'blocked', url, title: 'slow.example', reason: 'The site took too long to answer.' });
@@ -167,6 +191,9 @@ export function answer(url, method, post, headers = {}) {
   if (url.hostname === 'frame.example') return { status: 200, contentType: 'text/html', body: '<!doctype html><title>Framed</title><h1 id="framed">A framed page</h1>' };
   if (url.pathname === '/sources' || url.pathname.startsWith('/sources/')) return folders(url, method, post);
   switch (url.pathname) {
+    // the server light (shell.js) and guided setup (setup-card.js) ask these; shapes as server/http_api.py and setup_suggest.py
+    case '/ping': return json({ ok: true, ready: true });
+    case '/setup/suggest': return json({ zotero: null, vaults: [], pdf_folders: [] });
     case '/web/page': return webPage(q.get('url') ?? '', q.get('prefer'));
     case '/web/pdf': return q.get('url') === 'https://files.example/paper.pdf' ? { status: 200, contentType: 'application/pdf', body: PDF } : json({ error: 'This link is not a PDF' }, 415);
     case '/zotero/collections': return json(COLLECTIONS);

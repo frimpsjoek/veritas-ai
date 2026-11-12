@@ -1233,7 +1233,7 @@ export async function createLocalRuntime(deps) {
     let out;
     const noTools = { scope: { kind: /** @type {const} */ ('library') }, web: /** @type {const} */ ('off'), sources: { papers: false, notes: false, scholarly: false, web: false }, audit: `radar-why:${routine.id}`, none: true };
     // The profile check reads the best-ranked candidates and drops those outside the user's field before New is picked.
-    const judge = (/** @type {import("./radar-types").RadarItem[]} */ pool, /** @type {{ topics: string[], seeds: string[], rejected: string[] }} */ profile) =>
+    const judge = (/** @type {import("./radar-types").RadarItem[]} */ pool, /** @type {{ topics: string[], seeds: string[], rejected: string[], liked?: string[] }} */ profile) =>
       judgeFit(pool, { ...profile, turn: (prompt, schema) => runner.structured('writer', prompt, schema, { ...noTools, audit: `radar-judge:${routine.id}` }, signal) });
     try {
       out = await collectRadar({ config, since, now, fetch: net, library: deps.library, hub: deps.gateway.mcpServers, state: await radarState(routine), signal, keyed: Boolean((await settingsStore.get()).openalex.apiKey?.trim()), abstractFetch: abstractNet(net), judge });
@@ -1272,7 +1272,9 @@ export async function createLocalRuntime(deps) {
     const earlier = new Map();
     for (const [title, r] of before) earlier.set(title, /** @type {any} */ (await store.readResult(sessionId, r.ref.id, r.ref.version))?.rows ?? []);
     const screened = out.offProfile ? `; ${out.offProfile} outside your field left out` : out.judgeProblem ? `; profile check skipped (${out.judgeProblem})` : '';
-    const change = `Radar: ${out.picked.length} new ${out.picked.length === 1 ? 'paper' : 'papers'} from ${out.sourcesAnswered} ${out.sourcesAnswered === 1 ? 'source' : 'sources'}${screened}${failures}`;
+    const under = out.picked.filter((it) => it.nearBar).length;
+    const filled = under ? `; ${under} just under the bar` : '';
+    const change = `Radar: ${out.picked.length} new ${out.picked.length === 1 ? 'paper' : 'papers'} from ${out.sourcesAnswered} ${out.sourcesAnswered === 1 ? 'source' : 'sources'}${filled}${screened}${failures}`;
     const taken = new Set([...earlier.values()].flat().map((r) => r.id));
     const rowsOf = (/** @type {import("./radar-types").RadarItem[]} */ items) => items.map((it, i) => {
       let id = rowIdFor(it, i);
@@ -1282,7 +1284,7 @@ export async function createLocalRuntime(deps) {
         id, ref: { kind: 'web', url: it.url }, inLibrary: false, title: it.title, authors: it.authors, year: it.year, venue: it.venue,
         doi: it.doi, url: it.url, abstract: it.abstract, abstractStatus: it.abstract ? 'source' : 'none', citations: it.cites ?? null, fullText: false,
         pdfUrl: it.arxiv ? `https://arxiv.org/pdf/${it.arxiv}` : null, studyType: null, foundBy: it.sources.map((id) => sourceLabel(id, config)),
-        radar: { key: it.id, score: it.score ?? 0, why: /** @type {any} */ (it.why), links: it.links, sources: it.sources, date: it.date, ...(it.reason ? { reason: it.reason } : {}), ...(why.lines.get(it.id) ? { why_line: why.lines.get(it.id) } : {}) },
+        radar: { key: it.id, score: it.score ?? 0, why: /** @type {any} */ (it.why), links: it.links, sources: it.sources, date: it.date, ...(it.reason ? { reason: it.reason } : {}), ...(it.nearBar ? { nearBar: true } : {}), ...(it.afield ? { afield: it.afield } : {}), ...(why.lines.get(it.id) ? { why_line: why.lines.get(it.id) } : {}) },
       });
     });
     /** @type {import("./domain").ResultRef[]} */
@@ -1932,7 +1934,7 @@ export async function createLocalRuntime(deps) {
     },
 
     async dispose() {
-      await routineScheduler.dispose(); // first: a running routine ends as "stopped" before the things it uses go away
+      await routineScheduler.dispose(); // first: a running routine ends as "app closed" before the things it uses go away
       // A running columns step writes its version (unfinished cells pending) before the runtime goes away.
       for (const run of stepRuns.values()) { run.reason = 'stopped'; run.controller.abort(); }
       await Promise.allSettled([...stepRuns.values()].map((run) => run.done));

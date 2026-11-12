@@ -139,8 +139,42 @@ export async function runBrowserChecks(browser, port, outDir) {
     check(`${tag} an arXiv paper shows its title once, in the same font family as its text`, paper.titles === 1 && paper.titleFont === paper.bodyFont && paper.bylineFont === paper.bodyFont, paper);
     check(`${tag} the abstract is body text under a small label, its TeX drawn`, paper.label === 'Abstract' && paper.quotes === 0 && paper.math === 1, paper);
     check(`${tag} subjects are chips and PDF / Full text are header buttons`, JSON.stringify(paper.chips) === '["Mesoscale and Nanoscale Physics","Materials Science"]' && JSON.stringify(paper.links) === '["PDF","Full text"]' && paper.meta === 'arXiv:2607.25690v2 · Submitted 28 Jul 2026 · revised 25 Oct 2026' && !paper.sideways, paper);
+    const beside = await page.evaluate(() => {
+      const article = document.querySelector('.sbw-browser-article');
+      const figure = document.createElement('figure');
+      figure.className = 'sbw-reader-figure';
+      figure.innerHTML = '<img alt="" style="aspect-ratio:4/3;background:#cdd">';
+      document.querySelector('.sbw-reader-head').after(figure);
+      const text = article.querySelector('.sbw-note-body p');
+      text.textContent = 'Proximity effects in layered heterostructures are commonly represented by static parameters. '.repeat(14);
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      const lines = [...range.getClientRects()];
+      return { wide: article.classList.contains('is-wide'), articleWidth: Math.round(article.getBoundingClientRect().width), first: Math.round(lines[0].width), last: Math.round(Math.max(...lines.slice(-2).map((r) => r.width))), figure: Math.round(figure.getBoundingClientRect().width) };
+    });
+    check(`${width}px a paper's page takes the width, with the abstract beside the figure and on beneath it`, beside.wide && (width < 760 || (beside.first < beside.last && beside.articleWidth > 800)), beside);
     await page.screenshot({ path: join(outDir, `browser-arxiv-${width}.png`) });
     await page.click('.sbw-reader-links button:last-child');
+    await page.waitForFunction(() => document.querySelector('.sbw-browser-title')?.textContent === 'The other article');
+    await open('https://reader.example/equations');
+    await page.waitForSelector('.sbw-eq');
+    const maths = await page.evaluate(() => {
+      const eqs = [...document.querySelectorAll('.sbw-eq')];
+      const article = document.querySelector('.sbw-browser-article');
+      return { count: eqs.length, numbers: eqs.map((e) => e.querySelector('.sbw-eq-number')?.textContent).join(), drawn: eqs.every((e) => e.querySelector('math[display="block"]')), raw: article.textContent.includes('\\begin') || article.textContent.includes('$'), rawBox: document.querySelectorAll('.sb-math.is-raw').length, tables: article.querySelectorAll('table').length, inline: article.querySelectorAll('p:not(.sbw-eq) math').length, sideways: document.scrollingElement.scrollWidth > innerWidth };
+    });
+    check(`${tag} equations are display math with their numbers, no raw TeX and no boxes`, maths.count === 5 && maths.numbers === '(13),(14),(15),(16),(17)' && maths.drawn && !maths.raw && !maths.rawBox && !maths.tables && maths.inline === 5 && !maths.sideways, maths);
+    await page.screenshot({ path: join(outDir, `browser-math-${width}.png`) });
+    await open('https://reader.example/figures');
+    await page.waitForFunction(() => [...document.querySelectorAll('.sbw-note-body figure img')].length === 2 && [...document.querySelectorAll('.sbw-note-body figure img')].every((i) => i.complete && i.naturalWidth > 0));
+    const figures = await page.evaluate(() => [...document.querySelectorAll('.sbw-note-body figure')].map((f) => {
+      const img = f.querySelector('img').getBoundingClientRect(), box = f.getBoundingClientRect();
+      return { w: Math.round(img.width), h: Math.round(img.height), col: Math.round(box.width), centred: Math.abs((img.left - box.left) - (box.right - img.right)) < 2, caption: Boolean(f.querySelector('figcaption')?.textContent), fits: img.height <= innerHeight * 0.7 + 1, sideways: document.scrollingElement.scrollWidth > innerWidth };
+    }));
+    // the wide one is scaled up from its printed 238 px (unless the column is narrower); the tall one stays within 70% of the window
+    check(`${tag} a full text's figures show, scaled up, centred, captioned and within the window`, figures.length === 2 && figures.every((f) => f.centred && f.caption && f.fits && !f.sideways) && (figures[0].w > 238 || figures[0].w >= figures[0].col - 1) && Math.abs(figures[0].w / figures[0].h - 238 / 183) < 0.02 && Math.abs(figures[1].w / figures[1].h - 215 / 404) < 0.02, figures);
+    await page.screenshot({ path: join(outDir, `browser-figures-${width}.png`) });
+    await open('https://reader.example/other');
     await page.waitForFunction(() => document.querySelector('.sbw-browser-title')?.textContent === 'The other article');
     check(`${tag} "Full text" opens in the panel`, (await panel()).open);
     await open('https://shop.example/tickets');
@@ -253,6 +287,173 @@ export async function runBrowserChecks(browser, port, outDir) {
     await page.waitForFunction(() => document.querySelector('.sbw-browser-title')?.textContent === 'Stoat coat colour across a snow gradient');
     check(`${tag} ← from the second paper returns to the first`, (await panel()).open);
     await page.click('.sbw-browser-tool[aria-label="Close"]');
+    check(`${tag} no page errors`, errors.length === 0, errors);
+    await page.close();
+  }
+  // Home as a judging screen, and the reader opened from it (2026-11-04): the run line, the pills and their keys, the
+  // collection menu, the reader's "For the radar", the server light. Invented papers only.
+  const invented = (n) => Array.from({ length: n }, (_, i) => ({
+    id: `x${i}`, title: `Vole burrow study number ${i + 1}`, authors: ['A. Vole'], venue: 'Ecology', year: 2026, doi: `10.1/x${i}`, url: `https://example.org/x${i}`, foundBy: ['bioRxiv'], abstract: 'Voles dig.', citations: 1,
+    radar: { key: `doi:10.1/x${i}`, score: 0.8, links: [], sources: ['bioRxiv'], date: '2026-11-01', why_line: 'Burrows stay warm.', ...(i === 1 ? { nearBar: true } : {}), why: { similarity: 0.81, author: 0, journal: 0, topic: 1, negative: 0, seed: { label: 'text:s', title: 'Burrows of the northern vole', whole: true } } },
+  }));
+  for (const [width, theme] of [[1280, 'light'], [1280, 'dark'], [390, 'light'], [390, 'dark']]) {
+    const tag = `judging ${width}px ${theme}`;
+    const shot = (name) => page.screenshot({ path: join(outDir, `judging-${name}-${width}-${theme}.png`), fullPage: false });
+    const page = await browser.newPage({ viewport: { width, height: 1000 }, colorScheme: theme });
+    const errors = [];
+    page.on('pageerror', (error) => errors.push(String(error)));
+    await useFixtures(page);
+    await page.goto(`${fakeUrl}&theme=${theme}`);
+    await page.waitForFunction(() => window.__sbWebReady === true, null, { timeout: 8000 });
+    // Zotero on, and a long issue; Home paints again on the way back
+    await page.evaluate(([rows]) => {
+      window.__host.can.addToLibrary = true;
+      const [fresh, worth] = window.__store.resultsBy.c4;
+      fresh.rows = rows.slice(0, 11).map((r, i) => (i === 0 ? { ...r, fullText: true, pdfUrl: 'https://files.example/paper.pdf' } : i === 3 ? { ...r, doi: '10.1/vole' } : r));
+      worth.rows = rows.slice(11).map((r) => ({ ...r, radar: { ...r.radar, nearBar: undefined, why_line: undefined, reason: 'Cited by 3 papers in your library' } }));
+      location.hash = '#/settings';
+    }, [invented(16)]);
+    await page.waitForTimeout(150);
+    await page.evaluate(() => { location.hash = '#/home'; });
+    await page.waitForSelector('.sbw-paper .sb-split');
+    await page.evaluate(() => document.fonts.ready);
+    const home = await page.evaluate(() => {
+      const first = document.querySelector('.sbw-paper');
+      return {
+        acts: [...first.querySelectorAll('.sb-dg-act')].map((b) => b.textContent), keys: [...first.querySelectorAll('.sb-dg-act')].map((b) => b.dataset.key), current: first.classList.contains('is-current'),
+        chips: first.querySelectorAll('.sbw-why-chip, .sbw-paper-open, .sbw-paper-source').length, authors: first.querySelector('.sbw-paper-meta')?.textContent, near: document.querySelectorAll('.sbw-paper')[1].textContent.includes('Just under the bar'),
+        judged: document.querySelector('.sbw-papers-judged'), more: document.querySelector('.sbw-papers-more')?.textContent,
+        worthHead: document.querySelector('h2.sbw-papers-head')?.firstChild.textContent, worthShown: document.querySelector('h2.sbw-papers-head').nextElementSibling.querySelectorAll('.sbw-paper').length, worthMore: document.querySelector('h2.sbw-papers-head').nextElementSibling.querySelector('.sbw-papers-more')?.textContent,
+        run: document.querySelector('.sbw-run')?.textContent, sideways: document.scrollingElement.scrollWidth > innerWidth,
+        summaryIcon: Boolean(document.querySelector('.sbw-paper-more > summary svg.sb-lucide')), hasMore: Boolean(document.querySelector('.sbw-paper-more')),
+      };
+    });
+    check(`${tag} icons with keys, on one line, on the first open paper`, JSON.stringify(home.acts) === '["Add to Zotero","Like","Not for me"]' && home.keys.join() === 'a,l,d' && home.current, home);
+    check(`${tag} no why, ways in or source lines; a row near the bar says so`, home.chips === 0 && home.near, home);
+    check(`${tag} steps: 8 shown of 11, 3 of 5 Worth reading, an h2`, !home.judged && home.more === 'Show 3 more' && home.worthHead === 'Worth reading' && home.worthShown === 3 && home.worthMore === 'Show 2 more', home);
+    check(`${tag} the run line says when the issue came; no sideways scroll`, /Issue built at|Last issue built/.test(home.run) && /next /.test(home.run) && !home.sideways, home);
+    check(`${tag} "Read the abstract" has a line icon, no arrow character`, home.summaryIcon || !home.hasMore, home);
+    await page.locator('.sbw-today').scrollIntoViewIfNeeded();
+    await page.evaluate(() => document.querySelector('.sbw-today').scrollIntoView({ block: 'start' }));
+    const wraps = await page.evaluate(() => {
+      const paper = [...document.querySelectorAll('.sbw-paper.has-figure')].find((p) => p.querySelector('.sbw-paper-why'));
+      const acts = document.querySelector('.sbw-paper .sb-dg-acts');
+      const tops = [...acts.querySelectorAll('.sb-dg-act, .sb-dg-chev')].map((b) => Math.round(b.getBoundingClientRect().top));
+      return { oneLine: new Set(tops).size === 1, authors: document.querySelector('.sbw-layout-authors')?.getAttribute('aria-pressed'), float: paper ? getComputedStyle(paper.querySelector('.sbw-paper-figure-box')).float : null };
+    });
+    check(`${tag} the icons sit on one line; authors are off by default; a figure floats so text runs round it`, wraps.oneLine && wraps.authors === 'false' && wraps.float !== 'none', wraps);
+    const runsRound = await page.evaluate(() => {
+      const paper = document.querySelector('.sbw-paper.has-figure');
+      const text = paper.querySelector('.sbw-paper-why');
+      text.textContent = 'Voles dig long burrows under the meadow in every season of the year. '.repeat(5);
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      const lines = [...range.getClientRects()];
+      return { first: Math.round(lines[0].width), last: Math.round(Math.max(...lines.slice(-2).map((r) => r.width))), figure: Math.round(paper.querySelector('.sbw-paper-figure-box').getBoundingClientRect().bottom), bottom: Math.round(lines.at(-1).bottom) };
+    });
+    check(`${tag} the abstract runs round the figure and takes the full width beneath it`, runsRound.bottom > runsRound.figure && runsRound.last > runsRound.first, runsRound);
+    await shot('home');
+    await page.evaluate(() => document.querySelector('h2.sbw-papers-head').scrollIntoView({ block: 'start' }));
+    await shot('worth');
+
+    // the collection menu on the split button, then the pick is what Add uses
+    await page.locator('.sbw-paper').first().locator('.sb-dg-chev').click();
+    await page.waitForSelector('.sb-coll-pop');
+    await page.evaluate(() => document.querySelector('.sb-coll-pop').scrollIntoView({ block: 'center' }));
+    const menu = await page.evaluate(() => ({ rows: [...document.querySelectorAll('.sb-coll-row .sb-coll-name')].map((r) => r.textContent), box: document.querySelector('.sb-coll-pop').getBoundingClientRect().right <= innerWidth }));
+    check(`${tag} the menu lists My Library and the tree, inside the window`, menu.rows.join() === 'My Library,Doorknob Design,Ecology,Foraging,Migration' && menu.box, menu);
+    await shot('menu');
+    await page.locator('.sb-coll-row', { hasText: 'Foraging' }).click();
+    await page.keyboard.press('Escape');
+
+    // the keys: a judges the current paper (with the collection just picked) and moves on, typing in a field does nothing
+    const feedback = () => page.evaluate(() => window.__store.feedback ?? []);
+    await page.evaluate(() => document.activeElement?.blur());
+    await page.keyboard.press('a');
+    await page.waitForFunction(() => document.querySelector('.sbw-paper .sb-dg-state')?.textContent.startsWith('Added to Zotero'));
+    const added = await page.evaluate(() => ({ state: document.querySelector('.sbw-paper .sb-dg-state').textContent, call: window.__calls.filter((c) => c.kind === 'add-to-library').at(-1), second: document.querySelectorAll('.sbw-paper')[1].classList.contains('is-current') }));
+    check(`${tag} a adds to the picked collection, says where, and moves on`, added.call.collection === 'foraging' && added.state === 'Added to Zotero \u00B7 Ecology \u203A Foraging' && added.second, added);
+    check(`${tag} a sends one 'added'`, (await feedback()).filter((f) => f.verdict === 'added').length === 1, await feedback());
+    await page.keyboard.press('l');
+    await page.keyboard.press('d');
+    await page.waitForFunction(() => document.querySelectorAll('.sbw-paper')[2].classList.contains('is-dismissed'));
+    const collapsed = await page.evaluate(() => { const p = document.querySelectorAll('.sbw-paper')[2]; return { why: getComputedStyle(p.querySelector('.sbw-paper-why')).display, state: p.querySelector('.sb-dg-state').textContent, undo: [...p.querySelectorAll('.sb-dg-act')].map((b) => b.textContent) }; });
+    check(`${tag} l likes, d folds the paper to its title and what was decided`, (await feedback()).map((f) => f.verdict).join() === 'added,liked,dismissed' && collapsed.why === 'none' && collapsed.state === 'Not for me: fewer like this' && collapsed.undo.join() === 'Undo', { f: await feedback(), collapsed });
+    await page.keyboard.press('k');
+    await page.keyboard.press('a');
+    await page.waitForTimeout(100);
+    check(`${tag} a settled paper is left alone by the keys`, (await feedback()).length === 3, await feedback());
+    await page.waitForTimeout(100);
+    await page.evaluate(() => document.querySelectorAll('.sbw-paper')[1].scrollIntoView({ block: 'start' }));
+    await shot('settled');
+
+    // from an issue, the reader judges the same paper: Like tells the radar once and the row on Home follows
+    const row = page.locator('.sbw-paper').nth(3);
+    await row.locator('a.sbw-paper-title').click();
+    await page.waitForSelector('.sbw-reader-teach');
+    const teach = await page.evaluate(() => ({ text: document.querySelector('.sbw-reader-teach').textContent, icons: document.querySelectorAll('.sbw-reader-links .sbw-reader-teach .sb-dg-act svg').length, split: Boolean(document.querySelector('.sbw-reader-links .sb-split .sb-coll')), select: document.querySelectorAll('select.sbw-reader-collection').length }));
+    check(`${tag} a paper opened from an issue has "For the radar" and the collection menu, no bare select`, teach.icons === 2 && teach.split && teach.select === 0, teach);
+    await shot('reader');
+    const reader = page.locator('.sbw-browser');
+    await reader.locator('.sbw-reader-links .sb-split > .sbw-reader-action').click();
+    // the Zotero button says it went through; the teach row beside it does not say so again, and offers Undo (a246ca4)
+    await page.waitForFunction(() => document.querySelector('.sbw-reader-links .sb-split > .sbw-reader-action')?.textContent === 'Added to Zotero');
+    const settled = await page.evaluate(() => ({ state: document.querySelector('.sbw-reader-teach .sb-dg-state')?.textContent ?? null, undo: document.querySelector('.sbw-reader-teach .sb-dg-act')?.textContent }));
+    check(`${tag} after Add to Zotero the teach row offers Undo and does not repeat "Added"`, settled.state === null && settled.undo === 'Undo', settled);
+    const toldOnce = (await feedback()).filter((f) => f.verdict === 'added' && f.key === 'doi:10.1/x3').length;
+    check(`${tag} Add to Zotero from an issue sends 'added' once`, toldOnce === 1, await feedback());
+    await page.locator('.sbw-browser-tool[aria-label="Close"]').click();
+    await page.waitForFunction(() => document.querySelectorAll('.sbw-paper')[3].querySelector('.sb-dg-state')?.textContent.startsWith('Added to Zotero'));
+    check(`${tag} the row on Home follows what the reader did`, true);
+
+    // the PDF from Home: read only, so it says what highlights need; judging and Add are in the bars
+    await page.evaluate(() => window.__host.openLink('https://files.example/paper.pdf'));
+    await page.waitForFunction(() => /Highlights need the paper in Zotero/.test(document.querySelector('.sbw-pdf-status')?.textContent ?? ''));
+    check(`${tag} a web PDF says highlights need the paper in Zotero`, true);
+    await page.locator('.sbw-browser-tool[aria-label="Close"]').click();
+
+    // the run line's other two states, each from what the routines list says
+    await page.evaluate(() => { window.__store.routines[1].running = true; location.hash = '#/settings'; });
+    await page.waitForTimeout(150);
+    await page.evaluate(() => { location.hash = '#/home'; });
+    await page.waitForSelector('.sbw-run.is-running');
+    const running = await page.evaluate(() => ({ line: document.querySelector('.sbw-run').textContent, run: document.querySelector('.sbw-today-run').textContent, disabled: document.querySelector('.sbw-today-run').disabled, stop: /Stop/.test(document.querySelector('.sbw-run').textContent) }));
+    check(`${tag} a run going: Running, since when, Run now disabled, no Stop (the service has none)`, /^Running \u00B7 seen running since \d\d:\d\d$/.test(running.line) && running.run === 'Running\u2026' && running.disabled && !running.stop, running);
+    await page.evaluate(() => document.querySelector('.sbw-run').scrollIntoView({ block: 'center' }));
+    await shot('running');
+    await page.evaluate(() => { const r = window.__store.routines[1]; r.running = false; r.lastRun = { at: new Date().toISOString(), slot: null, status: 'failed', reason: 'stopped' }; location.hash = '#/settings'; });
+    await page.waitForTimeout(150);
+    await page.evaluate(() => { location.hash = '#/home'; });
+    await page.waitForSelector('.sbw-run.is-failed');
+    const failed = await page.evaluate(() => document.querySelector('.sbw-run').textContent);
+    check(`${tag} a run that failed says why in plain words, with Run again`, failed === "Today's run did not finish \u00B7 The server stopped during the run.Run again", failed);
+    await page.evaluate(() => document.querySelector('.sbw-run').scrollIntoView({ block: 'center' }));
+    await shot('failed');
+
+    // the server light: a 24 px target that covers no control in any view; a popover with since when; Try now where it is down
+    const covered = [];
+    for (const view of ['chat', 'library', 'notes', 'settings', 'home']) {
+      await page.evaluate((v) => { location.hash = `#/${v}`; }, view);
+      await page.waitForTimeout(200);
+      covered.push(...await page.evaluate(() => [...document.querySelectorAll('button, a, input, select')].filter((b) => { if (b.closest('.sbw-server-light')) return false; const r = b.getBoundingClientRect(); return r.width > 0 && r.height > 0 && (r.left + r.right) / 2 > innerWidth - 24 && (r.top + r.bottom) / 2 < 24 && getComputedStyle(b).visibility !== 'hidden' && b.closest('[hidden]') === null; }).map((b) => `${location.hash} ${b.className || b.tagName} ${b.getAttribute('aria-label') ?? b.textContent}`)));
+    }
+    check(`${tag} the light's target sits over the middle of no control in Chat, Library, Notes, Settings or Home`, covered.length === 0, covered);
+    await page.waitForSelector('.sbw-run');
+    const up = await page.evaluate(() => { const b = document.querySelector('.sbw-server-button').getBoundingClientRect(); const d = document.querySelector('.sbw-server-dot').getBoundingClientRect(); return { w: b.width, h: b.height, dot: d.width }; });
+    check(`${tag} the light's target is 24 px round the 9 px dot`, up.w === 24 && up.h === 24 && up.dot === 9, up);
+    await page.click('.sbw-server-button');
+    await page.waitForSelector('.sbw-server-pop:not([hidden])');
+    check(`${tag} up: the popover says since when, no Try now`, /Answering since \d\d:\d\d/.test(await page.locator('.sbw-server-pop').textContent()) && await page.locator('.sbw-server-try').count() === 0);
+    await shot('light-up');
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => window.__host._setWhere('offline'));
+    await page.click('.sbw-server-button');
+    await page.waitForSelector('.sbw-server-try');
+    const downText = await page.locator('.sbw-server-pop').textContent();
+    check(`${tag} down: says when it last answered, offers Try now`, /The server is not answering/.test(downText) && /Last answered at \d\d:\d\d/.test(downText) && /Try now/.test(downText), downText);
+    await shot('light-down');
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => window.__host._setWhere('server'));
     check(`${tag} no page errors`, errors.length === 0, errors);
     await page.close();
   }
