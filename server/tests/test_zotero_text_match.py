@@ -66,7 +66,7 @@ def test_a_title_past_the_top_needs_the_authors_too():
     padding = "padding " * (zotero.TITLE_NEAR_CHARS // 8 + 1)
     body = f"{padding}{TITLE} {FILLER}"
     assert zotero.judge_text(TITLE, "", body).reason == "foreign"
-    assert zotero.judge_text(TITLE, "", f"J. Joo, H. B. Na and T. Hyeon. {body}", authors=AUTHORS).reason == "title+authors"
+    assert zotero.judge_text(TITLE, "", f"A. Lovelace and G. Hopper. {body}", authors=["Ada Lovelace", "Grace Hopper"]).reason == "title+authors"
 
 
 def test_an_overrides_edit_changes_the_stamp(tmp_path, monkeypatch):
@@ -81,9 +81,12 @@ def test_an_overrides_edit_changes_the_stamp(tmp_path, monkeypatch):
 def test_a_title_too_short_to_judge_needs_the_title_and_the_authors():
     assert zotero.judge_text("Quantum dots", "", FILLER, authors=AUTHORS).reason == "foreign"
     # The authors alone say nothing about which of their documents this is.
-    assert zotero.judge_text("Quantum dots", "", f"J. Joo, H. B. Na and T. Hyeon. {FILLER}", authors=AUTHORS).reason == "foreign"
-    decision = zotero.judge_text("Quantum dots", "", f"Quantum dots. J. Joo, H. B. Na and T. Hyeon. {FILLER}", authors=AUTHORS)
+    pair = ["Ada Lovelace", "Grace Hopper"]
+    assert zotero.judge_text("Quantum dots", "", f"A. Lovelace and G. Hopper. {FILLER}", authors=pair).reason == "foreign"
+    decision = zotero.judge_text("Quantum dots", "", f"Quantum dots. A. Lovelace and G. Hopper. {FILLER}", authors=pair)
     assert decision.accepted and decision.reason == "title_short"
+    # Surnames of three letters or fewer are not counted, so these three authors give one usable name: not enough.
+    assert zotero.judge_text("Quantum dots", "", f"Quantum dots. J. Joo, H. B. Na and T. Hyeon. {FILLER}", authors=AUTHORS).reason == "foreign"
 
 
 def test_markup_and_accents_in_the_title_are_ignored():
@@ -110,8 +113,8 @@ def test_a_doi_cited_later_in_the_text_does_not_belong():
 
 def test_a_partial_title_with_the_authors_on_the_first_page_belongs():
     # The known false reject: one of three title words, both authors, no DOI in the text.
-    decision = zotero.judge_text("Large scale GW calculations", "", f"Calculations of quasiparticle energies. J. Joo and T. Hyeon. {FILLER}",
-                                 authors=["Jin Joo", "Taeghwan Hyeon"])
+    decision = zotero.judge_text("Large scale GW calculations", "", f"Calculations of quasiparticle energies. A. Lovelace and G. Hopper. {FILLER}",
+                                 authors=["Ada Lovelace", "Grace Hopper"])
     assert decision.accepted and decision.reason == "title+authors"
     assert decision.title_fraction == round(1 / 3, 3) and decision.author_fraction == 1.0
 
@@ -247,7 +250,9 @@ def test_one_surname_of_several_does_not_confirm_a_partial_title():
     title = "Large scale GW calculations"
     text = f"Calculations of quasiparticle energies. Taeghwan Hyeon. {FILLER}"
     assert zotero.judge_text(title, "", text, authors=["Taeghwan Hyeon", "Ada Lovelace"]).reason == "foreign"
-    assert zotero.judge_text(title, "", text, authors=["Taeghwan Hyeon"]).reason == "title+authors"  # a sole author is all there is
+    assert zotero.judge_text(title, "", text, authors=["Taeghwan Hyeon"]).reason == "foreign"  # nor does a sole author (D14)
+    both = f"Calculations of quasiparticle energies. Taeghwan Hyeon and Ada Lovelace. {FILLER}"
+    assert zotero.judge_text(title, "", both, authors=["Taeghwan Hyeon", "Ada Lovelace"]).reason == "title+authors"
 
 
 CV_BY_HEADINGS = f"Jane Doe\njane@example.org\n\nEducation\nPhD, Somewhere, 2020\n\nPublications:\n1. {TITLE}. J. Joo, H. B. Na, T. Hyeon.\n{FILLER}"

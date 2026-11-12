@@ -61,8 +61,9 @@ MIN_TITLE_HITS = 3
 # calculations": one of three title words, both authors on the first page, no DOI in the text).
 MIN_TITLE_WITH_AUTHORS = 0.25
 MIN_AUTHOR_MATCH = 0.5
-# The author line confirms only with at least this many surnames (all of them when the item has fewer): an author's
-# own CV or statement carries that one name, a paper's first page carries its authors.
+# The author line confirms only with at least this many surnames: an author's own CV or statement carries that one
+# name, a paper's first page carries its authors. An item with fewer usable surnames (one author, or surnames of
+# three letters or fewer, which are not counted) cannot be confirmed by its authors at all (spec 026 D14).
 MIN_AUTHOR_HITS = 2
 # Where a document names itself: its title, authors and DOI are on its first page, and a publisher's cover page adds
 # one more. 4,000 folded characters cover a dense page plus a cover (measured on the real library 2026-11-04: every
@@ -80,7 +81,7 @@ MIN_TEXT_CHARS = 200
 #      judged by is "unknown" and not admitted, instead of getting the benefit of the doubt.
 #   4: "empty" measured in characters of any script, so a non-Latin text is judged; the verbatim title only for a
 #      non-Latin title, whole; a short title needs its wording and the authors; a title alone needs three of its
-#      words; the DOI matched on the text itself, punctuation kept; the authors confirm with two surnames; a CV
+#      words; the DOI matched on the text itself, punctuation kept; the authors confirm with two surnames, never one; a CV
 #      known by its section headings rejected; a library that cannot be read to judge refuses (fail closed).
 TEXT_GUARD_VERSION = 4
 MIN_EXACT_TITLE_CHARS = 8  # a shorter non-Latin title could turn up by chance
@@ -203,7 +204,7 @@ def judge_text(title: str, doi: str, text: str, authors: list[str] | tuple[str, 
     - at least half the title's judged words (longer than three letters, not a stopword), and at least
       MIN_TITLE_HITS of them, in the first TITLE_NEAR_CHARS;
     - a quarter of the title's words in the head together with the authors.
-    "The authors" means half the surnames and at least MIN_AUTHOR_HITS of them (all, when the item has fewer).
+    "The authors" means half the surnames (those longer than three letters) and at least MIN_AUTHOR_HITS of them.
     A text none of these can speak to is "unknown" and not admitted. A heuristic cannot be right every time:
     `text_overrides.json` is the backstop for both a false reject and a false accept.
     """
@@ -226,7 +227,7 @@ def judge_text(title: str, doi: str, text: str, authors: list[str] | tuple[str, 
     near_hits = sum(f" {w} " in near for w in words)
     author_hits = sum(f" {s} " in head for s in surnames)
     author_fraction = author_hits / len(surnames) if surnames else 0.0
-    authors_confirm = bool(surnames) and author_fraction >= MIN_AUTHOR_MATCH and author_hits >= min(MIN_AUTHOR_HITS, len(surnames))
+    authors_confirm = author_fraction >= MIN_AUTHOR_MATCH and author_hits >= MIN_AUTHOR_HITS
     facts = dict(doi_hit=doi_hit, title_fraction=round(title_fraction, 3), author_fraction=round(author_fraction, 3), chars=len(exact))
     if any(f" {marker} " in head for marker in LISTING_MARKERS) or _cv_headings(text) >= MIN_CV_HEADINGS:
         return TextDecision(False, "listing", **facts)
