@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Veritas",
-  "version": "0.54.0",
+  "version": "0.55.0",
   "identifier": "io.github.frimpsjoek.veritas",
   "build": {
     "frontendDist": "../ui"
@@ -26,7 +26,13 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg", "nsis", "appimage", "deb"],
+    "targets": [
+      "app",
+      "dmg",
+      "nsis",
+      "appimage",
+      "deb"
+    ],
     "category": "Productivity",
     "shortDescription": "Research assistant you can check",
     "longDescription": "Veritas AI: your papers, notes and new literature, searched and discussed with citations, on your own computer.",
@@ -38,7 +44,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/veritas-server", "binaries/agentd"],
+    "externalBin": [
+      "binaries/veritas-server",
+      "binaries/agentd"
+    ],
     "resources": {
       "../../web/dist-web/": "web/"
     },
