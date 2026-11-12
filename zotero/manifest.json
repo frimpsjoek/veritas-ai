@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Veritas",
-  "version": "0.55.0",
+  "version": "0.55.1",
   "description": "Veritas in Zotero: notes on each paper with highlights and citations, search by meaning and chat with citations over your library, from the Veritas server on your own computer.",
   "author": "frimpsjoe",
   "icons": {

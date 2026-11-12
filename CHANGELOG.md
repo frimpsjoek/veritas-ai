@@ -3,6 +3,10 @@
 Each release of Veritas AI. `node tools/release.mjs <version>` adds the next section (the commit subjects since the
 last tag, to edit before pushing); the GitHub Release shows that section as its notes.
 
+## 0.55.1 (2026-11-11)
+
+- test(server): the macOS key-store test pins sys.platform, so it passes on the Linux CI runner
+
 ## 0.55.0 (2026-11-11)
 
 - Spec 026: third review round, guard version 4, R23-R27, D12-D14, verify-guard in the upgrade steps

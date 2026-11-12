@@ -7,7 +7,7 @@
 class Veritas < Formula
   desc "Open-source research assistant you can check: your papers, notes and new literature, with citations"
   homepage "https://github.com/frimpsjoek/veritas-ai"
-  url "https://github.com/frimpsjoek/veritas-ai/archive/refs/tags/v0.55.0.tar.gz"
+  url "https://github.com/frimpsjoek/veritas-ai/archive/refs/tags/v0.55.1.tar.gz"
   sha256 "b4d5518eadf14df52c3a06cf3f6f98ec1e9a73f6f8c37b1e109dcfeffac30ebe"
   license "MIT"
 
