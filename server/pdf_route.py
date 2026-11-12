@@ -119,6 +119,8 @@ def resolve(key: str) -> Path:
     # The text Zotero extracted from this file is judged another document's (spec 026): the file is then most
     # likely that other document too, so it is not served under this item's name. text_overrides.json lifts this.
     decision = zotero.attachment_text_decision(key)
+    if decision is not None and decision.reason == "unverified":
+        raise Refused(503, "couldn't read Zotero's database to check this attachment against its item; try again")
     if decision is not None and decision.foreign:
         raise Refused(403, f"this attachment's text does not match its item ({decision.reason}); "
                            f"mark it \"mine\" in {zotero.OVERRIDES_FILE} if it is the right file")

@@ -25,6 +25,9 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(zotero, "ZOTERO", root)
     rows = {KEY: (1, "storage:Paper Ü.pdf")}
     monkeypatch.setattr(pdf_route, "attachment_info", lambda key: rows.get(key))
+    # No zotero.sqlite here: the text guard (spec 026) would refuse every file as unverifiable. Its own tests are in
+    # test_text_guard_effect.py; these are about paths and ranges.
+    monkeypatch.setattr(zotero, "attachment_text_decision", lambda key: None)
     server = ThreadingHTTPServer(("127.0.0.1", 0), http_api.Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
 

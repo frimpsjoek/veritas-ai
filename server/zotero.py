@@ -52,31 +52,51 @@ SKIP_TYPES = ("attachment", "note", "annotation")
 # Status tags written by Zotero plugins (#broken, #nosource, /unread, linter/error, zotmoov, notion): not topics.
 HOUSEKEEPING_TAG = re.compile(r"^([#/]|linter/)|^(zotmoov|notion)$", re.I)
 _TITLE_STOPWORDS = frozenset("the and for with from into using based study their this that".split())
-MIN_TITLE_WORDS = 3  # a shorter title says too little to judge a text by
-MIN_TITLE_MATCH = 0.5  # the share of the title's words the head of a text must contain to count as this item's
+MIN_TITLE_WORDS = 3  # a title with fewer judged words is "short": it needs its whole wording and the authors
+MIN_TITLE_MATCH = 0.5  # the share of the title's words the top of a text must contain to count as this item's
+# ... and never fewer than this many words: two words of a title ("density functional" of "Density functional
+# theory") are in every text of the field. A three-word title therefore needs all three.
+MIN_TITLE_HITS = 3
 # A weaker title match still counts when the author line confirms it (the known false reject "Large scale GW
 # calculations": one of three title words, both authors on the first page, no DOI in the text).
 MIN_TITLE_WITH_AUTHORS = 0.25
 MIN_AUTHOR_MATCH = 0.5
+# The author line confirms only with at least this many surnames (all of them when the item has fewer): an author's
+# own CV or statement carries that one name, a paper's first page carries its authors.
+MIN_AUTHOR_HITS = 2
 # Where a document names itself: its title, authors and DOI are on its first page, and a publisher's cover page adds
 # one more. 4,000 folded characters cover a dense page plus a cover (measured on the real library 2026-11-04: every
 # attachment whose own DOI or author line appears later than this was one of the doubtful cases, not a paper whose
 # front matter came late). A reference list or a CV that merely cites this paper repeats its title and DOI, but
 # much later in the text, so the whole text is no longer scanned.
 HEAD_CHARS = 4000
-MIN_TEXT_CHARS = 200  # a shorter cache holds no document worth indexing, and nothing worth hiding
+# A cache with fewer characters (of any script, whitespace folded) holds no text to judge by: a scan, a picture.
+MIN_TEXT_CHARS = 200
 # Part of the index stamp (kb.py): a change here re-reads every library on the next ordinary index run.
 #   1: DOI or half the title's words anywhere in the text.
 #   2: DOI, title or authors in the first HEAD_CHARS only; author line as a second signal; near-empty caches dropped;
 #      overrides (text_overrides.json); highlights of a rejected attachment dropped with its text.
 #   3: DOI matched whole; a title alone must sit near the top; publication lists rejected; a text nothing can be
 #      judged by is "unknown" and not admitted, instead of getting the benefit of the doubt.
-TEXT_GUARD_VERSION = 3
-MIN_EXACT_TITLE_CHARS = 8  # a shorter title could turn up by chance
+#   4: "empty" measured in characters of any script, so a non-Latin text is judged; the verbatim title only for a
+#      non-Latin title, whole; a short title needs its wording and the authors; a title alone needs three of its
+#      words; the DOI matched on the text itself, punctuation kept; the authors confirm with two surnames; a CV
+#      known by its section headings rejected; a library that cannot be read to judge refuses (fail closed).
+TEXT_GUARD_VERSION = 4
+MIN_EXACT_TITLE_CHARS = 8  # a shorter non-Latin title could turn up by chance
 TITLE_NEAR_CHARS = 1200  # a paper's own title sits in its first lines; further down it may be a citation of it
 # Words a CV or publication list carries near its top and a paper does not ("publications" alone is in publisher names).
 LISTING_MARKERS = ("curriculum vitae", "list of publications", "selected publications", "peer reviewed publications",
                    "research experience", "work experience", "professional experience")
+# Section headings of a CV: a line that is nothing but one of these. One such line proves little (a journal prints
+# "Education" as an article type, a publisher's logo reads "Publications"); two different ones in the head of a text
+# make it a CV. "References" is left out: papers have that section.
+CV_HEADINGS = frozenset((
+    "education", "publications", "employment", "employment history", "appointments", "academic appointments",
+    "professional appointments", "awards", "honors", "honours", "honors and awards", "awards and honors", "skills",
+    "technical skills", "research interests"))
+MIN_CV_HEADINGS = 2
+DOI_SHAPE = re.compile(r"10\.\d{4,9}/\S+")
 OVERRIDES_FILE = "text_overrides.json"  # in the data folder (paths.data_dir): {attachment key: "mine" | "foreign"}
 OVERRIDE_VALUES = ("mine", "foreign")
 
@@ -92,15 +112,15 @@ class TextDecision:
     """Why an attachment's cached text is, or is not, taken as its item's. Carries no text."""
     accepted: bool
     reason: str  # override:mine, override:foreign, override:invalid, empty, listing, doi, title, title+authors,
-    #              title_exact, title_short, authors, unknown, foreign
+    #              title_exact, title_short, unknown, unverified, foreign
     doi_hit: bool = False
     title_fraction: float = 0.0  # share of the title's judged words in the head of the text
     author_fraction: float = 0.0  # share of the authors' surnames in the head of the text
-    chars: int = 0  # folded characters in the cache
+    chars: int = 0  # characters in the cache, of any script, whitespace folded
 
     @property
     def foreign(self) -> bool:
-        """Rejected as another document's, or as impossible to judge (not merely empty)."""
+        """Rejected as another document's, or as impossible to judge or to check (not merely empty)."""
         return not self.accepted and self.reason != "empty"
 
 
@@ -140,6 +160,30 @@ def text_overrides() -> dict[str, str]:
     return {str(k).strip(): (v.strip().lower() if isinstance(v, str) else repr(v)) for k, v in raw.items()}
 
 
+def _doi_pattern(doi: str) -> re.Pattern | None:
+    """Matches the item's DOI in `_exact` text, whole. The text's own punctuation is kept: folded to spaces,
+    10.1000/abc also matched 10.1000/abc.def. Not preceded by a letter, digit or dot; not followed by a letter or
+    digit, nor by DOI punctuation and then one (so a sentence's full stop after the DOI is fine, ".def" is not). A
+    line break after a punctuation mark inside the DOI is allowed. None when the field holds no DOI."""
+    bare = re.sub(r"^(https?://(dx\.)?doi\.org/|doi:\s*)", "", _exact(doi)).strip()
+    if not DOI_SHAPE.fullmatch(bare):
+        return None
+    inner = "".join(re.escape(c) + ("" if c.isalnum() else " ?") for c in bare)
+    return re.compile(r"(?<![0-9a-z.])" + inner + r"(?![0-9a-z])(?![./_:;()<>\[\]#+-][0-9a-z])")
+
+
+def _non_latin(title: str) -> bool:
+    """True when most of the title's letters are lost by `_folded` (Chinese, Cyrillic, Greek, Arabic ...), so its
+    words cannot be counted and only the verbatim title can be looked for."""
+    letters = sum(c.isalnum() for c in _exact(title))
+    return letters > 0 and 2 * len(_folded(title).replace(" ", "")) < letters
+
+
+def _cv_headings(text: str) -> int:
+    """How many different CV section headings stand on a line of their own in the head of the text."""
+    return len({_folded(line).strip() for line in text[:HEAD_CHARS].splitlines()} & CV_HEADINGS)
+
+
 def judge_text(title: str, doi: str, text: str, authors: list[str] | tuple[str, ...] = (),
                attachment_key: str = "", overrides: dict[str, str] | None = None) -> TextDecision:
     """Whether an attachment's cached text is this item's document, and why.
@@ -147,47 +191,61 @@ def judge_text(title: str, doi: str, text: str, authors: list[str] | tuple[str, 
     Zotero keeps an attachment's .zotero-ft-cache even after the file has moved or been replaced, so a cache can hold
     another document, including a private one. Such text must not be indexed, shown or cited under this item's name.
     Only the head of the text is read (HEAD_CHARS): a document names itself at the start, while a document that
-    merely cites this item (a reference list, a CV) does so later. Rejected first: a text with a CV or publication-list
-    marker. Then, in order: the item's whole DOI; at least half the title's judged words (longer than three letters,
-    not a stopword) in the first TITLE_NEAR_CHARS; half the title with half the authors' surnames in the head; a
-    quarter of the title with half the surnames; the title verbatim near the top (the only signal for a non-Latin
-    title); for a title too short to judge by, any author surname. A text none of these can speak to, such as an
-    untitled authorless item, is "unknown" and not admitted. A heuristic cannot be right every time:
-    `text_overrides.json` is the backstop for both a
-    false reject and a false accept.
+    merely cites this item (a reference list, a CV) does so later.
+
+    A cache with fewer than MIN_TEXT_CHARS characters of any script is "empty": not indexed, and not called
+    foreign, since there is nothing to judge by. Rejected next: a text with a CV or publication-list marker, or two
+    CV section headings ("listing"). Then, in order:
+    - the item's whole DOI in the head;
+    - for a non-Latin title, the title verbatim and whole in the first TITLE_NEAR_CHARS, else "unknown";
+    - for a short title (fewer than MIN_TITLE_WORDS judged words), the title's wording near the top together with
+      the authors; "unknown" when the item has no usable author or title;
+    - at least half the title's judged words (longer than three letters, not a stopword), and at least
+      MIN_TITLE_HITS of them, in the first TITLE_NEAR_CHARS;
+    - a quarter of the title's words in the head together with the authors.
+    "The authors" means half the surnames and at least MIN_AUTHOR_HITS of them (all, when the item has fewer).
+    A text none of these can speak to is "unknown" and not admitted. A heuristic cannot be right every time:
+    `text_overrides.json` is the backstop for both a false reject and a false accept.
     """
     override = (overrides if overrides is not None else text_overrides()).get(attachment_key) if attachment_key else None
     if override is not None:
         if override == "mine":
             return TextDecision(True, "override:mine")
         return TextDecision(False, "override:foreign" if override == "foreign" else "override:invalid")
+    exact = _exact(text)
+    if len(exact) < MIN_TEXT_CHARS:
+        return TextDecision(False, "empty", chars=len(exact))
     body = _folded(text).strip()
-    if len(body) < MIN_TEXT_CHARS:
-        return TextDecision(False, "empty", chars=len(body))
     head = f" {body[:HEAD_CHARS]} "
     near = f" {body[:TITLE_NEAR_CHARS]} "
-    folded_doi = _folded(doi).strip()
-    doi_hit = bool(folded_doi) and f" {folded_doi} " in head  # whole: 10.1021/ja035 is not 10.1021/ja0357902
+    doi_pattern = _doi_pattern(doi)
+    doi_hit = bool(doi_pattern and doi_pattern.search(exact[:HEAD_CHARS]))
     words = [w for w in _folded(title).split() if len(w) > 3 and w not in _TITLE_STOPWORDS]
     surnames = [s for s in (_folded(a).split()[-1] if _folded(a).split() else "" for a in authors) if len(s) > 3]
     title_fraction = sum(f" {w} " in head for w in words) / len(words) if words else 0.0
-    near_fraction = sum(f" {w} " in near for w in words) / len(words) if words else 0.0
-    author_fraction = sum(f" {s} " in head for s in surnames) / len(surnames) if surnames else 0.0
-    facts = dict(doi_hit=doi_hit, title_fraction=round(title_fraction, 3), author_fraction=round(author_fraction, 3), chars=len(body))
-    if any(f" {marker} " in head for marker in LISTING_MARKERS):
+    near_hits = sum(f" {w} " in near for w in words)
+    author_hits = sum(f" {s} " in head for s in surnames)
+    author_fraction = author_hits / len(surnames) if surnames else 0.0
+    authors_confirm = bool(surnames) and author_fraction >= MIN_AUTHOR_MATCH and author_hits >= min(MIN_AUTHOR_HITS, len(surnames))
+    facts = dict(doi_hit=doi_hit, title_fraction=round(title_fraction, 3), author_fraction=round(author_fraction, 3), chars=len(exact))
+    if any(f" {marker} " in head for marker in LISTING_MARKERS) or _cv_headings(text) >= MIN_CV_HEADINGS:
         return TextDecision(False, "listing", **facts)
     if doi_hit:
         return TextDecision(True, "doi", **facts)
-    exact_title = _exact(title)
-    if len(exact_title) >= MIN_EXACT_TITLE_CHARS and exact_title in _exact(text)[:TITLE_NEAR_CHARS]:
-        return TextDecision(True, "title_exact", **facts)
+    if _non_latin(title):
+        exact_title = _exact(title)
+        found = len(exact_title) >= MIN_EXACT_TITLE_CHARS and re.search(
+            rf"(?<!\w){re.escape(exact_title)}(?!\w)", exact[:TITLE_NEAR_CHARS])
+        return TextDecision(bool(found), "title_exact" if found else "unknown", **facts)
     if len(words) < MIN_TITLE_WORDS:
-        if surnames:
-            return TextDecision(author_fraction > 0, "authors" if author_fraction > 0 else "foreign", **facts)
-        return TextDecision(False, "unknown", **facts)
-    if near_fraction >= MIN_TITLE_MATCH:
+        wording = _folded(title).strip()
+        if not wording or not surnames:
+            return TextDecision(False, "unknown", **facts)
+        found = f" {wording} " in near and authors_confirm
+        return TextDecision(found, "title_short" if found else "foreign", **facts)
+    if near_hits >= max(MIN_TITLE_HITS, MIN_TITLE_MATCH * len(words)):
         return TextDecision(True, "title", **facts)
-    if title_fraction >= MIN_TITLE_WITH_AUTHORS and surnames and author_fraction >= MIN_AUTHOR_MATCH:
+    if title_fraction >= MIN_TITLE_WITH_AUTHORS and authors_confirm:
         return TextDecision(True, "title+authors", **facts)
     return TextDecision(False, "foreign", **facts)
 
@@ -204,11 +262,13 @@ def _read_cache(cache: Path) -> str:
 
 def attachment_text_decision(att_key: str) -> TextDecision | None:
     """The guard's decision for one attachment key (for routes that hand out the attachment's file): None when the
-    attachment has no cached text to judge by, or is not in the library."""
+    attachment has no cached text to judge by, is not in the library or has no parent item. When the library
+    cannot be read to judge (the copy of zotero.sqlite failed, or its rows cannot be queried), the decision is a
+    rejection, "unverified": failing open would hand out exactly the files the guard exists to hold back."""
     try:
         db = snapshot("reader", max_age=60)
     except (sqlite3.Error, OSError, RuntimeError):
-        return None
+        return TextDecision(False, "unverified")
     try:
         row = db.execute(
             """SELECT a.parentItemID FROM itemAttachments a JOIN items i USING(itemID) WHERE i.key=?""", (att_key,)).fetchone()
@@ -221,7 +281,7 @@ def attachment_text_decision(att_key: str) -> TextDecision | None:
             """SELECT c.firstName, c.lastName FROM itemCreators ic JOIN creators c USING(creatorID)
                WHERE ic.itemID=? ORDER BY ic.orderIndex""", (row[0],))]
     except sqlite3.Error:
-        return None  # not a Zotero database (a stand-in in tests): nothing to judge by
+        return TextDecision(False, "unverified")
     finally:
         db.close()
     cache = root() / "storage" / att_key / ".zotero-ft-cache"

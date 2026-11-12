@@ -467,3 +467,49 @@ def test_a_guard_change_rebuilds_tantivy_and_purges_the_deleted_text_from_the_fi
     kb.index(verbose=False)
     tantivy_hits(searcher, "linewidths")
     assert len(rebuilds) == built + 1, "an ordinary run after it rebuilds nothing"
+
+
+def test_a_non_latin_foreign_text_loses_its_highlights_and_its_file_too(library):
+    """Before guard version 4 an all-non-Latin cache folded to nothing and was called "empty": its text stayed out,
+    but the highlights on it were indexed and /zotero/pdf served the file."""
+    private = "个人履历与联系方式以及家庭住址等私人信息记录在此。" * 12
+    (library[0] / "storage" / ATT_FOREIGN / ".zotero-ft-cache").write_text(private)
+    doc = {d.key: d for d in zotero.documents()}[FOREIGN]
+    assert HIGHLIGHT_SENTINEL not in doc.text and "## Highlights" not in doc.text
+    [foreign] = zotero.item_detail(FOREIGN)["attachments"]
+    assert foreign["highlights"] == [] and foreign["highlights_hidden"] == 1 and foreign["full_text_mismatch"]
+    with pytest.raises(Refused) as refused:
+        pdf_route.resolve(ATT_FOREIGN)
+    assert refused.value.status == 403
+
+
+def test_an_empty_cache_keeps_the_users_highlights_and_the_file(library):
+    """Spec 026 D12: a cache with no text to speak of (a scan) says nothing about the file, exactly as an attachment
+    without a cache; the user's highlights stay and the file is served."""
+    (library[0] / "storage" / ATT_FOREIGN / ".zotero-ft-cache").write_text("  \n")
+    doc = {d.key: d for d in zotero.documents()}[FOREIGN]
+    assert HIGHLIGHT_SENTINEL in doc.text and "## Full text" not in doc.text
+    [foreign] = zotero.item_detail(FOREIGN)["attachments"]
+    assert len(foreign["highlights"]) == 1 and not foreign["has_full_text"]
+    with pytest.raises(Refused) as refused:
+        pdf_route.resolve(ATT_FOREIGN)  # past the guard; there is no file in the fixture
+    assert refused.value.status == 404
+
+
+def test_the_pdf_route_refuses_when_the_library_cannot_be_read_to_judge(library, monkeypatch):
+    """Fail closed: no decision because the database copy failed is not the same as nothing to judge."""
+    def broken(*a, **k):
+        raise RuntimeError("couldn't take a consistent copy of zotero.sqlite while Zotero is writing to it")
+    monkeypatch.setattr(zotero, "snapshot", broken)
+    decision = zotero.attachment_text_decision(ATT_MINE)
+    assert decision is not None and not decision.accepted and decision.reason == "unverified" and decision.foreign
+    monkeypatch.setattr(pdf_route, "attachment_info", lambda key: (1, "storage:mine.pdf"))
+    with pytest.raises(Refused) as refused:
+        pdf_route.resolve(ATT_MINE)
+    assert refused.value.status == 503
+
+
+def test_an_attachment_without_a_cache_or_outside_the_library_has_nothing_to_judge(library):
+    assert zotero.attachment_text_decision("NOSUCH01") is None
+    (library[0] / "storage" / ATT_MINE / ".zotero-ft-cache").unlink()
+    assert zotero.attachment_text_decision(ATT_MINE) is None

@@ -1,8 +1,8 @@
 """zotero.py: an attachment's cached text that is plainly another document's is not treated as the item's.
 
-The guard (judge_text, TEXT_GUARD_VERSION 2) reads only the head of a text: a document names itself at the start,
-a reference list or CV that cites the item does so later. The texts here are padded past MIN_TEXT_CHARS, since a
-near-empty cache is dropped as "empty", not judged.
+The guard (judge_text; the rule's history is at TEXT_GUARD_VERSION in zotero.py) reads only the head of a text: a
+document names itself at the start, a reference list or CV that cites the item does so later. The texts here are
+padded past MIN_TEXT_CHARS, since a near-empty cache is dropped as "empty", not judged.
 """
 from __future__ import annotations
 
@@ -78,9 +78,12 @@ def test_an_overrides_edit_changes_the_stamp(tmp_path, monkeypatch):
     assert first and zotero.overrides_stamp() != first
 
 
-def test_a_title_too_short_to_judge_needs_an_author_when_authors_are_known():
+def test_a_title_too_short_to_judge_needs_the_title_and_the_authors():
     assert zotero.judge_text("Quantum dots", "", FILLER, authors=AUTHORS).reason == "foreign"
-    assert zotero.judge_text("Quantum dots", "", f"J. Joo, H. B. Na and T. Hyeon. {FILLER}", authors=AUTHORS).reason == "authors"
+    # The authors alone say nothing about which of their documents this is.
+    assert zotero.judge_text("Quantum dots", "", f"J. Joo, H. B. Na and T. Hyeon. {FILLER}", authors=AUTHORS).reason == "foreign"
+    decision = zotero.judge_text("Quantum dots", "", f"Quantum dots. J. Joo, H. B. Na and T. Hyeon. {FILLER}", authors=AUTHORS)
+    assert decision.accepted and decision.reason == "title_short"
 
 
 def test_markup_and_accents_in_the_title_are_ignored():
@@ -165,3 +168,93 @@ def test_audit_line_carries_only_keys_and_numbers():
            "title_fraction": 0.25, "author_fraction": 0.0, "chars": 9850}
     line = zotero.audit_line(row)
     assert line == "ITEM0001 ATT00001 foreign foreign doi=0 title=0.25 authors=0.00 chars=9850" and len(line) < 200
+
+
+# --- version 4 (review round 3): no substring titles, non-Latin texts judged, weak accepts closed ---
+
+STATEMENT = "Research statement. My work spans quantum dots, photocatalysis and density functional approximations. "
+
+
+def test_a_short_latin_title_is_not_matched_inside_other_words_or_sentences():
+    assert not zotero.judge_text("Catalysis", "", f"Photocatalysis of water on oxides. {FILLER}").accepted
+    # A research statement that mentions quantum dots is not the item titled "Quantum dots".
+    assert zotero.judge_text("Quantum dots", "", STATEMENT + FILLER).reason == "unknown"
+    decision = zotero.judge_text("Quantum dots", "", f"Jin Joo. {STATEMENT}{FILLER}", authors=AUTHORS)
+    assert not decision.accepted and decision.reason == "foreign", "one surname of three is the author's own statement"
+
+
+def test_a_non_latin_title_matches_whole_not_inside_a_longer_word():
+    title = "Катализ и свет"
+    assert zotero.judge_text(title, "", f"Фотокатализ и светодиоды. {FILLER}").reason == "unknown"
+    assert zotero.judge_text(title, "", f"Журнал. {title}. {FILLER}").reason == "title_exact"
+
+
+CJK_TITLE = "铜表面的电子结构研究"
+CJK_BODY = "本文研究了金属表面吸附分子的电子结构与光谱性质。" * 12  # 288 characters, none of them Latin
+CJK_OTHER = "个人履历与联系方式以及家庭住址等私人信息记录在此。" * 12
+
+
+def test_an_all_non_latin_text_is_judged_not_called_empty():
+    assert len(CJK_BODY) >= zotero.MIN_TEXT_CHARS and not zotero._folded(CJK_BODY).strip()
+    mine = zotero.judge_text(CJK_TITLE, "", f"{CJK_TITLE}\n{CJK_BODY}")
+    assert mine.accepted and mine.reason == "title_exact" and mine.chars >= zotero.MIN_TEXT_CHARS
+    other = zotero.judge_text(CJK_TITLE, "", CJK_OTHER)
+    assert other.reason == "unknown" and other.foreign and other.chars == len(CJK_OTHER)
+    # Under a Latin title too: another document, not an empty cache.
+    assert zotero.judge_text(TITLE, "", CJK_OTHER, authors=AUTHORS).reason == "foreign"
+    assert zotero.judge_text(CJK_TITLE, "10.1000/cjk.7", f"doi:10.1000/cjk.7 {CJK_BODY}").reason == "doi"
+
+
+def test_a_cache_with_almost_no_text_is_still_empty():
+    for text in ("", "   \n ", "扫描件", "Scanned by CamScanner"):
+        decision = zotero.judge_text(TITLE, "", text)
+        assert decision.reason == "empty" and not decision.foreign and not decision.accepted
+
+
+def test_a_title_of_three_words_needs_all_three():
+    text = f"We benchmark density functional approximations for molecules. {FILLER}"
+    assert zotero.judge_text("Density functional theory", "", text).reason == "foreign"
+    assert zotero.judge_text("Density functional theory", "", f"Density functional theory. {FILLER}").reason == "title"
+
+
+def test_a_longer_title_needs_three_of_its_words_not_two():
+    text = f"We benchmark density functional approximations for molecules. {FILLER}"
+    assert zotero.judge_text("Density functional theory calculations", "", text).reason == "foreign"
+    assert zotero.judge_text("Density functional theory calculations", "", f"Density functional calculations. {FILLER}").reason == "title"
+
+
+def test_a_doi_is_matched_on_the_text_itself_with_its_punctuation():
+    assert not zotero.judge_text(TITLE, "10.1000/abc", f"Other. doi:10.1000/abc.def {FILLER}").doi_hit
+    assert not zotero.judge_text(TITLE, "10.1000/abc", f"Other. doi:10.1000/abc-def {FILLER}").doi_hit
+    assert not zotero.judge_text(TITLE, "10.1000/abc", f"Other. doi:10.1000/abcd {FILLER}").doi_hit
+    assert not zotero.judge_text(TITLE, "10.1000/abc", f"Other. doi:110.1000/abc {FILLER}").doi_hit
+    assert zotero.judge_text(TITLE, "10.1000/abc", f"Mine. doi:10.1000/abc. {FILLER}").doi_hit  # the sentence's full stop
+    assert zotero.judge_text(TITLE, "10.1000/abc", f"Mine. https://doi.org/10.1000/ABC, {FILLER}").doi_hit
+    assert zotero.judge_text(TITLE, "10.1000/abc.def", f"Mine. (doi: 10.1000/\nabc.def) {FILLER}").doi_hit  # broken after the slash
+    assert zotero.judge_text(TITLE, "https://doi.org/10.1000/abc", f"Mine. DOI 10.1000/abc {FILLER}").doi_hit
+
+
+def test_a_doi_field_that_is_not_a_doi_matches_nothing():
+    assert not zotero.judge_text(TITLE, "n/a", f"Other. Value n/a in the table. {FILLER}").doi_hit
+
+
+def test_one_surname_of_several_does_not_confirm_a_partial_title():
+    """An author's own statement or CV carries that one name; the paper's first page carries its authors."""
+    title = "Large scale GW calculations"
+    text = f"Calculations of quasiparticle energies. Taeghwan Hyeon. {FILLER}"
+    assert zotero.judge_text(title, "", text, authors=["Taeghwan Hyeon", "Ada Lovelace"]).reason == "foreign"
+    assert zotero.judge_text(title, "", text, authors=["Taeghwan Hyeon"]).reason == "title+authors"  # a sole author is all there is
+
+
+CV_BY_HEADINGS = f"Jane Doe\njane@example.org\n\nEducation\nPhD, Somewhere, 2020\n\nPublications:\n1. {TITLE}. J. Joo, H. B. Na, T. Hyeon.\n{FILLER}"
+
+
+def test_a_cv_known_only_by_its_section_headings_is_rejected():
+    decision = zotero.judge_text(TITLE, "", CV_BY_HEADINGS, authors=AUTHORS)
+    assert decision.reason == "listing" and not decision.accepted
+
+
+def test_a_paper_naming_a_publisher_and_a_ministry_is_not_a_cv():
+    paper = (f"ACS Publications\n{TITLE}\nJin Joo, Hyon Bin Na, Taeghwan Hyeon\nSupported by the Ministry of Education.\n"
+             f"Education\n{FILLER}\nReferences\n")
+    assert zotero.judge_text(TITLE, "", paper, authors=AUTHORS).reason == "title"  # one heading line is not enough
