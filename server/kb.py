@@ -1963,6 +1963,11 @@ def main() -> None:
     p.add_argument("folders", nargs="*", help="chat folders (JSONL or Markdown mirrors); default: this install's "
                                                "agent/chats and the vault's chats folder")
     p.add_argument("--keys", help="a file with one foreign item key per line, instead of running audit-text")
+    p = sub.add_parser("verify-guard", help="counts of what an index still holds of the texts the guard rejects, in "
+                                            "chunks, FTS, vectors and Tantivy; prints keys and numbers, never text; "
+                                            "exit 0 clean, 1 found, 2 nothing checked (spec 026 R25)")
+    p.add_argument("--index", help="the data folder of the index to check (default: this install's), read-only; its "
+                                   "own text_overrides.json is used")
     args = parser.parse_args()
     if args.cmd == "index":
         import signal
@@ -2012,6 +2017,10 @@ def main() -> None:
         import chat_audit
 
         chat_audit.cli(args.folders, args.keys)
+    elif args.cmd == "verify-guard":
+        import guard_verify
+
+        sys.exit(guard_verify.cli(args.index))
     else:
         print(json.dumps(stats(), indent=2, ensure_ascii=False))
 

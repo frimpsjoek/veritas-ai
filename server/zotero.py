@@ -141,12 +141,12 @@ def _exact(text: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", html.unescape(re.sub(r"<[^>]+>", " ", text or ""))).casefold().split())
 
 
-def text_overrides() -> dict[str, str]:
-    """{attachment key: "mine" | "foreign"} from the data folder's text_overrides.json. A missing file is no
-    override; a malformed file is reported once per read and treated as no override (the heuristic still applies,
-    so nothing is admitted by the failure); an entry with any other value is kept and judged as "invalid", which
-    rejects that attachment's text, since the user meant to decide it by hand."""
-    file = overrides_file()
+def text_overrides(file: Path | None = None) -> dict[str, str]:
+    """{attachment key: "mine" | "foreign"} from the data folder's text_overrides.json (or `file`, another install's).
+    A missing file is no override; a malformed file is reported once per read and treated as no override (the
+    heuristic still applies, so nothing is admitted by the failure); an entry with any other value is kept and
+    judged as "invalid", which rejects that attachment's text, since the user meant to decide it by hand."""
+    file = file or overrides_file()
     try:
         raw = json.loads(file.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -291,10 +291,11 @@ def attachment_text_decision(att_key: str) -> TextDecision | None:
                       authors, att_key)
 
 
-def audit_text() -> list[dict]:
-    """One row per attachment with a cached text, for `kb.py audit-text`: item key, attachment key, decision, reason,
-    doi_hit, title_fraction, author_fraction, chars. Never carries text. Reads its own copy of the database
-    ("audit"), so it never touches the indexer's copy."""
+def _judged_items(overrides: dict[str, str] | None = None):
+    """Every item of the default library that has an attachment with cached text, with the guard's decision for each:
+    (item key, the item's own texts, [(attachment key, decision, cached text, the user's highlights and comments)]).
+    The own texts are the title, abstract and child notes. Reads its own copy of the database ("audit"), so it
+    never touches the indexer's copy. The texts are for deciding and for building probes; callers never print them."""
     db = snapshot("audit")
     q = lambda sql, *args: db.execute(sql, args).fetchall()  # noqa: E731
     try:
@@ -312,25 +313,65 @@ def audit_text() -> list[dict]:
         for item_id, parent in q("SELECT itemID, parentItemID FROM itemAttachments WHERE parentItemID IS NOT NULL"):
             if item_id not in deleted:
                 attachments.setdefault(parent, []).append(item_id)
+        notes: dict[int, list[str]] = {}
+        for item_id, parent, note in q("SELECT itemID, parentItemID, note FROM itemNotes WHERE parentItemID IS NOT NULL"):
+            if item_id not in deleted:
+                notes.setdefault(parent, []).append(_note_text(note))
+        marks: dict[int, list[str]] = {}
+        for item_id, parent, text, comment in q("SELECT itemID, parentItemID, text, comment FROM itemAnnotations"):
+            if item_id not in deleted:
+                marks.setdefault(parent, []).extend(m for m in (text, comment) if m)
         keys = {item_id: key for item_id, key, _ in items}
     finally:
         db.close()
-    overrides = text_overrides()
-    rows = []
+    overrides = text_overrides() if overrides is None else overrides
     for item_id, key, type_name in items:
         if type_name in SKIP_TYPES or item_id in deleted:
             continue
         f = fields.get(item_id, {})
+        judged = []
         for attachment in attachments.get(item_id, []):
             cache = root() / "storage" / keys[attachment] / ".zotero-ft-cache"
             if not cache.is_file():
                 continue
-            d = judge_text(f.get("title") or f.get("shortTitle") or key, f.get("DOI", ""), _read_cache(cache),
-                           creators.get(item_id, []), keys[attachment], overrides)
-            rows.append({"item": key, "attachment": keys[attachment], "decision": "mine" if d.accepted else ("empty" if d.reason == "empty" else ("unknown" if d.reason == "unknown" else "foreign")),
+            text = _read_cache(cache)
+            decision = judge_text(f.get("title") or f.get("shortTitle") or key, f.get("DOI", ""), text,
+                                  creators.get(item_id, []), keys[attachment], overrides)
+            judged.append((keys[attachment], decision, text, marks.get(attachment, [])))
+        if judged:
+            abstract = f.get("abstractNote") or ((abstracts.cached(f["DOI"]) or [""])[0] if f.get("DOI") else "")
+            yield key, [f.get("title", ""), abstract, *notes.get(item_id, [])], judged
+
+
+def audit_text() -> list[dict]:
+    """One row per attachment with a cached text, for `kb.py audit-text`: item key, attachment key, decision, reason,
+    doi_hit, title_fraction, author_fraction, chars. Never carries text."""
+    rows = []
+    for key, _own, judged in _judged_items():
+        for attachment, d, _text, _marks in judged:
+            rows.append({"item": key, "attachment": attachment, "decision": "mine" if d.accepted else ("empty" if d.reason == "empty" else ("unknown" if d.reason == "unknown" else "foreign")),
                          "reason": d.reason, "doi_hit": d.doi_hit, "title_fraction": d.title_fraction,
                          "author_fraction": d.author_fraction, "chars": d.chars})
     return rows
+
+
+def rejected_items(overrides: dict[str, str] | None = None) -> list[dict]:
+    """For `kb.py verify-guard`: every item with an attachment whose cached text the guard rejects (foreign, unknown,
+    listing or by override; an empty cache is not a rejection). Per item: `item`; `accepted`, the number of its
+    attachments whose text is accepted; `rejected`, per rejected attachment its key, reason and `texts` (the cached
+    text and the user's highlights and comments on it, which must be in no index); and `own`, the texts rightly
+    indexed under the item (title, abstract, notes, accepted attachments' texts and highlights; an empty cache's
+    highlights too). The texts are held in memory to build probes from and are never printed."""
+    out = []
+    for key, own, judged in _judged_items(overrides):
+        rejected = [{"attachment": a, "reason": d.reason, "texts": [text, *marks]} for a, d, text, marks in judged if d.foreign]
+        if not rejected:
+            continue
+        for _a, d, text, marks in judged:
+            if not d.foreign:
+                own = own + ([text] if d.accepted else []) + marks
+        out.append({"item": key, "accepted": sum(d.accepted for _a, d, _t, _m in judged), "rejected": rejected, "own": own})
+    return out
 
 
 def audit_line(row: dict) -> str:
