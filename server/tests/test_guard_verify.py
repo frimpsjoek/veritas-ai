@@ -122,3 +122,18 @@ def test_probe_phrases_are_plain_words_in_order():
     assert guard_verify.phrases("tenancy agreement between the parties", 50, own=" tenancy agreement between the parties ") == []
     assert guard_verify.phrases("wrongdocquotation sentence", 3) == ["wrongdocquotation sentence"]
     assert guard_verify.phrases("my note", 3) == []
+
+
+def test_an_index_not_yet_read_under_this_guard_is_not_verified(library, monkeypatch, capsys):
+    """An older install's index that happens to hold none of the probes is still not a pass: it was built under
+    another rule and has not been re-read."""
+    kb.index(verbose=False)
+    tantivy_hits(make_searcher(), OK_SENTINEL)
+    monkeypatch.setattr(zotero, "TEXT_GUARD_VERSION", zotero.TEXT_GUARD_VERSION + 1)
+    status, out, totals = run(library[1], capsys)
+    assert status == 1 and "NOT verified" in out and f"index read under guard version {zotero.TEXT_GUARD_VERSION - 1}" in out
+    db = kb.connect()
+    db.execute("DELETE FROM meta WHERE key='zotero_fingerprint'")
+    db.commit()
+    status, out, totals = run(library[1], capsys)
+    assert status == 1 and "index read under guard version none" in out

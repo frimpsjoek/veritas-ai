@@ -9,10 +9,12 @@ that only the keyword index still held under a reused chunk id.
 Prints keys and counts, never text: a probe phrase is never printed. The index is opened read-only, so the command
 can be pointed at another install's data folder while that install runs. It cannot pass by having checked nothing:
 no index, no rejected attachment or no probe is exit status 2, not 0. Exit status 1: something was found, or
-could not be checked.
+could not be checked (the keyword index is unreadable, a rejected text gave no phrase to look for, or the index
+was last read under another guard version, that is, by an install not yet upgraded or not yet re-indexed).
 """
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 from pathlib import Path
@@ -96,6 +98,11 @@ def verify(index: Path) -> dict:
     result["overrides"] = len(overrides)
     db = sqlite3.connect(f"file:{index / 'kb.sqlite'}?mode=ro", uri=True, timeout=60)
     try:
+        try:
+            stamp = db.execute("SELECT value FROM meta WHERE key='zotero_fingerprint'").fetchone()
+            result["read_under"] = json.loads(stamp[0])[2] if stamp else None
+        except (sqlite3.OperationalError, ValueError, IndexError, TypeError):
+            result["read_under"] = None  # no stamp, or one from before the guard was part of it
         keyword_ids, result["tantivy"] = _tantivy(index / "tantivy")
         for item in zotero.rejected_items(overrides):
             path = zotero.PREFIX + item["item"]
@@ -157,6 +164,7 @@ def cli(index: str | None = None) -> int:
         print(f"verify-guard: no index (kb.sqlite) in {folder}; nothing was checked")
         return 2
     print(f"verify-guard: index {folder}; library {zotero.root()}; guard version {zotero.TEXT_GUARD_VERSION}; "
+          f"index read under guard version {'none' if result['read_under'] is None else result['read_under']}; "
           f"{result['overrides']} overrides from {folder / zotero.OVERRIDES_FILE}; tantivy {result['tantivy']}")
     totals = dict.fromkeys(STORES, 0)
     for row in result["items"]:
@@ -172,8 +180,9 @@ def cli(index: str | None = None) -> int:
     if any(totals.values()):
         print(f"{summary} -> NOT clean")
         return 1
-    if result["tantivy"] == "unreadable" or result["unprobed"]:
-        print(f"{summary} -> NOT verified (keyword index unreadable, or rejected attachments with no phrase to look for)")
+    if result["tantivy"] == "unreadable" or result["unprobed"] or result["read_under"] != zotero.TEXT_GUARD_VERSION:
+        print(f"{summary} -> NOT verified (the index was last read under another guard version, the keyword index is "
+              f"unreadable, or a rejected attachment gave no phrase to look for)")
         return 1
     print(f"{summary} -> clean")
     return 0
