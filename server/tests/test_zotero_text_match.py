@@ -179,8 +179,12 @@ def test_a_short_latin_title_is_not_matched_inside_other_words_or_sentences():
     assert not zotero.judge_text("Catalysis", "", f"Photocatalysis of water on oxides. {FILLER}").accepted
     # A research statement that mentions quantum dots is not the item titled "Quantum dots".
     assert zotero.judge_text("Quantum dots", "", STATEMENT + FILLER).reason == "unknown"
-    decision = zotero.judge_text("Quantum dots", "", f"Jin Joo. {STATEMENT}{FILLER}", authors=AUTHORS)
-    assert not decision.accepted and decision.reason == "foreign", "one surname of three is the author's own statement"
+    # ... nor is the statement of one of its authors, with the wording and that one name at the top.
+    own = f"Quantum dots. Ada Lovelace. {STATEMENT}{FILLER}"
+    assert zotero.judge_text("Quantum dots", "", own, authors=["Ada Lovelace", "Grace Hopper", "Alan Turing"]).reason == "foreign"
+    assert zotero.judge_text("Quantum dots", "", own, authors=["Ada Lovelace", "Grace Hopper"]).reason == "foreign"
+    both = f"Quantum dots. Ada Lovelace and Grace Hopper. {FILLER}"
+    assert zotero.judge_text("Quantum dots", "", both, authors=["Ada Lovelace", "Grace Hopper", "Alan Turing"]).reason == "title_short"
 
 
 def test_a_non_latin_title_matches_whole_not_inside_a_longer_word():

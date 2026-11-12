@@ -440,10 +440,14 @@ def test_a_guard_change_rebuilds_tantivy_and_purges_the_deleted_text_from_the_fi
     file of the data folder."""
     add_two_attachment_item(library[0])
     data = library[1]
+    # Many pages of foreign text, so that the pages its deletion frees are not all written over by the re-store.
+    (library[0] / "storage" / ATT_TWO_BAD / ".zotero-ft-cache").write_text(
+        "".join(f"Clause {i}: deposit, rent and {TWO_SENTINEL} terms follow in section {i}. " for i in range(1500)))
 
     def files_holding(word: str) -> list[str]:
         kb.connect().execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        return sorted(p.name for p in data.rglob("*") if p.is_file() and word.encode() in p.read_bytes())
+        stem = word[:10].encode()  # the FTS index holds the stemmed word
+        return sorted(p.name for p in data.rglob("*") if p.is_file() and stem in p.read_bytes())
 
     rebuilds = []
     from keyword_index import KeywordIndex
@@ -513,3 +517,42 @@ def test_an_attachment_without_a_cache_or_outside_the_library_has_nothing_to_jud
     assert zotero.attachment_text_decision("NOSUCH01") is None
     (library[0] / "storage" / ATT_MINE / ".zotero-ft-cache").unlink()
     assert zotero.attachment_text_decision(ATT_MINE) is None
+
+
+def fts_index_with_a_few_deleted_rows(tmp_path, monkeypatch):
+    """A few deleted rows in one large FTS segment: too few for FTS5 to merge the segment on its own, so the deleted
+    word stays in the index's own pages, where VACUUM alone copies it along."""
+    monkeypatch.setattr(kb, "DB_PATH", tmp_path / "kb.sqlite")
+    db = kb.connect()
+    db.executemany("INSERT INTO chunks_fts (rowid, title, heading, text, tags) VALUES (?, 't', 'h', ?, '')",
+                   [(i, f"common words here number{i} {FOREIGN_SENTINEL if i < 4 else 'other'}") for i in range(1, 600)])
+    db.commit()
+    db.executemany("DELETE FROM chunks_fts WHERE rowid=?", [(1,), (2,), (3,)])
+    db.execute("INSERT OR REPLACE INTO meta VALUES ('purge_pending', 'compact')")
+    db.commit()
+    stem = FOREIGN_SENTINEL[:10].encode()
+    return db, lambda: any(stem in p.read_bytes() for p in tmp_path.iterdir() if p.is_file())
+
+
+def test_the_purge_takes_a_deleted_word_out_of_the_fts_index_itself(tmp_path, monkeypatch):
+    db, held = fts_index_with_a_few_deleted_rows(tmp_path, monkeypatch)
+    assert held()
+    assert kb.purge_deleted_text(db) is True
+    assert not held()
+    assert db.execute("SELECT count(*) FROM meta WHERE key='purge_pending'").fetchone()[0] == 0
+    assert kb.purge_deleted_text(db) is True  # nothing pending: nothing to do
+
+
+def test_a_purge_that_cannot_finish_stays_pending_and_is_finished_by_the_next_run(tmp_path, monkeypatch, capsys):
+    """Another process is reading: the compacted database cannot be moved out of the write-ahead log yet."""
+    db, held = fts_index_with_a_few_deleted_rows(tmp_path, monkeypatch)
+    db.execute("PRAGMA busy_timeout=50")
+    reader = sqlite3.connect(tmp_path / "kb.sqlite")
+    reader.execute("BEGIN")
+    reader.execute("SELECT count(*) FROM meta").fetchone()  # holds a snapshot of the database as it was
+    assert kb.purge_deleted_text(db) is False
+    assert db.execute("SELECT value FROM meta WHERE key='purge_pending'").fetchone() is not None
+    assert "next index run" in capsys.readouterr().err
+    reader.close()
+    assert kb.purge_deleted_text(db) is True
+    assert not held() and db.execute("SELECT count(*) FROM meta WHERE key='purge_pending'").fetchone()[0] == 0
