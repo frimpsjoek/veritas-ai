@@ -168,6 +168,26 @@ def test_malformed_json_is_a_parse_error(server):
     assert response["error"]["code"] == -32700
 
 
+def test_deeply_nested_json_is_a_parse_error(server):
+    port, _ = server
+    response = json.loads(call_raw(port, "[" * 100000 + "]" * 100000))
+    assert response["error"]["code"] == -32700
+
+
+def test_finite_numeric_ids_are_supported_but_non_finite_ids_are_invalid(server):
+    port, _ = server
+    payload = request()
+    payload["id"] = 1.5
+    status, _, raw = call(port, "POST", "/a2a", AUTH, payload)
+    assert status == 200 and json.loads(raw)["id"] == 1.5
+
+    payload["id"] = float("nan")
+    status, _, raw = call(port, "POST", "/a2a", AUTH, payload)
+    response = json.loads(raw)
+    assert status == 200 and response["error"]["code"] == -32600
+    assert response["id"] is None
+
+
 def test_questions_are_bounded_before_reaching_the_sidecar(server, seen):
     port, _ = server
     status, _, raw = call(port, "POST", "/a2a", AUTH, request(parts=[{"kind": "text", "text": "x" * (a2a_api.MAX_QUESTION_CHARS + 1)}]))

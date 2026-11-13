@@ -6,6 +6,7 @@ credential or a loopback exception; http_api owns that authentication gate.
 from __future__ import annotations
 
 import hmac
+import math
 import os
 import secrets
 import sys
@@ -83,7 +84,13 @@ def agent_card() -> dict:
 
 
 def valid_request_id(value) -> bool:
-    return value is None or (isinstance(value, (str, int)) and not isinstance(value, bool))
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, float):
+        return math.isfinite(value)
+    return isinstance(value, (str, int))
 
 
 def reply_error(handler, request_id, code: int, message: str) -> None:
@@ -142,7 +149,7 @@ def message_send(handler, sidecar) -> None:
         return reply_error(handler, None, -32600, "Invalid Request")
     try:
         body = handler._body(limit=MAX_BODY_BYTES)
-    except ValueError:
+    except (ValueError, RecursionError):
         return reply_error(handler, None, -32700, "Parse error")
     if not isinstance(body, dict):
         return reply_error(handler, None, -32600, "Invalid Request")
