@@ -175,7 +175,7 @@ def test_questions_are_bounded_before_reaching_the_sidecar(server, seen):
     assert seen == []
 
 
-@pytest.mark.parametrize("length", [None, "not-a-number", "-1", "1_000", "+12", " 12", "１２"])
+@pytest.mark.parametrize("length", [None, "not-a-number", "-1", "1_000", "+12", " 12", "１２", "9" * 5000])
 def test_invalid_content_lengths_are_rejected_before_reading(server, length):
     class Handler:
         headers = {} if length is None else {"Content-Length": length}

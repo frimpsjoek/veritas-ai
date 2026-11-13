@@ -133,13 +133,16 @@ def message_send(handler, sidecar) -> None:
     """Validate one bounded JSON-RPC message/send and invoke the stateless Ask runtime."""
     request_id = None
     raw_length = handler.headers.get("Content-Length")
-    length = int(raw_length) if raw_length is not None and raw_length.isascii() and raw_length.isdigit() else -1
+    try:
+        length = int(raw_length) if raw_length is not None and raw_length.isascii() and raw_length.isdigit() else -1
+    except ValueError:  # absurd digit strings can exceed CPython's integer conversion limit
+        length = -1
     if length < 0 or length > MAX_BODY_BYTES:
         handler.close_connection = True  # an invalid or oversized body was deliberately not consumed
         return reply_error(handler, None, -32600, "Invalid Request")
     try:
         body = handler._body(limit=MAX_BODY_BYTES)
-    except (ValueError, UnicodeDecodeError):
+    except ValueError:
         return reply_error(handler, None, -32700, "Parse error")
     if not isinstance(body, dict):
         return reply_error(handler, None, -32600, "Invalid Request")
