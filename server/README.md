@@ -55,6 +55,14 @@ Recall with Zotero included: hit@5 9/11, hit@1 6/11 (the old code on the same in
 - **Audit:** every agent request is logged to `data/agent-access.log`; `kb.py audit --days 1` summarises it.
 - **Scope:** the Obsidian plugin is not restricted. The rules cover the MCP tools only; Claude Code's own file tools need permission deny rules to keep them out of private folders.
 
+## A2A agents
+
+Veritas publishes its A2A 0.3.0 Agent Card at `/.well-known/agent-card.json`. Remote agents call `POST /a2a` with JSON-RPC `message/send` and `Authorization: Bearer <data/a2a-token>`; the relative endpoint resolves against that card's public URL. The browser `data/api-token` and `sb_session` cookie do not authorize this route. Veritas answers one stateless question at a time through the same Ask runtime as the app; it does not advertise streaming or retain A2A conversations.
+
+Requests accept text parts and return Markdown in an A2A `Message`. Invalid requests and runtime failures return JSON-RPC errors without filesystem details. Requests are bounded to 200,000 decoded question characters and have a slightly larger JSON envelope cap.
+
+To revoke and rotate the A2A credential, stop Veritas, delete `data/a2a-token` (or `$VERITAS_DATA/a2a-token`), and start Veritas again. Give the newly generated credential only to the remote agent hub. The card and error responses never contain the credential.
+
 ## Using it
 
 The MCP server (`server.py`) provides (all tools accept `zotero/KEY` or `@citekey` for papers) `search_notes`, `read_note`, `note_links`, `related_notes`, `recent_notes` and `index_status`. It is registered in:

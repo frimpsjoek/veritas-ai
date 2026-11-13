@@ -169,6 +169,7 @@ def test_sidecar_is_told_the_port_the_server_runs_on(monkeypatch):
     seen = {}
     monkeypatch.setattr(http_api.agent_api, "supervise", lambda data, kb_url: seen.setdefault("kb_url", kb_url) and None)
     monkeypatch.setattr(http_api, "token", lambda: "t")
+    monkeypatch.setattr(http_api.a2a_api, "ensure_token", lambda: "a2a-test-token")
     class Stop(Exception):
         pass
     def no_server(*a, **k):
@@ -193,3 +194,37 @@ def test_spawn_passes_notes_dir(tmp_path, monkeypatch):
     agent_api._spawn(sidecar, tmp_path / "data", "http://127.0.0.1:1")
     cmd = seen["cmd"]
     assert cmd[cmd.index("--notes") + 1] == str(tmp_path / "out")
+
+
+def test_ask_sends_question_to_the_sidecar():
+    class AskHandler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            assert self.path == "/ask"
+            assert self.headers.get("Authorization") == "Bearer topsecret"
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            assert body == {"question": "What is in my library?"}
+            data = json.dumps([{"type": "done", "answer": {"structured": {"markdown": "An answer"}}}]).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *args):
+            pass
+
+    server = socketserver.TCPServer(("127.0.0.1", 0), AskHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        sidecar = agent_api.Sidecar(node=Path("/usr/bin/node"), secret="topsecret", port=server.server_address[1])
+        events = agent_api.ask(sidecar, "What is in my library?")
+        assert events[0]["answer"]["structured"]["markdown"] == "An answer"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_ask_when_the_sidecar_is_unreachable_is_a_sidecar_error():
+    sidecar = agent_api.Sidecar(node=Path("/usr/bin/node"), secret="s", port=1)
+    with pytest.raises(agent_api.SidecarError):
+        agent_api.ask(sidecar, "ping")

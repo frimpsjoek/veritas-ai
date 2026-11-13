@@ -11,6 +11,7 @@ a bug in this file must never be able to take the search server down with it.
 from __future__ import annotations
 
 import http.client
+import json
 import os
 import re
 import secrets
@@ -28,6 +29,10 @@ AGENTD_ENTRY = Path("..") / "agent" / "dist" / "agentd.mjs"  # beside server/ in
 DEFAULT_KB_URL = "http://127.0.0.1:27182"
 BACKOFF = (1, 2, 4, 8, 16, 30)  # seconds between restarts; caps and repeats at the last value
 AI_NOTES_ROOT = "ai_notes"
+
+
+class SidecarError(RuntimeError):
+    """The agent sidecar could not provide a valid response."""
 
 
 @dataclass
@@ -151,6 +156,35 @@ def shutdown(sidecar: Sidecar | None) -> None:
             proc.wait(timeout=3)
         except subprocess.TimeoutExpired:
             proc.kill()
+
+
+def ask(sidecar: Sidecar | None, question: str) -> list[dict]:
+    """Run the existing stateless /ask operation and return its event list."""
+    if sidecar is None:
+        raise SidecarError("second brain ai is unavailable")
+    with sidecar.lock:
+        port = sidecar.port
+    if port is None:
+        raise SidecarError("the agent sidecar is (re)starting")
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=900)
+    try:
+        conn.request("POST", "/ask", body=json.dumps({"question": question}).encode(), headers={
+            "Authorization": f"Bearer {sidecar.secret}", "Content-Type": "application/json",
+        })
+        response = conn.getresponse()
+        data = response.read()
+        if response.status != 200:
+            raise SidecarError(f"the agent sidecar returned HTTP {response.status}")
+        events = json.loads(data)
+        if not isinstance(events, list):
+            raise SidecarError("the agent sidecar returned an invalid response")
+        return events
+    except SidecarError:
+        raise
+    except (OSError, TimeoutError, ValueError, http.client.HTTPException) as error:
+        raise SidecarError(str(error)) from error
+    finally:
+        conn.close()
 
 
 def _missing_node_help() -> str:
