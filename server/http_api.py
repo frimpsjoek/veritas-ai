@@ -493,6 +493,8 @@ class Handler(BaseHTTPRequestHandler):
             # No loopback, listed-origin, browser-token, or cookie alternative for the agent bridge.
             if a2a_api.authorized(self.headers):
                 return True
+            print(f"401 a2a origin={self.headers.get('Origin')!r} "
+                  f"sec-fetch-site={self.headers.get('Sec-Fetch-Site')!r}", file=sys.stderr, flush=True)
             self._send(401, {"error": "a valid A2A token is required"})
             return False
         if kind == "app":
