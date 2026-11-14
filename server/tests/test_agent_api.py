@@ -228,3 +228,18 @@ def test_ask_when_the_sidecar_is_unreachable_is_a_sidecar_error():
     sidecar = agent_api.Sidecar(node=Path("/usr/bin/node"), secret="s", port=1)
     with pytest.raises(agent_api.SidecarError):
         agent_api.ask(sidecar, "ping")
+
+
+def test_start_indexing_does_not_require_macos_taskpolicy_on_linux(tmp_path, monkeypatch):
+    import subprocess
+    import sys
+
+    import http_api
+
+    seen = {}
+    monkeypatch.setattr(http_api.kb, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(subprocess, "Popen", lambda cmd, **kwargs: seen.setdefault("cmd", cmd))
+    monkeypatch.setattr(sys, "platform", "linux")
+    http_api.start_indexing(None)
+    assert seen["cmd"][:2] == [sys.executable, str(http_api.kb.HOME / "kb.py")]
+    assert seen["cmd"][2:] == ["index"]
