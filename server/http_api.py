@@ -65,6 +65,8 @@ GET  /web/page?url=&prefer=reader               the link panel: {mode: frame|rea
 GET  /web/pdf?url=                              that PDF streamed with Range (a DOI: the library's or open-access copy)
 POST /web/ticket {"route","query"}             a one-use, 120 s ticket for a frame/PDF/image URL (?ticket=), phase 3
 POST /app/login {"token"}                      sign a browser in: sets the `sb_session` cookie (401 on a wrong token)
+GET  /.well-known/agent-card.json              public A2A discovery (a2a_api.py)
+POST /a2a                                      A2A message/send; dedicated `data/a2a-token` only, never local/cookie auth
 
 Listens on 127.0.0.1 only. The phone reaches it through `tailscale serve`, which forwards tailnet requests to this
 port with the Tailscale host name in the Host header. `request_class` sorts every request by its headers:
@@ -74,7 +76,8 @@ port with the Tailscale host name in the Host header. `request_class` sorts ever
 - proxied: anything else. It needs `Authorization: Bearer <data/api-token>` or an `sb_session` cookie from
   `POST /app/login`.
 So a web page cannot use the API, through DNS rebinding or otherwise, and a tailnet device without the token gets
-nothing. No CORS headers are sent.
+nothing. No CORS headers are sent. The sole exception to proxied browser/cookie auth is POST /a2a, which always requires
+its independent data/a2a-token, including on loopback.
 """
 from __future__ import annotations
 
@@ -95,6 +98,7 @@ from pathlib import Path
 from typing import Literal, Mapping
 from urllib.parse import parse_qs, unquote, urlparse
 
+import a2a_api
 import agent_api
 import kb
 import zotero
@@ -477,21 +481,32 @@ class Handler(BaseHTTPRequestHandler):
                 if not authorized(self.headers):  # a stale ticket next to a valid token or cookie is just ignored
                     self._send(403, {"error": "this link has expired; open it again"})
                     return False
+        path = urlparse(self.path).path
+        is_a2a = self.command == "POST" and path == "/a2a"
+        if kind == "foreign":
+            # Logged so a real client that gets wrongly classed as a website shows up in serve.log.
+            print(f"403 foreign {self.command} {path} origin={self.headers.get('Origin')!r} "
+                  f"sec-fetch-site={self.headers.get('Sec-Fetch-Site')!r}", file=sys.stderr, flush=True)
+            self._send(403, {"error": "requests from other websites are refused"})
+            return False
+        if is_a2a:
+            # No loopback, listed-origin, browser-token, or cookie alternative for the agent bridge.
+            if a2a_api.authorized(self.headers):
+                return True
+            print(f"401 a2a origin={self.headers.get('Origin')!r} "
+                  f"sec-fetch-site={self.headers.get('Sec-Fetch-Site')!r}", file=sys.stderr, flush=True)
+            self._send(401, {"error": "a valid A2A token is required"})
+            return False
         if kind == "app":
             # Never the loopback pass or the cookie: a listed site still has to prove it holds the token.
             if bearer_ok(self.headers):
                 return True
             self._send(401, {"error": "a valid token is required"})
             return False
-        if kind == "foreign":
-            # Logged so a real client that gets wrongly classed as a website shows up in serve.log.
-            print(f"403 foreign {self.command} {urlparse(self.path).path} origin={self.headers.get('Origin')!r} "
-                  f"sec-fetch-site={self.headers.get('Sec-Fetch-Site')!r}", file=sys.stderr, flush=True)
-            self._send(403, {"error": "requests from other websites are refused"})
-            return False
-        path = urlparse(self.path).path
-        # The page, its scripts and the sign-in page are public files; every data route stays behind the token.
-        public = (self.command == "POST" and path == "/app/login") or (self.command == "GET" and (path == "/app" or path.startswith("/app/")))
+        # The page, its scripts, sign-in page and A2A card are public; every data route stays behind the token.
+        public = ((self.command == "POST" and path == "/app/login") or
+                  (self.command == "GET" and (path == "/app" or path.startswith("/app/") or
+                                              path == "/.well-known/agent-card.json")))
         if kind == "local" or public or authorized(self.headers):
             return True
         self._send(401, {"error": "a valid token is required"})
@@ -547,6 +562,8 @@ class Handler(BaseHTTPRequestHandler):
         def handle() -> None:
             if agent and route not in AGENT_ROUTES:
                 raise PermissionError("not available to agents")
+            if route == "/.well-known/agent-card.json":
+                return self._send(200, a2a_api.agent_card())
             if self._forward_to_agent_sidecar(route):
                 return
             if self._needs_zotero(route):
@@ -724,6 +741,8 @@ class Handler(BaseHTTPRequestHandler):
         def handle() -> None:
             if agent and route not in AGENT_ROUTES:
                 raise PermissionError("not available to agents")
+            if route == "/a2a":
+                return a2a_api.message_send(self, AGENT_SIDECAR)
             if self._forward_to_agent_sidecar(route):
                 return
             if self._needs_zotero(route):
@@ -963,7 +982,7 @@ class Handler(BaseHTTPRequestHandler):
 def restart_when_code_changes() -> None:
     """A server outlives the Obsidian that started it and serves the phone, so after an update it replaces itself
     with the new code (same process, same port) instead of leaving the phone with nothing."""
-    files = [kb.HOME / name for name in ("kb.py", "http_api.py", "zotero.py", "mlx_embed.py", "keyword_index.py", "media.py", "zotero_files.py", "paper_notes.py", "agent_api.py", "plugin_updates.py", "skills.py", "radar_api.py", "web_app.py", "pdf_route.py", "pending_adds.py", "paper_figures.py", "sources.py", "site_icons.py")]
+    files = [kb.HOME / name for name in ("kb.py", "http_api.py", "zotero.py", "mlx_embed.py", "keyword_index.py", "media.py", "zotero_files.py", "paper_notes.py", "agent_api.py", "a2a_api.py", "plugin_updates.py", "skills.py", "radar_api.py", "web_app.py", "pdf_route.py", "pending_adds.py", "paper_figures.py", "sources.py", "site_icons.py")]
     files.append(kb.HOME / agent_api.AGENTD_ENTRY)  # a rebuilt sidecar is an update too
     started = {f: f.stat().st_mtime for f in files if f.exists()}
     while True:
@@ -981,6 +1000,7 @@ def sidecar_kb_url(port: int) -> str:
 def serve(port: int) -> None:
     global AGENT_SIDECAR
     token()  # create it on first start, so the Mac plugin can hand it to the phone
+    a2a_api.ensure_token()  # the A2A-only credential is independent of browser sign-in
     try:
         # The sidecar reaches the library through this server, on the port it actually runs on (it used to be told
         # 27182 whatever the port, so a server on another port gave an AI that could not see the library).
