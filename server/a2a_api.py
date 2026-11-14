@@ -45,7 +45,11 @@ def ensure_token() -> str:
             return existing
         TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
         value = secrets.token_urlsafe(32)
-        fd = os.open(TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            fd = os.open(TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            os.chmod(TOKEN_FILE, 0o600)
+            return token()
         with os.fdopen(fd, "w") as handle:
             handle.write(value)
         return value
