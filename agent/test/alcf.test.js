@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import * as alcf from '../src/providers/alcf.js';
 import {
   ALCF_ENDPOINTS, ALCF_DISCOVERY_URL, assertAlcfUrl, modelsFromCatalog, createAlcfProviders,
 } from '../src/providers/alcf.js';
@@ -98,6 +99,29 @@ test('providers discover raw model IDs through one bounded authenticated cache',
   const ready = await providers.get('oss:alcf-metis').status();
   assert.equal(ready.state, 'ready');
   assert.ok(!JSON.stringify(ready).includes('user-token'));
+});
+
+test('catalog loader serializes forced refresh after normal work and bypasses a fresh cache', async () => {
+  let releaseNormal;
+  const normalResult = new Promise((resolve) => { releaseNormal = resolve; });
+  const calls = [];
+  const load = alcf.createCatalogLoader(async (force) => {
+    calls.push(force);
+    return force ? { value: `forced-${calls.length}` } : normalResult;
+  }, { clock: () => 1_000 });
+
+  const ordinary = load(false);
+  const recoveredA = load(true);
+  const recoveredB = load(true);
+  await Promise.resolve();
+  assert.deepEqual(calls, [false], 'forced recovery waits rather than joining or replacing normal work');
+  releaseNormal({ value: 'ordinary' });
+  assert.deepEqual(await ordinary, { value: 'ordinary' });
+  assert.deepEqual(await recoveredA, { value: 'forced-2' });
+  assert.deepEqual(await recoveredB, { value: 'forced-2' }, 'waiting forced callers share one refresh');
+  assert.deepEqual(calls, [false, true]);
+  assert.deepEqual(await load(false), { value: 'forced-2' }, 'ordinary work uses the fresh successful cache');
+  assert.deepEqual(await load(true), { value: 'forced-3' }, 'force bypasses even a fresh cache');
 });
 
 test('discovery 401 forces one refresh and retry before signed-out failure', async () => {

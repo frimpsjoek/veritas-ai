@@ -531,7 +531,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", paper_notes.IMAGE_TYPES.get(path.suffix.lower(), "application/octet-stream"))
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "private, no-store")
+        identity = getattr(self, "_identity", None) or {}
+        cache_control = "private, no-store" if identity.get("kind") == "globus" else "private, max-age=300"
+        self.send_header("Cache-Control", cache_control)
         self.end_headers()
         self.wfile.write(data)
 

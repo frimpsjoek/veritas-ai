@@ -47,6 +47,44 @@ function discoveryError(status, message) {
 }
 
 /**
+ * Share one catalog operation at a time. A forced refresh never joins ordinary work: it waits for that operation,
+ * then re-enters so simultaneous forced callers coalesce on the refresh. Promise identity guards the cleanup.
+ * @param {(force?: boolean) => Promise<any>} fetchOne
+ * @param {{ clock?: () => number }} [opts]
+ * @returns {(force?: boolean) => Promise<any>}
+ */
+export function createCatalogLoader(fetchOne, opts = {}) {
+  const clock = opts.clock ?? Date.now;
+  let cache = { at: 0, value: null };
+  /** @type {Promise<any> | null} */
+  let pending = null;
+  let pendingForced = false;
+
+  return async function catalog(force = false) {
+    if (!force && cache.value !== null && clock() - cache.at < DISCOVERY_CACHE_MS) return cache.value;
+    if (pending) {
+      if (!force || pendingForced) return pending;
+      const ordinary = pending;
+      await ordinary.catch(() => {});
+      return catalog(force);
+    }
+    pendingForced = force;
+    const request = fetchOne(force).then((value) => {
+      cache = { at: clock(), value };
+      return value;
+    });
+    pending = request;
+    try { return await request; }
+    finally {
+      if (pending === request) {
+        pending = null;
+        pendingForced = false;
+      }
+    }
+  };
+}
+
+/**
  * @param {import("../platform").Platform} platform
  * @param {{ accessToken: (force?: boolean) => Promise<string>, discoveryTimeoutMs?: number, clock?: () => number }} opts
  * @returns {Map<string, import("../provider").Provider>}
@@ -54,9 +92,6 @@ function discoveryError(status, message) {
 export function createAlcfProviders(platform, opts) {
   const timeoutMs = opts.discoveryTimeoutMs ?? 30_000;
   const clock = opts.clock ?? Date.now;
-  let cache = { at: 0, value: null };
-  /** @type {Promise<any> | null} */
-  let pending = null;
 
   async function fetchCatalog(force = false) {
     assertAlcfUrl(ALCF_DISCOVERY_URL);
@@ -84,15 +119,7 @@ export function createAlcfProviders(platform, opts) {
     }
   }
 
-  async function catalog(force = false) {
-    if (!force && cache.value !== null && clock() - cache.at < DISCOVERY_CACHE_MS) return cache.value;
-    if (pending) return pending;
-    pending = fetchCatalog(force).then((value) => {
-      cache = { at: clock(), value };
-      return value;
-    }).finally(() => { pending = null; });
-    return pending;
-  }
+  const catalog = createCatalogLoader(fetchCatalog, { clock });
 
   /** @type {Map<string, import("../provider").Provider>} */
   const providers = new Map();

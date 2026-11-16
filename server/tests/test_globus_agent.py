@@ -171,12 +171,20 @@ def test_identity_is_resolved_once_and_never_falls_back_to_legacy(tenant_server,
     assert call(port, "GET", "/web/state", cookie(SESSION_A))[0] == 200
 
 
-def test_tenant_responses_are_not_storable(tenant_server):
-    port, _, _, _ = tenant_server
+def test_tenant_responses_are_not_storable(tenant_server, monkeypatch):
+    port, _, _, root = tenant_server
     status, headers, _ = call(port, "GET", "/agent/conversations", cookie(SESSION_A))
     assert status == 200 and value(headers, "Cache-Control") == "no-store"
     status, headers, _ = call(port, "GET", "/web/state", cookie(SESSION_A))
     assert status == 200 and value(headers, "Cache-Control") == "no-store"
+
+    image = root / "image.png"
+    image.write_bytes(b"image-data")
+    monkeypatch.setattr(http_api.paper_notes, "image_file", lambda *args: image)
+    status, headers, _ = call(port, "GET", "/file?name=image.png", cookie(SESSION_A))
+    assert status == 200 and value(headers, "Cache-Control") == "private, no-store"
+    status, headers, _ = call(port, "GET", "/file?name=image.png", {"Authorization": "Bearer admin-token"})
+    assert status == 200 and value(headers, "Cache-Control") == "private, max-age=300"
 
 
 def test_web_state_is_private_per_tenant(tenant_server):
