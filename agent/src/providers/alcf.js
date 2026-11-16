@@ -104,8 +104,6 @@ export function createAlcfProviders(platform, opts) {
         headers: { authorization: `Bearer ${token}` }, redirect: 'error', signal: controller.signal,
       });
       if (!response.ok) throw discoveryError(response.status, `ALCF model discovery returned HTTP ${response.status}`);
-      const contentLength = Number(response.headers?.get?.('content-length') ?? 0);
-      if (contentLength > DISCOVERY_MAX_BYTES) throw discoveryError(413, 'ALCF model discovery response is too large');
       const text = await readBoundedText(response, DISCOVERY_MAX_BYTES);
       try { return JSON.parse(text); } catch { throw discoveryError(502, 'ALCF model discovery returned invalid JSON'); }
     } catch (error) {

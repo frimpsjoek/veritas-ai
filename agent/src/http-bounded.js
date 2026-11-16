@@ -2,6 +2,7 @@
 export async function readBoundedText(response, maxBytes) {
   const declaredBytes = Number(response.headers?.get?.('content-length') ?? 0);
   if (declaredBytes > maxBytes) {
+    try { await response.body?.cancel?.(); } catch { /* already closed or aborted */ }
     throw Object.assign(new Error('HTTP response is too large'), { status: 413 });
   }
   if (response.body?.getReader) {

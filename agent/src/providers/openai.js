@@ -298,6 +298,11 @@ export function openaiProvider(platform, settings) {
             yield { type: 'failed', error: { kind: 'signed_out', message: 'Sign in with Globus again.' } };
             return;
           }
+          if (dynamicKey) {
+            try { await res.body?.cancel?.(); } catch { /* the terminal error response is already settled */ }
+            yield { type: 'failed', error: { kind: 'provider_crashed', message: `ALCF request returned HTTP ${res.status}.` } };
+            return;
+          }
           const text = await res.text().catch(() => '');
           yield { type: 'failed', error: { kind: res.status === 401 ? 'signed_out' : 'provider_crashed', message: text || `The endpoint returned ${res.status}.` } };
           return;

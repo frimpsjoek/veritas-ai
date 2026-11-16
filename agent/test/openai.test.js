@@ -120,6 +120,34 @@ test('turn(): a persistent non-2xx is reported as failed{provider_crashed}', asy
   const events = await collect(provider.turn(baseReq(), new AbortController().signal));
   assert.equal(events.length, 1);
   assert.equal(events[0].error.kind, 'provider_crashed');
+  assert.equal(events[0].error.message, 'boom', 'static-key endpoints retain their diagnostic response text');
+});
+
+test('dynamic ALCF non-auth failures cancel and conceal the upstream response body', async () => {
+  let bodyReads = 0;
+  let cancellations = 0;
+  const fetchFn = async () => ({
+    ok: false,
+    status: 500,
+    text: async () => {
+      bodyReads += 1;
+      return 'private prompt and authorization: Bearer raw-upstream-secret';
+    },
+    body: { cancel: async () => { cancellations += 1; } },
+  });
+  const provider = openaiProvider(fakePlatform(fetchFn), {
+    baseUrl: 'https://inference-api.alcf.anl.gov/resource_server/metis/api/v1',
+    apiKey: async () => 'user-token',
+  });
+  const events = await collect(provider.turn(baseReq(), new AbortController().signal));
+  assert.deepEqual(events, [{
+    type: 'failed',
+    error: { kind: 'provider_crashed', message: 'ALCF request returned HTTP 500.' },
+  }]);
+  assert.equal(bodyReads, 0);
+  assert.equal(cancellations, 1);
+  assert.ok(!events[0].error.message.includes('private prompt'));
+  assert.ok(!events[0].error.message.includes('raw-upstream-secret'));
 });
 
 test('turn(): a 401 is reported as failed{signed_out}', async () => {

@@ -28,12 +28,15 @@ test('bounded reader handles multibyte boundaries', async () => {
 
 test('bounded reader rejects a declared oversized fallback body without reading it', async () => {
   let reads = 0;
+  let cancellations = 0;
   const response = {
     headers: { get: (name) => name.toLowerCase() === 'content-length' ? '3' : null },
+    body: { cancel: async () => { cancellations += 1; } },
     text: async () => { reads += 1; return 'abc'; },
   };
   await assert.rejects(readBoundedText(response, 2), (error) => error.status === 413);
   assert.equal(reads, 0);
+  assert.equal(cancellations, 1);
 });
 
 test('bounded reader refuses a response without a streaming reader instead of buffering it', async () => {

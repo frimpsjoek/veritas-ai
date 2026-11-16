@@ -26,6 +26,7 @@ function fakePlatform(steps) {
       if (i >= steps.length) throw new Error(`unexpected fetch ${url}`);
       const step = steps[i];
       if (step.throw) throw step.throw;
+      if (step.response) return step.response;
       return new Response(step.text ?? JSON.stringify(step.body ?? {}), {
         status: step.status ?? 200,
         headers: step.contentLength ? { 'content-length': String(step.contentLength) } : undefined,
@@ -165,10 +166,15 @@ test('discovery failures are private, uncached, and map auth rejection to signed
 });
 
 test('discovery rejects oversized and timed-out responses, then retries', async () => {
-  const huge = fakePlatform([{ body: catalog(), contentLength: 2 * 1024 * 1024 + 1 }, { body: catalog() }]);
+  const oversized = new Response('x', { headers: { 'content-length': String(2 * 1024 * 1024 + 1) } });
+  let cancellations = 0;
+  const cancel = oversized.body.cancel.bind(oversized.body);
+  oversized.body.cancel = async (...args) => { cancellations += 1; return cancel(...args); };
+  const huge = fakePlatform([{ response: oversized }, { body: catalog() }]);
   const providers = createAlcfProviders(huge, { accessToken: async () => 'user-token' });
   const provider = providers.get('oss:alcf-tara');
   assert.equal((await provider.status()).state, 'unreachable');
+  assert.equal(cancellations, 1, 'declared oversize discovery reaches the bounded reader cancellation path');
   assert.equal((await provider.status()).state, 'ready');
   assert.equal(huge.calls.length, 2);
 
