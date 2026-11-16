@@ -649,7 +649,7 @@ def test_storage_rejects_nonfinite_and_boolean_expiry(store: UserStore):
 def test_invalid_grant_requires_reauth_and_new_login_can_restore_status(store: UserStore):
     fixture = AuthFixture()
     tenant = store.tenant_id("subject-A")
-    auth, _ = prepare_refresh(store, fixture, tenant)
+    auth, _ = prepare_refresh(store, fixture, tenant, expires=NOW + 3600)
     client = auth.client_factory(config())
     import globus_sdk
     import requests
@@ -658,17 +658,23 @@ def test_invalid_grant_requires_reauth_and_new_login_can_restore_status(store: U
     upstream.headers["Content-Type"] = "application/json"
     upstream._content = b'{"error":"invalid_grant"}'
     upstream.request = requests.Request("POST", "https://auth.globus.org/v2/oauth2/token").prepare()
+    attempts = []
 
-    def rejected(_refresh):
+    def rejected(refresh):
+        attempts.append(refresh)
         raise globus_sdk.GlobusAPIError(upstream)
 
     original_refresh = client.oauth2_refresh_token
     client.oauth2_refresh_token = rejected
     auth.client_factory = lambda _: client
     with pytest.raises(globus_auth.AuthError) as error:
-        auth.inference_access_token(tenant)
+        auth.inference_access_token(tenant, force=True)
     assert error.value.status == 401
     assert auth.inference_status(tenant) == {"connected": False, "needs_reauth": True, "expires_at": None}
+    with pytest.raises(globus_auth.AuthError) as error:
+        auth.inference_access_token(tenant)
+    assert error.value.status == 401
+    assert attempts == ["refresh-A"], "an ordinary request cannot reuse the unexpired rejected credential or refresh again"
     client.oauth2_refresh_token = original_refresh
     assert auth.inference_access_token(tenant, force=True) == "new-access"
     assert auth.inference_status(tenant) == {"connected": True, "needs_reauth": False, "expires_at": NOW + 3600}

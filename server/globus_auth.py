@@ -264,14 +264,19 @@ class GlobusAuth:
         token = self.store.inference(tenant)
         if token and (token["resource_server"] != INFERENCE_RS or token["client_id"] != self.config.client_id):
             raise self._reauth()
-        if not force and self._usable(token):
-            return self._credential(token)
+        if not force:
+            if tenant in self._reauth_required:
+                raise self._reauth()
+            if self._usable(token):
+                return self._credential(token)
         if not token:
             raise self._reauth()
         observed = self._version(token)
         with self._refresh_lock(tenant):
             token = self.store.inference(tenant)
             if not token or token["resource_server"] != INFERENCE_RS or token["client_id"] != self.config.client_id:
+                raise self._reauth()
+            if not force and tenant in self._reauth_required:
                 raise self._reauth()
             # A forced retry that waited behind another request must reuse that
             # request's rotated credential rather than force a second rotation.

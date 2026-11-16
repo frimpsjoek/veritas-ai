@@ -103,7 +103,10 @@ export function createAlcfProviders(platform, opts) {
       const response = await platform.fetch(ALCF_DISCOVERY_URL, {
         headers: { authorization: `Bearer ${token}` }, redirect: 'error', signal: controller.signal,
       });
-      if (!response.ok) throw discoveryError(response.status, `ALCF model discovery returned HTTP ${response.status}`);
+      if (!response.ok) {
+        try { await response.body?.cancel?.(); } catch { /* the rejected response is already settled */ }
+        throw discoveryError(response.status, `ALCF model discovery returned HTTP ${response.status}`);
+      }
       const text = await readBoundedText(response, DISCOVERY_MAX_BYTES);
       try { return JSON.parse(text); } catch { throw discoveryError(502, 'ALCF model discovery returned invalid JSON'); }
     } catch (error) {

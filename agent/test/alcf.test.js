@@ -165,6 +165,20 @@ test('discovery failures are private, uncached, and map auth rejection to signed
   assert.equal((await provider.status()).state, 'ready', 'the next call retries instead of caching the failure');
 });
 
+test('discovery cancels non-success responses without exposing their bodies', async () => {
+  const rejected = new Response('private upstream diagnostic', { status: 503 });
+  let cancellations = 0;
+  const cancel = rejected.body.cancel.bind(rejected.body);
+  rejected.body.cancel = async (...args) => { cancellations += 1; return cancel(...args); };
+  const platform = fakePlatform([{ response: rejected }]);
+  const provider = createAlcfProviders(platform, { accessToken: async () => 'user-token' }).get('oss:alcf-tara');
+  const status = await provider.status();
+  assert.equal(status.state, 'unreachable');
+  assert.equal(cancellations, 1);
+  assert.equal(platform.calls.length, 1);
+  assert.ok(!JSON.stringify(status).includes('private upstream diagnostic'));
+});
+
 test('discovery rejects oversized and timed-out responses, then retries', async () => {
   const oversized = new Response('x', { headers: { 'content-length': String(2 * 1024 * 1024 + 1) } });
   let cancellations = 0;
