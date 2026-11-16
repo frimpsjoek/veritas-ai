@@ -1,5 +1,9 @@
 /** Read at most maxBytes from a fetch Response, cancelling a streaming body at the cap. */
 export async function readBoundedText(response, maxBytes) {
+  const declaredBytes = Number(response.headers?.get?.('content-length') ?? 0);
+  if (declaredBytes > maxBytes) {
+    throw Object.assign(new Error('HTTP response is too large'), { status: 413 });
+  }
   if (response.body?.getReader) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -22,9 +26,7 @@ export async function readBoundedText(response, maxBytes) {
       reader.releaseLock?.();
     }
   }
-  const text = await response.text();
-  if (new TextEncoder().encode(text).length > maxBytes) {
-    throw Object.assign(new Error('HTTP response is too large'), { status: 413 });
-  }
-  return text;
+  // Without a streaming reader there is no bounded fallback: response.text()/arrayBuffer()
+  // would buffer the complete body before we could enforce the cap, even with a length header.
+  throw Object.assign(new Error('A streaming response body is required for bounded reads'), { status: 503 });
 }

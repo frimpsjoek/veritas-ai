@@ -179,8 +179,8 @@ export function openaiProvider(platform, settings) {
 
   async function postWithRefresh(body, signal) {
     let res = await post(body, signal);
-    if (dynamicKey && res.status === 401) {
-      try { await res.body?.cancel?.(); } catch { /* the original 401 response is already settled */ }
+    if (dynamicKey && credentialStatus(res)) {
+      try { await res.body?.cancel?.(); } catch { /* the original rejection response is already settled */ }
       res = await post(body, signal, true);
     }
     return res;
@@ -286,6 +286,12 @@ export function openaiProvider(platform, settings) {
           return;
         }
         if (!res.ok) {
+          const signedOut = dynamicKey && credentialStatus(res);
+          if (signedOut) {
+            try { await res.body?.cancel?.(); } catch { /* the terminal rejection response is already settled */ }
+            yield { type: 'failed', error: { kind: 'signed_out', message: 'Sign in with Globus again.' } };
+            return;
+          }
           const text = await res.text().catch(() => '');
           yield { type: 'failed', error: { kind: res.status === 401 ? 'signed_out' : 'provider_crashed', message: text || `The endpoint returned ${res.status}.` } };
           return;

@@ -721,8 +721,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, credential, AUTH_HEADERS)
             if route == "/auth/globus/me":
                 manager = _require_globus()
-                identity = _require_globus_principal(self.headers)
-                return self._send(200, {**identity, "inference": manager.inference_status(identity["tenant"])},
+                globus_identity = _require_globus_principal(self.headers)
+                return self._send(200, {**globus_identity, "inference": manager.inference_status(globus_identity["tenant"])},
                                   AUTH_HEADERS)
             if route == "/.well-known/agent-card.json":
                 return self._send(200, a2a_api.agent_card())
@@ -804,7 +804,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header("Content-Type", kind)
                 self.send_header("Content-Length", str(len(data)))
-                self.send_header("Cache-Control", "private, max-age=86400")
+                cache_control = "private, no-store" if identity.get("kind") == "globus" else "private, max-age=86400"
+                self.send_header("Cache-Control", cache_control)
                 # an SVG from another site, served from ours: never a document that can run anything
                 self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
                 self.send_header("X-Content-Type-Options", "nosniff")

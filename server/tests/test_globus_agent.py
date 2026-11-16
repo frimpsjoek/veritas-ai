@@ -188,6 +188,12 @@ def test_tenant_responses_are_not_storable(tenant_server, monkeypatch):
     status, headers, _ = call(port, "GET", "/file?name=image.png", {"Authorization": "Bearer admin-token"})
     assert status == 200 and value(headers, "Cache-Control") == "private, max-age=300"
 
+    monkeypatch.setattr(http_api.site_icons, "site_icon", lambda **kwargs: (image, "image/png"))
+    status, headers, _ = call(port, "GET", "/site-icon?domain=example.org", cookie(SESSION_A))
+    assert status == 200 and value(headers, "Cache-Control") == "private, no-store"
+    status, headers, _ = call(port, "GET", "/site-icon?domain=example.org", {"Authorization": "Bearer admin-token"})
+    assert status == 200 and value(headers, "Cache-Control") == "private, max-age=86400"
+
 
 def test_globus_library_reads_enforce_privacy_rules(tenant_server, monkeypatch):
     port, _, _, _ = tenant_server

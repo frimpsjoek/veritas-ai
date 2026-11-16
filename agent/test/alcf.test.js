@@ -26,13 +26,10 @@ function fakePlatform(steps) {
       if (i >= steps.length) throw new Error(`unexpected fetch ${url}`);
       const step = steps[i];
       if (step.throw) throw step.throw;
-      return {
-        ok: step.status ? step.status >= 200 && step.status < 300 : true,
+      return new Response(step.text ?? JSON.stringify(step.body ?? {}), {
         status: step.status ?? 200,
-        headers: { get: (name) => name.toLowerCase() === 'content-length' && step.contentLength ? String(step.contentLength) : null },
-        text: async () => step.text ?? JSON.stringify(step.body ?? {}),
-        json: async () => step.body ?? {},
-      };
+        headers: step.contentLength ? { 'content-length': String(step.contentLength) } : undefined,
+      });
     },
   };
 }
@@ -178,7 +175,7 @@ test('discovery rejects oversized and timed-out responses, then retries', async 
   const timeout = { calls: [], async fetch(url, opts) {
     timeout.calls.push({ url: String(url), opts });
     if (timeout.calls.length > 1) {
-      return { ok: true, status: 200, headers: { get: () => null }, text: async () => JSON.stringify(catalog()) };
+      return new Response(JSON.stringify(catalog()));
     }
     return new Promise((_, reject) => {
       opts.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true });
@@ -200,7 +197,7 @@ test('ALCF chat construction uses fixed destination and raw model selection', as
   platform.fetch = async (url, opts = {}) => {
     platform.calls.push({ url: String(url), opts });
     if (platform.calls.length === 1) {
-      return { ok: true, status: 200, headers: { get: () => null }, text: async () => JSON.stringify(catalog()) };
+      return new Response(JSON.stringify(catalog()));
     }
     const { sseBody } = await import('./fake-openai.mjs');
     return { ok: true, status: 200, body: sseBody([{ choices: [{ delta: { content: 'ok' } }] }, { choices: [{ delta: {}, finish_reason: 'stop' }] }]) };

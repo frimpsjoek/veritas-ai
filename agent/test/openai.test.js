@@ -152,6 +152,58 @@ test('dynamic credentials are read per request and a 401 refreshes and retries o
   assert.equal(fetchFn.calls.at(-1).opts.headers.authorization, 'Bearer fresh-token');
 });
 
+test('dynamic credentials refresh and retry once after a 403 completion rejection', async () => {
+  const fetchFn = scriptedFetch([
+    { status: 403, text: 'forbidden' },
+    { chunks: [{ choices: [{ delta: { content: 'fresh answer' } }] }, { choices: [{ delta: {}, finish_reason: 'stop' }] }] },
+  ]);
+  const credentials = [];
+  const provider = openaiProvider(fakePlatform(fetchFn), {
+    baseUrl: 'https://inference-api.alcf.anl.gov/resource_server/metis/api/v1',
+    apiKey: async (force = false) => {
+      credentials.push(force);
+      return force ? 'fresh-token' : 'stale-token';
+    },
+  });
+  const events = await collect(provider.turn(baseReq(), new AbortController().signal));
+  assert.equal(events.at(-1).text, 'fresh answer');
+  assert.equal(fetchFn.calls.length, 2);
+  assert.deepEqual(credentials, [false, true]);
+  assert.equal(fetchFn.calls[0].opts.headers.authorization, 'Bearer stale-token');
+  assert.equal(fetchFn.calls[1].opts.headers.authorization, 'Bearer fresh-token');
+});
+
+test('a persistent dynamic 403 is signed out without reading or exposing the upstream body', async () => {
+  const calls = [];
+  const credentials = [];
+  let bodyReads = 0;
+  async function fetchFn(url, opts = {}) {
+    calls.push({ url, opts });
+    return {
+      ok: false,
+      status: 403,
+      text: async () => { bodyReads += 1; return 'raw-upstream-secret'; },
+      body: { cancel: async () => {} },
+    };
+  }
+  const provider = openaiProvider(fakePlatform(fetchFn), {
+    baseUrl: 'https://inference-api.alcf.anl.gov/resource_server/metis/api/v1',
+    apiKey: async (force = false) => {
+      credentials.push(force);
+      return force ? 'fresh-token' : 'stale-token';
+    },
+  });
+  const events = await collect(provider.turn(baseReq(), new AbortController().signal));
+  assert.equal(calls.length, 2);
+  assert.deepEqual(credentials, [false, true]);
+  assert.equal(bodyReads, 0);
+  assert.deepEqual(events, [{
+    type: 'failed',
+    error: { kind: 'signed_out', message: 'Sign in with Globus again.' },
+  }]);
+  assert.ok(!events[0].error.message.includes('raw-upstream-secret'));
+});
+
 test('a rejected forced credential refresh is signed out without a third completion request', async () => {
   const fetchFn = scriptedFetch([{ status: 401, text: 'expired' }]);
   const provider = openaiProvider(fakePlatform(fetchFn), {
