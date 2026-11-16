@@ -85,7 +85,7 @@ export function createAlcfProviders(platform, opts) {
   }
 
   async function catalog(force = false) {
-    if (cache.value !== null && clock() - cache.at < DISCOVERY_CACHE_MS) return cache.value;
+    if (!force && cache.value !== null && clock() - cache.at < DISCOVERY_CACHE_MS) return cache.value;
     if (pending) return pending;
     pending = fetchCatalog(force).then((value) => {
       cache = { at: clock(), value };

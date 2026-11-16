@@ -270,6 +270,7 @@ export function createAgentd(service, opts) {
 
     if (url.pathname === '/mcp' || url.pathname.startsWith('/mcp/')) {
       try {
+        if (url.pathname === '/mcp/') { json(res, 400, { error: 'invalid tenant' }); return; }
         const tenant = tenantId(url.pathname === '/mcp' ? null : url.pathname.slice('/mcp/'.length));
         if (tenant && !opts.resolveMcpService) { json(res, 404, { error: 'unknown tenant' }); return; }
         const lease = tenant ? await opts.resolveMcpService?.(tenant) : null;

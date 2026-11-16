@@ -106,15 +106,19 @@ test('tenant routes select isolated services, split MCP handlers, and deny backg
 
 test('unknown MCP tenants are 404 and cannot trigger runtime construction or adoption', async () => {
   let constructed = 0;
+  let legacyCalls = 0;
   const legacy = labeledService('legacy');
   const agentd = createAgentd(legacy, {
-    secret: 's3cret', mcpHandler: async () => ({ status: 200, body: 'legacy' }),
+    secret: 's3cret', mcpHandler: async () => { legacyCalls += 1; return { status: 200, body: 'legacy' }; },
     async resolveService() { constructed += 1; throw new Error('must not construct for denylisted storage'); },
     async resolveMcpService() { throw Object.assign(new Error('unknown tenant'), { status: 404 }); },
   });
   const port = await agentd.listen(0);
   const base = `http://127.0.0.1:${port}`;
   try {
+    const empty = await fetch(`${base}/mcp/`, { method: 'POST', body: '{}' });
+    assert.equal(empty.status, 400);
+    assert.equal(legacyCalls, 0, 'an empty tenant segment is not an alias for the legacy MCP handler');
     const unknown = await fetch(`${base}/mcp/${'f'.repeat(64)}`, { method: 'POST', body: '{}' });
     assert.equal(unknown.status, 404);
     for (const path of ['/conversations/adopt', '/projects/adopt']) {
