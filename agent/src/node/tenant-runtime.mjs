@@ -180,8 +180,10 @@ export function createTenantPool(deps) {
       .sort(([, a], [, b]) => a.lastUsed - b.lastUsed)[0] : null;
     if (needsEviction && !idle) return Promise.reject(tenantError(503, 'too many active Veritas workspaces; try again later'));
     constructing.add(tenant);
+    // Remove and begin disposing this candidate before another admission can select it.
+    const eviction = idle ? disposeRecord(...idle) : null;
     const creating = Promise.resolve().then(async () => {
-      if (idle) await disposeRecord(...idle);
+      if (eviction) await eviction;
       const record = await build(tenant);
       records.set(tenant, { ...record, active: 0, lastUsed: clock() });
       return records.get(tenant);

@@ -7,6 +7,7 @@
 import { errorMessage } from '../errors.js';
 
 const MAX_STEPS = 8;
+const MAX_ALCF_STREAM_BYTES = 64 * 1024 * 1024;
 
 /** @typedef {{ id: string, name: string, arguments: string }} ToolCall */
 /** @typedef {{ prompt_tokens?: number, completion_tokens?: number }} WireUsage */
@@ -119,25 +120,44 @@ export function createStreamState() {
   return { text: '', toolCalls: [], finishReason: null, usage: null };
 }
 
-/** Parses an OpenAI-compatible `text/event-stream` body into JSON chunks, stopping at `data: [DONE]`. */
-export async function* parseSse(body) {
+/** Parses an OpenAI-compatible `text/event-stream` body into JSON chunks, stopping at `data: [DONE]`.
+ * Optional bounds cover both total stream bytes and any single unfinished or complete SSE line.
+ * @param {{ maxBytes?: number, maxLineBytes?: number }} [options]
+ */
+export async function* parseSse(body, options = {}) {
+  const { maxBytes = Infinity, maxLineBytes = maxBytes } = options;
   const reader = body.getReader();
   const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
   let buffer = '';
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let idx;
-    while ((idx = buffer.indexOf('\n')) >= 0) {
-      const line = buffer.slice(0, idx).trim();
-      buffer = buffer.slice(idx + 1);
-      if (!line.startsWith('data:')) continue;
-      const data = line.slice(5).trim();
-      if (data === '[DONE]') return;
-      const chunk = tryParseJson(data);
-      if (chunk) yield chunk;
+  let totalBytes = 0;
+  async function tooLarge() {
+    try { await reader.cancel(); } catch { /* already closed or aborted */ }
+    throw Object.assign(new Error('ALCF completion stream limit exceeded'), { status: 413 });
+  }
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) await tooLarge();
+      buffer += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf('\n')) >= 0) {
+        const rawLine = buffer.slice(0, idx);
+        if (encoder.encode(rawLine).byteLength > maxLineBytes) await tooLarge();
+        const line = rawLine.trim();
+        buffer = buffer.slice(idx + 1);
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        if (data === '[DONE]') return;
+        const chunk = tryParseJson(data);
+        if (chunk) yield chunk;
+      }
+      if (encoder.encode(buffer).byteLength > maxLineBytes) await tooLarge();
     }
+  } finally {
+    reader.releaseLock?.();
   }
 }
 
@@ -155,7 +175,7 @@ export function buildMessages(req) {
 
 /**
  * @param {import("../platform").Platform} platform
- * @param {{ id?: import("../domain").ProviderId, baseUrl: string, apiKey: string | null | ((force?: boolean) => Promise<string>), redirectError?: boolean, webBackend?: { kind: "exa" | "tavily" | "searxng", url: string, key: string | null } | null }} settings
+ * @param {{ id?: import("../domain").ProviderId, baseUrl: string, apiKey: string | null | ((force?: boolean) => Promise<string>), redirectError?: boolean, maxStreamBytes?: number, webBackend?: { kind: "exa" | "tavily" | "searxng", url: string, key: string | null } | null }} settings
  * @returns {import("../provider").Provider}
  */
 export function openaiProvider(platform, settings) {
@@ -164,6 +184,13 @@ export function openaiProvider(platform, settings) {
     typeof settings.apiKey === 'function' ? settings.apiKey : null
   );
   const staticKey = typeof settings.apiKey === 'string' ? settings.apiKey : null;
+  const streamBytes = settings.maxStreamBytes ?? MAX_ALCF_STREAM_BYTES;
+  const streamOptions = dynamicKey ? { maxBytes: streamBytes, maxLineBytes: streamBytes } : undefined;
+
+  /** @param {any} error */
+  function completionStreamLimit(error) {
+    return error?.status === 413;
+  }
 
   async function headers(force = false) {
     const value = dynamicKey ? await dynamicKey(force) : staticKey;
@@ -239,7 +266,7 @@ export function openaiProvider(platform, settings) {
           return null;
         }
         const state = createStreamState();
-        for await (const chunk of parseSse(res.body)) applyChunk(state, chunk);
+        for await (const chunk of parseSse(res.body, streamOptions)) applyChunk(state, chunk);
         return state.text;
       }
 
@@ -256,6 +283,10 @@ export function openaiProvider(platform, settings) {
           } catch (error) {
             if (dynamicKey && credentialStatus(error)) {
               yield { type: 'failed', error: { kind: 'signed_out', message: 'Sign in with Globus again.' } };
+              return;
+            }
+            if (completionStreamLimit(error)) {
+              yield { type: 'failed', error: { kind: 'provider_crashed', message: 'ALCF completion stream is too large.' } };
               return;
             }
             // Handled below the same as a repair turn that ran but still didn't produce valid JSON.
@@ -310,9 +341,15 @@ export function openaiProvider(platform, settings) {
         }
 
         const state = createStreamState();
-        for await (const chunk of parseSse(res.body)) {
-          for (const ev of applyChunk(state, chunk)) yield ev;
-          if (signal.aborted) break;
+        try {
+          for await (const chunk of parseSse(res.body, streamOptions)) {
+            for (const ev of applyChunk(state, chunk)) yield ev;
+            if (signal.aborted) break;
+          }
+        } catch (error) {
+          if (!completionStreamLimit(error)) throw error;
+          yield { type: 'failed', error: { kind: 'provider_crashed', message: 'ALCF completion stream is too large.' } };
+          return;
         }
         if (signal.aborted) {
           yield { type: 'failed', error: { kind: 'cancelled', message: 'Interrupted.' } };
@@ -328,6 +365,10 @@ export function openaiProvider(platform, settings) {
               const forced = await forceFinalAnswer('You have used all your tool calls. Stop calling tools and answer now, in the required format, using only what you already found.');
               yield* finalize(forced ?? state.text, { inputTokens: state.usage?.prompt_tokens, outputTokens: state.usage?.completion_tokens });
             } catch (error) {
+              if (completionStreamLimit(error)) {
+                yield { type: 'failed', error: { kind: 'provider_crashed', message: 'ALCF completion stream is too large.' } };
+                return;
+              }
               if (!dynamicKey || !credentialStatus(error)) throw error;
               yield { type: 'failed', error: { kind: 'signed_out', message: 'Sign in with Globus again.' } };
             }

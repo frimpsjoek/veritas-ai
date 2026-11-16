@@ -170,6 +170,32 @@ test('17 simultaneous cold starts fill an empty 16-slot pool with only one rejec
   await pool.dispose();
 });
 
+test('simultaneous full-pool replacements dispose distinct idle runtimes and preserve the cap', async () => {
+  const C = 'c'.repeat(64);
+  const D = 'd'.repeat(64);
+  const disposed = [];
+  const pool = createTenantPool({
+    maxRuntimes: 2, idleMs: 100_000_000,
+    async buildRuntime(tenant) {
+      return { service: { async dispose() { disposed.push(tenant); } }, mcpHandler: async () => ({ status: 200, body: '' }) };
+    },
+  });
+  (await pool.acquire(A)).release();
+  (await pool.acquire(B)).release();
+  const leases = await Promise.all([pool.acquire(C), pool.acquire(D)]);
+  assert.deepEqual(disposed.sort(), [A, B], 'each admission reserves a different idle eviction');
+  for (const lease of leases) lease.release();
+  await assert.rejects(pool.acquireExisting(A), (error) => error.status === 404);
+  await assert.rejects(pool.acquireExisting(B), (error) => error.status === 404);
+  const residentC = await pool.acquireExisting(C);
+  const residentD = await pool.acquireExisting(D);
+  assert.equal(residentC.service, leases[0].service);
+  assert.equal(residentD.service, leases[1].service);
+  residentC.release();
+  residentD.release();
+  await pool.dispose();
+});
+
 test('same-tenant cold starts share construction across a delayed cap eviction', async () => {
   const C = 'c'.repeat(64);
   const builds = [];

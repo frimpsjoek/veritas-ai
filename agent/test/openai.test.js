@@ -31,6 +31,18 @@ async function collect(iterable) {
   return events;
 }
 
+function unterminatedBody(text, onCancel) {
+  let reads = 0;
+  return { getReader: () => ({
+    async read() {
+      reads += 1;
+      return reads === 1 ? { done: false, value: new TextEncoder().encode(text) } : { done: true };
+    },
+    async cancel() { onCancel(); },
+    releaseLock() {},
+  }) };
+}
+
 // ---------- pure helpers ----------
 
 test('toOpenAiTools maps ToolSession.specs to function tool defs', () => {
@@ -144,6 +156,72 @@ test('a non-auth forced-final failure cancels its body and preserves text fallba
   assert.equal(events.at(-1).type, 'final');
   assert.equal(JSON.parse(events.at(-1).text).markdown, 'Plain answer, still useful.');
   assert.ok(events.some((event) => event.type === 'notice' && event.kind === 'format_fallback'));
+});
+
+test('an unterminated oversized ALCF completion line is cancelled and fails safely', async () => {
+  let cancellations = 0;
+  const provider = openaiProvider(fakePlatform(async () => ({
+    ok: true,
+    status: 200,
+    body: unterminatedBody('private-without-newline', () => { cancellations += 1; }),
+  })), {
+    baseUrl: 'https://inference-api.alcf.anl.gov/resource_server/metis/api/v1',
+    apiKey: async () => 'user-token',
+    maxStreamBytes: 8,
+  });
+  const events = await collect(provider.turn(baseReq(), new AbortController().signal));
+  assert.deepEqual(events, [{
+    type: 'failed', error: { kind: 'provider_crashed', message: 'ALCF completion stream is too large.' },
+  }]);
+  assert.equal(cancellations, 1);
+  assert.ok(!events[0].error.message.includes('private-without-newline'));
+});
+
+test('an oversized forced schema-repair stream fails safely instead of returning a fallback final', async () => {
+  let calls = 0;
+  let cancellations = 0;
+  const provider = openaiProvider(fakePlatform(async () => {
+    calls += 1;
+    if (calls === 1) return { ok: true, status: 200, body: sseBody([
+      { choices: [{ delta: { content: 'plain answer' } }] }, { choices: [{ delta: {}, finish_reason: 'stop' }] },
+    ]) };
+    return { ok: true, status: 200, body: unterminatedBody('private-repair-overflow'.repeat(100), () => { cancellations += 1; }) };
+  }), {
+    baseUrl: 'https://inference-api.alcf.anl.gov/resource_server/metis/api/v1',
+    apiKey: async () => 'user-token',
+    maxStreamBytes: 1024,
+  });
+  const events = await collect(provider.turn(baseReq({ outputSchema: ASK_SCHEMA }), new AbortController().signal));
+  assert.deepEqual(events.at(-1), {
+    type: 'failed', error: { kind: 'provider_crashed', message: 'ALCF completion stream is too large.' },
+  });
+  assert.ok(!events.some((event) => event.type === 'final'));
+  assert.equal(calls, 2);
+  assert.equal(cancellations, 1);
+});
+
+test('an oversized forced answer after tool exhaustion fails safely instead of emitting final', async () => {
+  let calls = 0;
+  let cancellations = 0;
+  const provider = openaiProvider(fakePlatform(async () => {
+    calls += 1;
+    if (calls <= 8) return { ok: true, status: 200, body: sseBody([
+      { choices: [{ delta: { tool_calls: [{ index: 0, id: 'c', function: { name: 'search_library', arguments: '{}' } }] } }] },
+      { choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
+    ]) };
+    return { ok: true, status: 200, body: unterminatedBody('private-forced-overflow'.repeat(100), () => { cancellations += 1; }) };
+  }), {
+    baseUrl: 'https://inference-api.alcf.anl.gov/resource_server/metis/api/v1',
+    apiKey: async () => 'user-token',
+    maxStreamBytes: 1024,
+  });
+  const events = await collect(provider.turn(baseReq(), new AbortController().signal));
+  assert.deepEqual(events.at(-1), {
+    type: 'failed', error: { kind: 'provider_crashed', message: 'ALCF completion stream is too large.' },
+  });
+  assert.equal(calls, 9);
+  assert.equal(cancellations, 1);
+  assert.ok(!events.some((event) => event.type === 'final'));
 });
 
 test('turn(): a non-JSON answer under an output schema gets one repair turn', async () => {
