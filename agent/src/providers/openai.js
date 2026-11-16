@@ -231,7 +231,13 @@ export function openaiProvider(platform, settings) {
       async function forceFinalAnswer(nudge) {
         messages.push({ role: 'user', content: nudge });
         const res = await postWithRefresh(buildChatRequest({ model: req.model?.model, messages, tools: [], outputSchema: null, withResponseFormat: false }), signal);
-        if (!res.ok) return null;
+        if (!res.ok) {
+          if (dynamicKey && credentialStatus(res)) {
+            try { await res.body?.cancel?.(); } catch { /* the terminal rejection response is already settled */ }
+            throw Object.assign(new Error('ALCF authorization was rejected'), { status: res.status });
+          }
+          return null;
+        }
         const state = createStreamState();
         for await (const chunk of parseSse(res.body)) applyChunk(state, chunk);
         return state.text;
@@ -312,8 +318,13 @@ export function openaiProvider(platform, settings) {
             // Out of allowed tool-call steps. Rather than fail the turn (a loop-design gap, not just a model
             // limit: the model may already have everything it needs), force one tools-off answer from what
             // was already found, so the turn always ends in a final answer.
-            const forced = await forceFinalAnswer('You have used all your tool calls. Stop calling tools and answer now, in the required format, using only what you already found.');
-            yield* finalize(forced ?? state.text, { inputTokens: state.usage?.prompt_tokens, outputTokens: state.usage?.completion_tokens });
+            try {
+              const forced = await forceFinalAnswer('You have used all your tool calls. Stop calling tools and answer now, in the required format, using only what you already found.');
+              yield* finalize(forced ?? state.text, { inputTokens: state.usage?.prompt_tokens, outputTokens: state.usage?.completion_tokens });
+            } catch (error) {
+              if (!dynamicKey || !credentialStatus(error)) throw error;
+              yield { type: 'failed', error: { kind: 'signed_out', message: 'Sign in with Globus again.' } };
+            }
             return;
           }
           messages.push({ role: 'assistant', content: state.text || null, tool_calls: state.toolCalls.map((tc) => ({ id: tc.id, type: 'function', function: { name: tc.name, arguments: tc.arguments } })) });

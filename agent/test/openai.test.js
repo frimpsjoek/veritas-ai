@@ -220,6 +220,55 @@ test('a rejected forced credential refresh is signed out without a third complet
   assert.ok(!events[0].error.message.includes('stale-token'));
 });
 
+test('dynamic credential rejection during schema repair emits signed_out instead of a wrapped final', async () => {
+  const fetchFn = scriptedFetch([
+    { chunks: [{ choices: [{ delta: { content: 'not JSON' } }] }, { choices: [{ delta: {}, finish_reason: 'stop' }] }] },
+    { status: 403, text: 'raw-repair-secret' },
+    { status: 401, text: 'raw-refresh-secret' },
+  ]);
+  const credentials = [];
+  const provider = openaiProvider(fakePlatform(fetchFn), {
+    baseUrl: 'https://inference-api.alcf.anl.gov/resource_server/metis/api/v1',
+    apiKey: async (force = false) => {
+      credentials.push(force);
+      return force ? 'fresh-token' : 'stale-token';
+    },
+  });
+  const schema = { type: 'object', properties: { status: { type: 'string' }, markdown: { type: 'string' } } };
+  const events = await collect(provider.turn(baseReq({ outputSchema: schema }), new AbortController().signal));
+  assert.equal(fetchFn.calls.length, 3, 'one answer plus one repair and one forced-credential retry');
+  assert.deepEqual(credentials, [false, false, true]);
+  assert.ok(!events.some((event) => event.type === 'final'));
+  assert.deepEqual(events.at(-1), {
+    type: 'failed', error: { kind: 'signed_out', message: 'Sign in with Globus again.' },
+  });
+  assert.ok(!events.at(-1).error.message.includes('raw-refresh-secret'));
+});
+
+test('dynamic credential rejection after tool-step exhaustion emits signed_out instead of an empty final', async () => {
+  const toolCallChunk = { chunks: [{ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c', function: { name: 'search_library', arguments: '{}' } }] } }] }, { choices: [{ delta: {}, finish_reason: 'tool_calls' }] }] };
+  const fetchFn = scriptedFetch([
+    ...Array.from({ length: 8 }, () => toolCallChunk),
+    { status: 403, text: 'raw-forced-secret' },
+    { status: 403, text: 'raw-refresh-secret' },
+  ]);
+  const credentials = [];
+  const provider = openaiProvider(fakePlatform(fetchFn), {
+    baseUrl: 'https://inference-api.alcf.anl.gov/resource_server/metis/api/v1',
+    apiKey: async (force = false) => {
+      credentials.push(force);
+      return force ? 'fresh-token' : 'stale-token';
+    },
+  });
+  const events = await collect(provider.turn(baseReq(), new AbortController().signal));
+  assert.equal(fetchFn.calls.length, 10, 'eight normal steps plus one forced answer and one credential retry');
+  assert.deepEqual(credentials, [...Array(9).fill(false), true]);
+  assert.ok(!events.some((event) => event.type === 'final'));
+  assert.deepEqual(events.at(-1), {
+    type: 'failed', error: { kind: 'signed_out', message: 'Sign in with Globus again.' },
+  });
+});
+
 test('turn(): reaching the tool-call step cap forces one tools-off final answer instead of failing', async () => {
   const toolCallChunk = { chunks: [{ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c', function: { name: 'search_library', arguments: '{}' } }] } }] }, { choices: [{ delta: {}, finish_reason: 'tool_calls' }] }] };
   const finalChunk = { chunks: [{ choices: [{ delta: { content: 'Here is what I found so far.' } }] }, { choices: [{ delta: {}, finish_reason: 'stop' }] }] };
