@@ -38,7 +38,10 @@ export function createAlcfCredentialClient(platform, { kbBaseUrl, agentSecret, t
         headers: { authorization: `Bearer ${agentSecret}`, 'x-veritas-tenant': tenant },
         redirect: 'error', signal: controller.signal,
       });
-      if (!response.ok) throw tenantError(response.status, 'ALCF credential delivery was rejected');
+      if (!response.ok) {
+        try { await response.body?.cancel?.(); } catch { /* the rejected response is already settled */ }
+        throw tenantError(response.status, 'ALCF credential delivery was rejected');
+      }
       const text = await readBoundedText(response, TOKEN_MAX_BYTES);
       let value;
       try { value = JSON.parse(text); } catch { throw tenantError(502, 'ALCF credential response is invalid'); }

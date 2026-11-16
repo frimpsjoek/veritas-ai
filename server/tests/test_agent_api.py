@@ -104,6 +104,44 @@ def test_forward_when_the_sidecar_is_unreachable_is_503_not_a_crash():
     assert handler.sent[0] == 503
 
 
+def test_forward_rejects_an_oversized_sidecar_response_without_forwarding_it(monkeypatch):
+    monkeypatch.setattr(agent_api, "MAX_AGENT_RESPONSE_BYTES", 8, raising=False)
+    reads = []
+    closed = []
+
+    class Response:
+        status = 200
+
+        def read(self, amount=-1):
+            reads.append(amount)
+            return b"private-data"[:9 if amount < 0 else amount]
+
+        def getheader(self, _name, _default=None):
+            return "application/json"
+
+    class Connection:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def request(self, *_args, **_kwargs):
+            pass
+
+        def getresponse(self):
+            return Response()
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(agent_api.http.client, "HTTPConnection", Connection)
+    sidecar = agent_api.Sidecar(node=Path("node"), secret="s", port=1234)
+    handler = FakeHandler()
+    agent_api.forward(handler, sidecar, "GET", "/events")
+    assert handler.sent == (502, {"error": "agent sidecar response is too large"})
+    assert handler.response is None, "no prefix of an oversized private response reaches the browser"
+    assert reads == [9], "read only cap+1 rather than buffering the entire sidecar stream"
+    assert closed == [True]
+
+
 # ---------- /ai-note ----------
 
 @pytest.fixture()

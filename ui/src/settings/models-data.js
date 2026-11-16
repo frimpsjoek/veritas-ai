@@ -59,6 +59,14 @@ export function cloudProviders(state) {
   return [...new Set([...CLOUD, ...saved, ...alcf])];
 }
 
+/** Whether this settings surface may add arbitrary OpenAI-compatible endpoints.
+ * Built-in status-discovered ALCF providers are the Globus tenant surface; custom endpoints remain administrator-only.
+ * @param {ModelsState} state */
+export function customEndpointsAllowed(state) {
+  const custom = new Set((state.settings.endpoints ?? []).map((endpoint) => `oss:${endpoint.name}`));
+  return !(state.statuses ?? []).some((status) => /^oss:alcf-[a-z0-9-]+$/.test(status.provider) && !custom.has(status.provider));
+}
+
 /** @param {ModelsState} state @param {string} provider */
 export const statusOf = (state, provider) => state.statuses.find((s) => s.provider === provider) ?? null;
 

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ModelsStore, cloudProviders, parseKey, modelKey, providerState, pickableModels, checklist, endpointProblem, normalizeAddress, shownList } from '../src/settings/models-data.js';
+import { ModelsStore, cloudProviders, customEndpointsAllowed, parseKey, modelKey, providerState, pickableModels, checklist, endpointProblem, normalizeAddress, shownList } from '../src/settings/models-data.js';
 
 const claudeModels = [
   { id: 'sonnet', label: 'Sonnet', hint: 'good for most questions', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], source: 'builtin', isDefault: false },
@@ -146,6 +146,7 @@ test('status-discovered ALCF providers list raw models and persist tenant choice
   assert.deepEqual(settings.roles.chat, { provider: 'oss:alcf-metis', model: 'gpt-oss-120b' });
   assert.equal(providerState(null, 'codex').pill, 'Not installed');
   assert.deepEqual(await store.signIn('oss:alcf-metis'), { openUrl: '/auth/globus/login' });
+  assert.equal(customEndpointsAllowed(store.state), false, 'Globus tenants are not offered arbitrary endpoints');
 });
 
 test('a custom alcf-prefixed endpoint delegates sign-in instead of opening Globus', async () => {
@@ -153,6 +154,7 @@ test('a custom alcf-prefixed endpoint delegates sign-in instead of opening Globu
   await store.saveEndpoint({ name: 'alcf-custom', baseUrl: 'https://models.example/v1', key: 'secret' });
   assert.deepEqual(await store.signIn('oss:alcf-custom'), { delegated: 'oss:alcf-custom' });
   assert.deepEqual(calls.signIns, [['oss:alcf-custom', 'browser']]);
+  assert.equal(customEndpointsAllowed(store.state), true, 'administrators retain custom endpoint control');
 });
 
 test('the menu list is the ticked models with their provider labels', () => {

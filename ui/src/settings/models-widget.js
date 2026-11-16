@@ -6,7 +6,7 @@
 import { h } from '../dom.js';
 import {
   ModelsStore, TASKS, EFFORT_LABELS, providerName, providerState, cloudProviders, statusOf, pickableModels, checklist, effortsFor,
-  choiceKey, normalizeAddress, endpointProblem,
+  choiceKey, customEndpointsAllowed, normalizeAddress, endpointProblem,
 } from './models-data.js';
 
 /** @param {Document} doc @param {string} text @param {string} [cls] @param {() => void | Promise<void>} [onClick] */
@@ -169,9 +169,11 @@ export function modelsWidget(doc, host, ctx = {}) {
       g.append(r);
       if (info.ok) g.append(modelList(state, provider));
     }
-    const other = row('Other services', 'OpenRouter, LM Studio or any OpenAI-compatible address and key.', [textButton(doc, '+ Add', 'sbm-link', () => openDrawer())]);
-    other.dataset.row = 'other-services';
-    g.append(other);
+    if (customEndpointsAllowed(state)) {
+      const other = row('Other services', 'OpenRouter, LM Studio or any OpenAI-compatible address and key.', [textButton(doc, '+ Add', 'sbm-link', () => openDrawer())]);
+      other.dataset.row = 'other-services';
+      g.append(other);
+    }
     return g;
   };
 

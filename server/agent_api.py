@@ -31,6 +31,7 @@ DEFAULT_KB_URL = "http://127.0.0.1:27182"
 BACKOFF = (1, 2, 4, 8, 16, 30)  # seconds between restarts; caps and repeats at the last value
 AI_NOTES_ROOT = "ai_notes"
 MAX_AGENT_BODY_BYTES = 64 * 1024 * 1024
+MAX_AGENT_RESPONSE_BYTES = 64 * 1024 * 1024
 
 
 class SidecarError(RuntimeError):
@@ -225,7 +226,10 @@ def forward(handler, sidecar: Sidecar | None, method: str, path: str, tenant: st
             **({"X-Veritas-Tenant": tenant} if tenant is not None else {}),
         })
         response = conn.getresponse()
-        data = response.read()
+        data = response.read(MAX_AGENT_RESPONSE_BYTES + 1)
+        if len(data) > MAX_AGENT_RESPONSE_BYTES:
+            handler._send(502, {"error": "agent sidecar response is too large"})
+            return
         status, content_type = response.status, response.getheader("Content-Type", "application/json")
     except (OSError, TimeoutError) as error:
         handler._send(503, {"error": f"the agent sidecar did not respond: {error}"})

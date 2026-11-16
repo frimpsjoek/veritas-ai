@@ -257,6 +257,23 @@ test('simultaneous forced credential requests share one sidecar refresh', async 
   assert.equal(calls[0].url.includes('refresh=1'), true);
 });
 
+test('rejected credential responses are cancelled and concealed', async () => {
+  const rejected = new Response('private bearer diagnostic', { status: 401 });
+  let cancellations = 0;
+  const cancel = rejected.body.cancel.bind(rejected.body);
+  rejected.body.cancel = async (...args) => { cancellations += 1; return cancel(...args); };
+  const calls = [];
+  const credential = createAlcfCredentialClient({ fetch: async () => {
+    calls.push(true);
+    return rejected;
+  } }, { kbBaseUrl: 'http://127.0.0.1:27182', agentSecret: 'sidecar-secret', tenant: A });
+  await assert.rejects(credential(), (error) => error.status === 401
+    && error.message === 'ALCF credential delivery was rejected'
+    && !error.message.includes('private bearer diagnostic'));
+  assert.equal(calls.length, 1);
+  assert.equal(cancellations, 1);
+});
+
 test('a failed runtime construction can be retried', async () => {
   let attempts = 0;
   const pool = createTenantPool({
