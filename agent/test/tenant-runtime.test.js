@@ -149,6 +149,39 @@ test('pool cap evicts an idle LRU but never an active lease', async () => {
   await pool.dispose();
 });
 
+test('same-tenant cold starts share construction across a delayed cap eviction', async () => {
+  const C = 'c'.repeat(64);
+  const builds = [];
+  const disposed = [];
+  let finishEviction;
+  const pool = createTenantPool({
+    maxRuntimes: 2, idleMs: 100_000_000,
+    async buildRuntime(tenant) {
+      builds.push(tenant);
+      return {
+        service: { async dispose() {
+          disposed.push(tenant);
+          if (tenant === A) await new Promise((resolve) => { finishEviction = resolve; });
+        } },
+        mcpHandler: async () => ({ status: 200, body: '' }),
+      };
+    },
+  });
+  (await pool.acquire(A)).release();
+  (await pool.acquire(B)).release();
+  const first = pool.acquire(C);
+  const second = pool.acquire(C);
+  await new Promise((resolve) => setImmediate(resolve));
+  finishEviction();
+  const [one, two] = await Promise.all([first, second]);
+  assert.equal(builds.filter((tenant) => tenant === C).length, 1);
+  assert.deepEqual(disposed, [A]);
+  assert.equal(one.service, two.service);
+  one.release();
+  two.release();
+  await pool.dispose();
+});
+
 test('acquiring during an old runtime disposal waits and builds a fresh runtime', async () => {
   let finishDispose;
   let builds = 0;

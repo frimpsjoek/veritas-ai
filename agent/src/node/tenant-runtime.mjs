@@ -167,16 +167,20 @@ export function createTenantPool(deps) {
     for (const [tenant, record] of candidates) await disposeRecord(tenant, record);
   }
 
-  async function construct(tenant) {
-    if (records.size + inProgress.size >= maxRuntimes) {
-      const idle = [...records.entries()].filter(([, record]) => record.active === 0)
-        .sort(([, a], [, b]) => a.lastUsed - b.lastUsed)[0];
-      if (idle) await disposeRecord(...idle);
-    }
-    if (records.size + inProgress.size >= maxRuntimes) {
-      throw tenantError(503, 'too many active Veritas workspaces; try again later');
-    }
-    const creating = Promise.resolve(build(tenant)).then((record) => {
+  function construct(tenant) {
+    // Publish same-tenant single-flight intent before the first eviction await.
+    const creating = Promise.resolve().then(async () => {
+      // This construct already occupies one inProgress slot; the cap applies to the other residents.
+      const occupied = () => records.size + inProgress.size - 1;
+      if (occupied() >= maxRuntimes) {
+        const idle = [...records.entries()].filter(([, record]) => record.active === 0)
+          .sort(([, a], [, b]) => a.lastUsed - b.lastUsed)[0];
+        if (idle) await disposeRecord(...idle);
+      }
+      if (occupied() >= maxRuntimes) {
+        throw tenantError(503, 'too many active Veritas workspaces; try again later');
+      }
+      const record = await build(tenant);
       records.set(tenant, { ...record, active: 0, lastUsed: clock() });
       return records.get(tenant);
     }).finally(() => {

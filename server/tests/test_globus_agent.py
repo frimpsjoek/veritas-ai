@@ -181,6 +181,8 @@ def test_tenant_responses_are_not_storable(tenant_server, monkeypatch):
     image = root / "image.png"
     image.write_bytes(b"image-data")
     monkeypatch.setattr(http_api.paper_notes, "image_file", lambda *args: image)
+    monkeypatch.setattr(http_api.kb, "index_path", lambda path: "image.png")
+    monkeypatch.setattr(http_api.kb, "note_path", lambda path: path)
     status, headers, _ = call(port, "GET", "/file?name=image.png", cookie(SESSION_A))
     assert status == 200 and value(headers, "Cache-Control") == "private, no-store"
     status, headers, _ = call(port, "GET", "/file?name=image.png", {"Authorization": "Bearer admin-token"})
@@ -211,6 +213,48 @@ def test_globus_link_panel_keeps_private_address_refusals(tenant_server):
     status, _, body = json_call(port, "GET", "/web/page?url=http%3A%2F%2F127.0.0.1%3A1%2Fstatus", cookie(SESSION_A))
     assert status == 200 and body["mode"] == "blocked"
     assert call(port, "GET", "/web/pdf?url=http%3A%2F%2Flocalhost%2Fx.pdf", cookie(SESSION_A))[0] == 400
+
+
+@pytest.mark.parametrize("route", [
+    "/zotero/pdf?key=PRIVATE1",
+    "/folder-file?path=papers:/private.pdf",
+    "/file?name=private.png",
+    "/paper-note?key=PRIVATE1",
+    "/paper-note/body?key=PRIVATE1",
+])
+def test_globus_file_and_paper_note_routes_enforce_private_paths(tenant_server, monkeypatch, route):
+    port, _, _, root = tenant_server
+    monkeypatch.setattr(http_api.kb, "private_paths", lambda: {
+        "zotero/PRIVATE1", "papers:/private.pdf", "private.png",
+    })
+    monkeypatch.setattr(http_api.kb, "note_path", lambda path: path)
+    monkeypatch.setattr(http_api.zotero, "ZOTERO", root)
+    pdf = root / "private.pdf"
+    image = root / "private.png"
+    pdf.write_bytes(b"private-pdf")
+    image.write_bytes(b"private-image")
+    monkeypatch.setattr(http_api.kb, "document_file", lambda path: pdf)
+    monkeypatch.setattr(http_api.kb, "index_path", lambda path: {
+        pdf: "papers:/private.pdf", image: "private.png",
+    }[path])
+    monkeypatch.setattr(http_api.paper_notes, "image_file", lambda *args: image)
+    reached = []
+
+    def serve_pdf(handler, key):
+        reached.append(("zotero-pdf", key))
+        handler._send(200, {"reached": True})
+
+    def stream_file(handler, path, kind):
+        reached.append(("folder-file", str(path)))
+        handler._send(200, {"reached": True})
+
+    monkeypatch.setattr(http_api.pdf_route, "serve", serve_pdf)
+    monkeypatch.setattr(http_api.pdf_route, "stream", stream_file)
+    monkeypatch.setattr(http_api.paper_notes, "summary", lambda key: reached.append(("summary", key)) or {})
+    monkeypatch.setattr(http_api.paper_notes, "body", lambda key: reached.append(("body", key)) or {})
+
+    assert call(port, "GET", route, cookie(SESSION_A))[0] == 403
+    assert reached == []
 
 
 def test_web_state_is_private_per_tenant(tenant_server):

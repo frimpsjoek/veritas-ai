@@ -678,6 +678,10 @@ class Handler(BaseHTTPRequestHandler):
                 raise PermissionError("this note is marked private (privacy.json)")
             return rel
 
+        def guard_zotero(key: str) -> None:
+            if restricted:
+                guard(key if ":/" in key else zotero.PREFIX + key.removeprefix(zotero.PREFIX))
+
         def handle() -> None:
             if agent and route not in AGENT_ROUTES:
                 raise PermissionError("not available to agents")
@@ -784,6 +788,7 @@ class Handler(BaseHTTPRequestHandler):
                 if result is None:
                     raise FileNotFoundError(f"no Zotero item {key!r}")
             elif route == "/zotero/pdf":
+                guard_zotero(q.get("key", ""))
                 lib = kb.zotero_ref(q["library"] + ":/")[0] if q.get("library") else zotero.ZOTERO
                 with zotero.library(lib):
                     return pdf_route.serve(self, q.get("key", ""))
@@ -822,6 +827,8 @@ class Handler(BaseHTTPRequestHandler):
                 return pdf_route.stream(self, found, "application/pdf")
             elif route == "/folder-file":
                 found = kb.document_file(q.get("path", ""))
+                if restricted:
+                    guard(kb.index_path(found))
                 kind = mimetypes.guess_type(found.name)[0] or "application/octet-stream"
                 return pdf_route.stream(self, found, kind)
             elif route == "/paper-figure":
@@ -844,10 +851,14 @@ class Handler(BaseHTTPRequestHandler):
                 found = paper_notes.image_file(q.get("name"), q.get("path"), q.get("note"))
                 if not found:
                     return self._send(404, {"error": "no such image"})
+                if restricted:
+                    guard(kb.index_path(found))
                 return self._send_file(found)
             elif route == "/paper-note/body":
+                guard_zotero(q["key"])
                 result = paper_notes.body(q["key"].removeprefix(zotero.PREFIX))
             elif route == "/paper-note":
+                guard_zotero(q["key"])
                 result = paper_notes.summary(q["key"].removeprefix(zotero.PREFIX))
             elif route == "/plugins/zotero/latest":
                 result = plugin_updates.latest_zotero(ZOTERO_DIST, OBSIDIAN_DIST)
