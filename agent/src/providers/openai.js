@@ -232,8 +232,8 @@ export function openaiProvider(platform, settings) {
         messages.push({ role: 'user', content: nudge });
         const res = await postWithRefresh(buildChatRequest({ model: req.model?.model, messages, tools: [], outputSchema: null, withResponseFormat: false }), signal);
         if (!res.ok) {
+          try { await res.body?.cancel?.(); } catch { /* the terminal error response is already settled */ }
           if (dynamicKey && credentialStatus(res)) {
-            try { await res.body?.cancel?.(); } catch { /* the terminal rejection response is already settled */ }
             throw Object.assign(new Error('ALCF authorization was rejected'), { status: res.status });
           }
           return null;
@@ -281,6 +281,7 @@ export function openaiProvider(platform, settings) {
           res = await postWithRefresh(buildChatRequest({ model: req.model?.model, messages, tools, outputSchema: req.outputSchema, withResponseFormat: !!req.outputSchema }), signal);
           if (!res.ok && req.outputSchema && res.status === 400) {
             // Many OpenAI-compatible servers 400 on an unrecognized response_format; retry once without it.
+            try { await res.body?.cancel?.(); } catch { /* the rejected format response is already settled */ }
             res = await postWithRefresh(buildChatRequest({ model: req.model?.model, messages, tools, outputSchema: req.outputSchema, withResponseFormat: false }), signal);
           }
         } catch (error) {

@@ -4,7 +4,7 @@ import {
   openaiProvider, applyChunk, createStreamState, toOpenAiTools, buildMessages, parseSse,
   looksLikeStatusMarkdownSchema, wrapAsAnsweredMarkdown,
 } from '../src/providers/openai.js';
-import { scriptedFetch } from './fake-openai.mjs';
+import { scriptedFetch, sseBody } from './fake-openai.mjs';
 import { ASK_SCHEMA } from '../src/core.js';
 
 function fakePlatform(fetchFn) {
@@ -99,6 +99,51 @@ test('turn(): a 400 on response_format retries once without it', async () => {
   assert.equal(fetchFn.calls[1].body.response_format, undefined);
   const final = events.find((e) => e.type === 'final');
   assert.equal(JSON.parse(final.text).status, 'answered');
+});
+
+test('response-format retry cancels the rejected 400 body before replacing it', async () => {
+  const rejected = new Response('response_format not supported', { status: 400 });
+  let cancellations = 0;
+  const cancel = rejected.body.cancel.bind(rejected.body);
+  rejected.body.cancel = async (...args) => { cancellations += 1; return cancel(...args); };
+  let calls = 0;
+  const fetchFn = async () => {
+    calls += 1;
+    if (calls === 1) return rejected;
+    return { ok: true, status: 200, body: sseBody([
+      { choices: [{ delta: { content: '{"status":"answered","markdown":"hi"}' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }] },
+    ]) };
+  };
+  const provider = openaiProvider(fakePlatform(fetchFn), { baseUrl: 'http://127.0.0.1:1/v1', apiKey: null });
+  const schema = { type: 'object', properties: { status: { type: 'string' }, markdown: { type: 'string' } } };
+  const events = await collect(provider.turn(baseReq({ outputSchema: schema }), new AbortController().signal));
+  assert.equal(calls, 2);
+  assert.equal(cancellations, 1);
+  assert.equal(JSON.parse(events.at(-1).text).status, 'answered');
+});
+
+test('a non-auth forced-final failure cancels its body and preserves text fallback', async () => {
+  const failure = new Response('private upstream diagnostic', { status: 500 });
+  let cancellations = 0;
+  const cancel = failure.body.cancel.bind(failure.body);
+  failure.body.cancel = async (...args) => { cancellations += 1; return cancel(...args); };
+  let calls = 0;
+  const fetchFn = async () => {
+    calls += 1;
+    if (calls === 2) return failure;
+    return { ok: true, status: 200, body: sseBody([
+      { choices: [{ delta: { content: 'Plain answer, still useful.' } }] },
+      { choices: [{ delta: {}, finish_reason: 'stop' }] },
+    ]) };
+  };
+  const provider = openaiProvider(fakePlatform(fetchFn), { baseUrl: 'http://127.0.0.1:1/v1', apiKey: null });
+  const events = await collect(provider.turn(baseReq({ outputSchema: ASK_SCHEMA }), new AbortController().signal));
+  assert.equal(calls, 2);
+  assert.equal(cancellations, 1);
+  assert.equal(events.at(-1).type, 'final');
+  assert.equal(JSON.parse(events.at(-1).text).markdown, 'Plain answer, still useful.');
+  assert.ok(events.some((event) => event.type === 'notice' && event.kind === 'format_fallback'));
 });
 
 test('turn(): a non-JSON answer under an output schema gets one repair turn', async () => {

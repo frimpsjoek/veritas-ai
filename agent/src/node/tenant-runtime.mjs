@@ -134,6 +134,7 @@ export function createTenantPool(deps) {
   const build = deps.buildRuntime ?? ((tenant) => createTenantRuntime({ ...deps, tenant }));
   const records = new Map();
   const inProgress = new Map();
+  const constructing = new Set();
 
   function lease(record) {
     record.active += 1;
@@ -171,22 +172,21 @@ export function createTenantPool(deps) {
   }
 
   function construct(tenant) {
-    // Publish same-tenant single-flight intent before the first eviction await.
+    // Reserve before yielding: queued constructions must not all see one another as
+    // occupying a slot before any has had a chance to build. Disposal promises and
+    // same-tenant waiters in `inProgress` are not additional runtime reservations.
+    const needsEviction = records.size + constructing.size >= maxRuntimes;
+    const idle = needsEviction ? [...records.entries()].filter(([, record]) => record.active === 0)
+      .sort(([, a], [, b]) => a.lastUsed - b.lastUsed)[0] : null;
+    if (needsEviction && !idle) return Promise.reject(tenantError(503, 'too many active Veritas workspaces; try again later'));
+    constructing.add(tenant);
     const creating = Promise.resolve().then(async () => {
-      // This construct already occupies one inProgress slot; the cap applies to the other residents.
-      const occupied = () => records.size + inProgress.size - 1;
-      if (occupied() >= maxRuntimes) {
-        const idle = [...records.entries()].filter(([, record]) => record.active === 0)
-          .sort(([, a], [, b]) => a.lastUsed - b.lastUsed)[0];
-        if (idle) await disposeRecord(...idle);
-      }
-      if (occupied() >= maxRuntimes) {
-        throw tenantError(503, 'too many active Veritas workspaces; try again later');
-      }
+      if (idle) await disposeRecord(...idle);
       const record = await build(tenant);
       records.set(tenant, { ...record, active: 0, lastUsed: clock() });
       return records.get(tenant);
     }).finally(() => {
+      constructing.delete(tenant);
       if (inProgress.get(tenant) === creating) inProgress.delete(tenant);
     });
     inProgress.set(tenant, creating);

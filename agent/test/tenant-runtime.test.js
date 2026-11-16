@@ -149,6 +149,27 @@ test('pool cap evicts an idle LRU but never an active lease', async () => {
   await pool.dispose();
 });
 
+test('17 simultaneous cold starts fill an empty 16-slot pool with only one rejection', async () => {
+  const builds = [];
+  const pool = createTenantPool({
+    maxRuntimes: 16, idleMs: 100_000_000,
+    async buildRuntime(tenant) {
+      builds.push(tenant);
+      return { service: { async dispose() {} }, mcpHandler: async () => ({ status: 200, body: '' }) };
+    },
+  });
+  const outcomes = await Promise.allSettled(Array.from({ length: 17 }, (_, i) => pool.acquire(String(i).padStart(64, '0'))));
+  const fulfilled = outcomes.filter((outcome) => outcome.status === 'fulfilled');
+  const rejected = outcomes.filter((outcome) => outcome.status === 'rejected');
+  assert.equal(fulfilled.length, 16);
+  assert.equal(rejected.length, 1);
+  assert.equal(rejected[0].reason.status, 503);
+  assert.equal(rejected[0].reason.message, 'too many active Veritas workspaces; try again later');
+  assert.equal(builds.length, 16);
+  for (const outcome of fulfilled) outcome.value.release();
+  await pool.dispose();
+});
+
 test('same-tenant cold starts share construction across a delayed cap eviction', async () => {
   const C = 'c'.repeat(64);
   const builds = [];
