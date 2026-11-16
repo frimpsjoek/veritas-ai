@@ -10,7 +10,7 @@ const claudeModels = [
 /** An engine in memory: settings.update merges like the real one (null role clears, other keys replace). */
 function fakeAi({ statuses, providerModels } = {}) {
   const settings = { roles: { chat: { provider: 'codex', model: null }, researcher: { provider: 'codex', model: null } }, endpoints: [], shownModels: [], addedModels: [], defaultModel: null };
-  const calls = { models: [], updates: [] };
+  const calls = { models: [], updates: [], signIns: [] };
   const lists = { claude: [...claudeModels], codex: [{ id: 'gpt-5.5', label: 'GPT-5.5', hint: null, efforts: ['low', 'high'], source: 'provider', isDefault: true }] };
   Object.assign(lists, providerModels ?? {});
   const ai = {
@@ -34,6 +34,7 @@ function fakeAi({ statuses, providerModels } = {}) {
         const added = settings.addedModels.filter((a) => a.provider === provider).map((a) => ({ id: a.id, label: a.id, hint: null, efforts: [], source: 'added', isDefault: false }));
         return [...(lists[provider] ?? []), ...added];
       },
+      signIn: async (provider, surface) => { calls.signIns.push([provider, surface]); return { delegated: provider }; },
     },
   };
   return { ai, settings, calls };
@@ -145,6 +146,13 @@ test('status-discovered ALCF providers list raw models and persist tenant choice
   assert.deepEqual(settings.roles.chat, { provider: 'oss:alcf-metis', model: 'gpt-oss-120b' });
   assert.equal(providerState(null, 'codex').pill, 'Not installed');
   assert.deepEqual(await store.signIn('oss:alcf-metis'), { openUrl: '/auth/globus/login' });
+});
+
+test('a custom alcf-prefixed endpoint delegates sign-in instead of opening Globus', async () => {
+  const { store, calls } = await loaded();
+  await store.saveEndpoint({ name: 'alcf-custom', baseUrl: 'https://models.example/v1', key: 'secret' });
+  assert.deepEqual(await store.signIn('oss:alcf-custom'), { delegated: 'oss:alcf-custom' });
+  assert.deepEqual(calls.signIns, [['oss:alcf-custom', 'browser']]);
 });
 
 test('the menu list is the ticked models with their provider labels', () => {

@@ -214,7 +214,9 @@ export class ModelsStore {
 
   /** @param {string} provider */
   async signIn(provider) {
-    if (provider.startsWith('oss:alcf-')) return { openUrl: '/auth/globus/login' };
+    const discovered = provider.startsWith('oss:alcf-') && statusOf(this.state, provider);
+    const custom = (this.state.settings.endpoints ?? []).some((endpoint) => `oss:${endpoint.name}` === provider);
+    if (discovered && !custom) return { openUrl: '/auth/globus/login' };
     return this.ai.providers.signIn(provider, 'browser');
   }
 }

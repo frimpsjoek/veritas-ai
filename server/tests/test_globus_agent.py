@@ -187,6 +187,32 @@ def test_tenant_responses_are_not_storable(tenant_server, monkeypatch):
     assert status == 200 and value(headers, "Cache-Control") == "private, max-age=300"
 
 
+def test_globus_library_reads_enforce_privacy_rules(tenant_server, monkeypatch):
+    port, _, _, _ = tenant_server
+    monkeypatch.setattr(http_api.kb, "privacy", lambda: {"agent_read_max_chars": 5})
+    monkeypatch.setattr(http_api.kb, "private_paths", lambda: {"private.md"})
+    monkeypatch.setattr(http_api.kb, "note_path", lambda path: path)
+    monkeypatch.setattr(http_api.kb, "read_note", lambda path, heading, max_chars, offset: {
+        "path": path, "max_chars": max_chars, "text": "public-content",
+    })
+
+    assert call(port, "GET", "/note?path=private.md", cookie(SESSION_A))[0] == 403
+    status, _, body = json_call(port, "GET", "/note?path=public.md&max_chars=100", cookie(SESSION_A))
+    assert status == 200 and body["max_chars"] == 5
+
+    status, _, body = json_call(port, "GET", "/note?path=private.md&max_chars=100", {
+        "Authorization": "Bearer admin-token",
+    })
+    assert status == 200 and body["max_chars"] == 100
+
+
+def test_globus_link_panel_keeps_private_address_refusals(tenant_server):
+    port, _, _, _ = tenant_server
+    status, _, body = json_call(port, "GET", "/web/page?url=http%3A%2F%2F127.0.0.1%3A1%2Fstatus", cookie(SESSION_A))
+    assert status == 200 and body["mode"] == "blocked"
+    assert call(port, "GET", "/web/pdf?url=http%3A%2F%2Flocalhost%2Fx.pdf", cookie(SESSION_A))[0] == 400
+
+
 def test_web_state_is_private_per_tenant(tenant_server):
     port, _, _, _ = tenant_server
     assert call(port, "POST", "/web/state", cookie(SESSION_A), {"files": {"private.txt": "A"}})[0] == 200

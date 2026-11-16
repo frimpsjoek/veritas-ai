@@ -135,9 +135,10 @@ and can be opened again.
 
 ## Authorization boundary
 
-Globus users also retain the read-only shared-library routes. They cannot mutate sources/index, write shared skills, use
-local-only sign-in links, select another tenant with a request header or inherit provider settings from the legacy
-runtime. Administrator/Bearer and loopback requests keep the existing global runtime and independent access-code session.
+Globus users also retain the read-only shared-library routes, subject to the same `privacy.json` private-note hiding and
+read/search size caps as agent requests. They cannot mutate sources/index, write shared skills, use local-only sign-in
+links, select another tenant with a request header or inherit provider settings from the legacy runtime.
+Administrator/Bearer and loopback requests keep the existing global runtime and independent access-code session.
 
 ## Checks
 

@@ -667,8 +667,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         route, q = urlparse(self.path).path, self._query()
         agent = self._agent()
-        rules = kb.privacy() if agent else {}
-        hidden = kb.private_paths() if agent else set()
+        identity = getattr(self, "_identity", None) or {}
+        restricted = agent or identity.get("kind") == "globus"
+        rules = kb.privacy() if restricted else {}
+        hidden = kb.private_paths() if restricted else set()
 
         def guard(path: str) -> str:
             rel = kb.note_path(path)
@@ -743,7 +745,7 @@ class Handler(BaseHTTPRequestHandler):
                 result = kb.sources_report()
             elif route == "/search":
                 limit = min(int(q.get("limit", 20)), 200)
-                if agent:
+                if restricted:
                     limit = min(limit, int(rules.get("agent_search_max_results", 10)))
                 with LOCK:
                     # Ask for extra when some notes are private, so filtering still leaves `limit` results.
@@ -767,7 +769,7 @@ class Handler(BaseHTTPRequestHandler):
                           if r["path"] not in hidden]
             elif route == "/note":
                 max_chars = min(int(q.get("max_chars", 60000)), 2_000_000)
-                if agent:
+                if restricted:
                     max_chars = min(max_chars, int(rules.get("agent_read_max_chars", 12000)))
                 result = kb.read_note(guard(q["path"]), q.get("heading"), max_chars, int(q.get("offset", 0)))
             elif route == "/zotero":
