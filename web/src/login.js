@@ -44,6 +44,22 @@ export function startLogin(env = {}) {
   page.append(title, message, form);
   doc.body.replaceChildren(page);
 
+  async function discoverGlobus() {
+    try {
+      const response = await doFetch(new URL('/auth/globus/status', win.location.href).href, { credentials: 'same-origin' });
+      if (!response.ok) return false;
+      const config = await response.json();
+      if (config?.enabled !== true) return false;
+      const link = /** @type {HTMLAnchorElement} */ (h(doc, 'a', 'sb-button', 'Sign in with Globus'));
+      link.href = '/auth/globus/login';
+      link.rel = 'noopener';
+      page.append(link);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   /** @param {string} code */
   async function signIn(code) {
     submit.disabled = true;
@@ -65,7 +81,7 @@ export function startLogin(env = {}) {
   form.addEventListener('submit', (event) => { event.preventDefault(); if (input.value.trim()) void signIn(input.value.trim()); });
   if (token) { form.hidden = true; return signIn(token); }
   message.textContent = 'Scan the code in Settings on your Mac with your phone camera, or paste the access code here.';
-  return Promise.resolve(false);
+  return discoverGlobus().then(() => false);
 }
 
 if (typeof document !== 'undefined' && !(/** @type {any} */ (globalThis).__SB_NO_AUTOSTART__)) void startLogin();

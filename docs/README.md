@@ -13,6 +13,7 @@ your own computer.
 | [Zotero and Obsidian plugins](guide/plugins.md) | installing and using the plugins |
 | [Privacy](guide/privacy.md) | what stays on your computer and what goes out |
 | [Architecture](guide/architecture.md) | the parts of the repository and how they fit |
+| [Globus and ALCF](guide/globus-alcf.md) | independent identity, ALCF credentials, callbacks and token boundaries |
 
 Also in this folder: the [OSI Hackathon 2026 slides](slides/) (`veritas-osi-slides.pdf`, a single-file
 `veritas-osi-slides.html`, and the Quarto source `veritas-osi-slides.qmd`), the

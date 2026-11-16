@@ -3,7 +3,8 @@ agent/src/node/agentd.mjs), forwards /agent/* to it behind the existing auth, an
 reports into ai_notes/. The sidecar reaches the library through the existing agent routes (X-KB-Client: agent),
 so privacy.json and the audit log need no change. No stream ever holds LOCK: forwarding is byte copying on the
 request thread, and the sidecar's own long-poll (GET /agent/events) is just a slow ordinary response, not a
-protocol http_api.py has to understand.
+protocol http_api.py has to understand. An optional trusted tenant header is generated only by that verified HTTP
+identity path; inbound user tenant headers are never forwarded.
 
 Every entry point here is defensive on purpose: `serve()` in http_api.py calls `supervise()` once at startup, and
 a bug in this file must never be able to take the search server down with it.
@@ -29,6 +30,7 @@ AGENTD_ENTRY = Path("..") / "agent" / "dist" / "agentd.mjs"  # beside server/ in
 DEFAULT_KB_URL = "http://127.0.0.1:27182"
 BACKOFF = (1, 2, 4, 8, 16, 30)  # seconds between restarts; caps and repeats at the last value
 AI_NOTES_ROOT = "ai_notes"
+MAX_AGENT_BODY_BYTES = 64 * 1024 * 1024
 
 
 class SidecarError(RuntimeError):
@@ -192,12 +194,15 @@ def _missing_node_help() -> str:
             "the node binary, then restart the server. The rest of the search server is unaffected.")
 
 
-def forward(handler, sidecar: Sidecar | None, method: str, path: str) -> None:
+def forward(handler, sidecar: Sidecar | None, method: str, path: str, tenant: str | None = None) -> None:
     """Called from Handler for /agent/* after _allowed(). `path` is what follows the `/agent` prefix (e.g.
     "/events?after=5"). Copies the request and returns the sidecar's response verbatim: no policy of its own
     beyond auth, and it never touches LOCK or WRITE_LOCK."""
     if sidecar is None:
         handler._send(503, {"error": "second brain ai is unavailable", "help": _missing_node_help()})
+        return
+    if tenant is not None and not re.fullmatch(r"[0-9a-f]{64}", tenant):
+        handler._send(400, {"error": "invalid tenant"})
         return
     with sidecar.lock:
         port = sidecar.port
@@ -206,6 +211,9 @@ def forward(handler, sidecar: Sidecar | None, method: str, path: str) -> None:
         return
 
     length = int(handler.headers.get("Content-Length") or 0)
+    if length > MAX_AGENT_BODY_BYTES:
+        handler._send(413, {"error": "agent request is too large"})
+        return
     body = handler.rfile.read(length) if length else b""
     # Long-polls return within 25s; a blocking send or ask lasts as long as the model takes.
     timeout = 30 if (path or "").startswith("/events") else 900
@@ -214,6 +222,7 @@ def forward(handler, sidecar: Sidecar | None, method: str, path: str) -> None:
         conn.request(method, path or "/", body=body, headers={
             "Authorization": f"Bearer {sidecar.secret}",
             "Content-Type": handler.headers.get("Content-Type", "application/json"),
+            **({"X-Veritas-Tenant": tenant} if tenant is not None else {}),
         })
         response = conn.getresponse()
         data = response.read()
@@ -227,6 +236,8 @@ def forward(handler, sidecar: Sidecar | None, method: str, path: str) -> None:
     handler.send_response(status)
     handler.send_header("Content-Type", content_type)
     handler.send_header("Content-Length", str(len(data)))
+    handler.send_header("Cache-Control", "no-store")
+    handler.send_header("Pragma", "no-cache")
     handler.end_headers()
     handler.wfile.write(data)
 

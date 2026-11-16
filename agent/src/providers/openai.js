@@ -155,17 +155,41 @@ export function buildMessages(req) {
 
 /**
  * @param {import("../platform").Platform} platform
- * @param {{ id?: import("../domain").ProviderId, baseUrl: string, apiKey: string | null, webBackend?: { kind: "exa" | "tavily" | "searxng", url: string, key: string | null } | null }} settings
+ * @param {{ id?: import("../domain").ProviderId, baseUrl: string, apiKey: string | null | ((force?: boolean) => Promise<string>), redirectError?: boolean, webBackend?: { kind: "exa" | "tavily" | "searxng", url: string, key: string | null } | null }} settings
  * @returns {import("../provider").Provider}
  */
 export function openaiProvider(platform, settings) {
   const id = /** @type {import("../domain").ProviderId} */ (settings.id ?? 'oss:default');
-  const headers = { 'content-type': 'application/json', ...(settings.apiKey ? { authorization: `Bearer ${settings.apiKey}` } : {}) };
+  const dynamicKey = /** @type {null | ((force?: boolean) => Promise<string>)} */ (
+    typeof settings.apiKey === 'function' ? settings.apiKey : null
+  );
+  const staticKey = typeof settings.apiKey === 'string' ? settings.apiKey : null;
 
-  async function post(body, signal) {
+  async function headers(force = false) {
+    const value = dynamicKey ? await dynamicKey(force) : staticKey;
+    return { 'content-type': 'application/json', ...(value ? { authorization: `Bearer ${value}` } : {}) };
+  }
+
+  async function post(body, signal, force = false) {
     return platform.fetch(`${settings.baseUrl.replace(/\/$/, '')}/chat/completions`, {
-      method: 'POST', headers, body: JSON.stringify(body), signal,
+      method: 'POST', headers: await headers(force), body: JSON.stringify(body), signal,
+      ...(settings.redirectError ? { redirect: 'error' } : {}),
     });
+  }
+
+  async function postWithRefresh(body, signal) {
+    let res = await post(body, signal);
+    if (dynamicKey && res.status === 401) {
+      try { await res.body?.cancel?.(); } catch { /* the original 401 response is already settled */ }
+      res = await post(body, signal, true);
+    }
+    return res;
+  }
+
+  /** @param {any} error */
+  function credentialStatus(error) {
+    const status = /** @type {any} */ (error)?.status;
+    return status === 401 || status === 403;
   }
 
   return {
@@ -175,7 +199,7 @@ export function openaiProvider(platform, settings) {
     /** @returns {Promise<import("../domain").ProviderStatus>} */
     async status() {
       try {
-        const res = await platform.fetch(`${settings.baseUrl.replace(/\/$/, '')}/models`, { headers });
+        const res = await platform.fetch(`${settings.baseUrl.replace(/\/$/, '')}/models`, { headers: await headers() });
         if (!res.ok) return { provider: id, state: 'unreachable', version: null, account: { kind: 'none', label: null, plan: null }, usage: null, installHelp: 'The endpoint is not reachable. Check the base URL and that the server is running.' };
         return { provider: id, state: 'ready', version: null, account: { kind: 'none', label: settings.baseUrl, plan: null }, usage: null, installHelp: null };
       } catch {
@@ -185,7 +209,7 @@ export function openaiProvider(platform, settings) {
 
     async models() {
       try {
-        const res = await platform.fetch(`${settings.baseUrl.replace(/\/$/, '')}/models`, { headers });
+        const res = await platform.fetch(`${settings.baseUrl.replace(/\/$/, '')}/models`, { headers: await headers() });
         if (!res.ok) return [];
         const body = await res.json();
         return (body.data ?? []).map((m) => ({ id: m.id, label: m.id, hint: null, efforts: [], source: /** @type {const} */ ('provider'), isDefault: false }));
@@ -206,7 +230,7 @@ export function openaiProvider(platform, settings) {
        *  the step cap is reached and when the JSON-shape repair turn below still doesn't produce valid JSON. */
       async function forceFinalAnswer(nudge) {
         messages.push({ role: 'user', content: nudge });
-        const res = await post(buildChatRequest({ model: req.model?.model, messages, tools: [], outputSchema: null, withResponseFormat: false }), signal);
+        const res = await postWithRefresh(buildChatRequest({ model: req.model?.model, messages, tools: [], outputSchema: null, withResponseFormat: false }), signal);
         if (!res.ok) return null;
         const state = createStreamState();
         for await (const chunk of parseSse(res.body)) applyChunk(state, chunk);
@@ -223,7 +247,11 @@ export function openaiProvider(platform, settings) {
           let repaired;
           try {
             repaired = await forceFinalAnswer(`Return only JSON matching this schema, no other text: ${JSON.stringify(req.outputSchema)}`);
-          } catch {
+          } catch (error) {
+            if (dynamicKey && credentialStatus(error)) {
+              yield { type: 'failed', error: { kind: 'signed_out', message: 'Sign in with Globus again.' } };
+              return;
+            }
             // Handled below the same as a repair turn that ran but still didn't produce valid JSON.
           }
           if (repaired != null && tryParseJson(repaired.trim()) !== undefined) {
@@ -244,13 +272,17 @@ export function openaiProvider(platform, settings) {
       for (let step = 0; step < MAX_STEPS; step += 1) {
         let res;
         try {
-          res = await post(buildChatRequest({ model: req.model?.model, messages, tools, outputSchema: req.outputSchema, withResponseFormat: !!req.outputSchema }), signal);
+          res = await postWithRefresh(buildChatRequest({ model: req.model?.model, messages, tools, outputSchema: req.outputSchema, withResponseFormat: !!req.outputSchema }), signal);
           if (!res.ok && req.outputSchema && res.status === 400) {
             // Many OpenAI-compatible servers 400 on an unrecognized response_format; retry once without it.
-            res = await post(buildChatRequest({ model: req.model?.model, messages, tools, outputSchema: req.outputSchema, withResponseFormat: false }), signal);
+            res = await postWithRefresh(buildChatRequest({ model: req.model?.model, messages, tools, outputSchema: req.outputSchema, withResponseFormat: false }), signal);
           }
         } catch (error) {
-          yield { type: 'failed', error: { kind: signal.aborted ? 'cancelled' : 'provider_crashed', message: signal.aborted ? 'Interrupted.' : errorMessage(error) } };
+          const signedOut = dynamicKey && credentialStatus(error);
+          yield { type: 'failed', error: {
+            kind: signal.aborted ? 'cancelled' : signedOut ? 'signed_out' : 'provider_crashed',
+            message: signal.aborted ? 'Interrupted.' : signedOut ? 'Sign in with Globus again.' : errorMessage(error),
+          } };
           return;
         }
         if (!res.ok) {

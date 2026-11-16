@@ -49,9 +49,14 @@ export function toChoice({ provider, model }, effort) {
  *   settings: Settings, statuses: ProviderStatus[], models: Record<string, ListedModel[]>,
  * }} ModelsState */
 
-/** The providers drawn under Cloud: Claude Code, Codex, then one per saved endpoint. @param {ModelsState} state */
+/** The providers drawn under Cloud: Claude Code, Codex, saved endpoints, then status-discovered ALCF clusters.
+ *  Status is what registers a built-in ALCF provider; arbitrary `oss:` IDs cannot inject themselves into the picker.
+ *  @param {ModelsState} state */
 export function cloudProviders(state) {
-  return [...CLOUD, ...(state.settings.endpoints ?? []).map((e) => `oss:${e.name}`)];
+  const saved = (state.settings.endpoints ?? []).map((e) => `oss:${e.name}`);
+  const alcf = (state.statuses ?? []).map((status) => status.provider)
+    .filter((provider) => /^oss:alcf-[a-z0-9-]+$/.test(provider));
+  return [...new Set([...CLOUD, ...saved, ...alcf])];
 }
 
 /** @param {ModelsState} state @param {string} provider */
@@ -208,7 +213,10 @@ export class ModelsStore {
   }
 
   /** @param {string} provider */
-  async signIn(provider) { return this.ai.providers.signIn(provider, 'browser'); }
+  async signIn(provider) {
+    if (provider.startsWith('oss:alcf-')) return { openUrl: '/auth/globus/login' };
+    return this.ai.providers.signIn(provider, 'browser');
+  }
 }
 
 /** The address a person typed, with the scheme added when they left it off. @param {string} raw */

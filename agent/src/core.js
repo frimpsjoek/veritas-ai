@@ -521,8 +521,9 @@ export async function createLocalRuntime(deps) {
     if (wait) return ref.id === SCREENING_RESULT_ID ? screeningResultOf(wait[1]) : null;
     const view = await sessionView(id);
     const summary = view.results.find((r) => r.ref.id === ref.id);
-    const version = ref.version ?? summary?.ref.version;
-    if (!version) return null;
+    if (!summary) return null;
+    const version = ref.version ?? summary.ref.version;
+    if (!version || version > summary.ref.version) return null;
     return store.readResult(id, ref.id, version);
   }
 

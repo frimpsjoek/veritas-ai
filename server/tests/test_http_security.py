@@ -5,9 +5,12 @@ import http.client
 import json
 import threading
 from http.server import ThreadingHTTPServer
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+import globus_auth
 import http_api
 
 LOCAL = {"Host": "127.0.0.1:27182"}
@@ -46,6 +49,7 @@ def test_request_class(headers, expected):
 def server(tmp_path, monkeypatch):
     monkeypatch.setattr(http_api, "TOKEN_FILE", tmp_path / "api-token")
     monkeypatch.setattr(http_api, "SESSIONS_FILE", tmp_path / "web" / "sessions.json")
+    monkeypatch.setattr(http_api, "GLOBUS_AUTH", None)
     (tmp_path / "api-token").write_text("secret-token\n")
 
     def no_search():
@@ -64,9 +68,30 @@ def call(port, method, path, headers=None, body=None):
     data = json.dumps(body).encode() if body is not None else None
     conn.request(method, path, body=data, headers={"Host": f"127.0.0.1:{port}", **(headers or {})})
     response = conn.getresponse()
-    result = response.status, response.getheader("Set-Cookie"), response.read()
+    response_cookies = response.headers.get_all("Set-Cookie") or []
+    result = response.status, "\n".join(response_cookies) if response_cookies else None, response.read()
     conn.close()
     return result
+
+
+def call_full(port, method, path, headers=None, body=None):
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    data = json.dumps(body).encode() if body is not None else None
+    conn.request(method, path, body=data, headers={"Host": f"127.0.0.1:{port}", **(headers or {})})
+    response = conn.getresponse()
+    result = response.status, response.getheaders(), response.read()
+    conn.close()
+    return result
+
+
+def header(headers, name):
+    return [value for key, value in headers if key.lower() == name.lower()]
+
+
+def cookie_value(cookies, name):
+    import re
+    match = re.search(rf"(?:^|\n){re.escape(name)}=([^;\n]*)", cookies or "")
+    return match.group(1) if match else None
 
 
 def phone(**extra):
@@ -103,8 +128,12 @@ def test_proxied_needs_token_or_cookie(server):
 
     status, cookie, _ = call(port, "POST", "/app/login", phone(), {"token": "secret-token"})
     assert status == 200
-    session = cookie.split(";")[0].removeprefix("sb_session=")
-    assert {"HttpOnly", "SameSite=Strict", "Path=/", "Max-Age=31536000"} <= {p.strip() for p in cookie.split(";")}
+    assert cookie_value(cookie, "vg_session") == ""
+    admin_cookie = cookie.splitlines()[0]
+    session = admin_cookie.split(";")[0].removeprefix("sb_session=")
+    assert {"HttpOnly", "SameSite=Strict", "Path=/", "Max-Age=31536000"} <= {
+        p.strip() for p in admin_cookie.split(";")
+    }, repr(cookie)
     # Secure only when the proxy says https: an http serve port without X-Forwarded-Proto must still keep the cookie
     assert ("Secure" in cookie) == (phone().get("X-Forwarded-Proto") == "https")
     stored = (tmp / "web" / "sessions.json").read_text()
@@ -156,3 +185,195 @@ def test_setup_suggest_needs_the_token_and_refuses_agents(server):
     assert call(port, "GET", "/setup/suggest", phone())[0] == 401
     assert call(port, "GET", "/setup/suggest", {"X-KB-Client": "agent"})[0] == 403
     assert call(port, "GET", "/setup/suggest")[0] == 200
+
+
+class FakeGlobus:
+    def __init__(self):
+        self.config = globus_auth.Config("client-A", "secret-A", globus_auth.PRODUCTION_CALLBACK)
+        self.store = SimpleNamespace(root=Path.cwd())
+        self.active = False
+        self.used = False
+        self.calls = []
+
+    def start(self):
+        return "https://auth.globus.org/v2/oauth2/authorize?state=state-value", "binding-value"
+
+    def complete(self, state, code, binding, provider_error=""):
+        self.calls.append((state, code, binding, provider_error))
+        if self.used:
+            raise globus_auth.AuthError(400, "invalid or expired Globus login state")
+        self.used = True
+        if state != "state-value" or binding != "binding-value":
+            raise globus_auth.AuthError(400, "invalid Globus browser binding")
+        if provider_error:
+            raise globus_auth.AuthError(400, "Globus authorization was denied")
+        if not code:
+            raise globus_auth.AuthError(400, "missing Globus authorization code")
+        self.active = True
+        return "globus-session-value"
+
+    def principal(self, raw):
+        if not self.active or raw != "globus-session-value":
+            return None
+        return {"kind": "globus", "tenant": "a" * 64, "name": "A User", "preferred_username": "a@alcf.anl.gov"}
+
+    def inference_status(self, tenant):
+        assert tenant == "a" * 64
+        return {"connected": True, "needs_reauth": False, "expires_at": 1_800_003_600.0}
+
+    def logout(self, raw):
+        assert raw == "globus-session-value"
+        self.active = False
+
+
+def secure_phone(**extra):
+    return phone(**{"X-Forwarded-Proto": "https", **extra})
+
+
+def globus_cookie():
+    return {"Cookie": "vg_session=globus-session-value"}
+
+
+def test_globus_login_callback_me_and_logout(server, monkeypatch, capsys):
+    port, _ = server
+    fake = FakeGlobus()
+    monkeypatch.setattr(http_api, "GLOBUS_AUTH", fake)
+
+    status, headers, body = call_full(port, "GET", "/auth/globus/status", secure_phone())
+    assert status == 200 and json.loads(body) == {"enabled": True}
+    assert header(headers, "Cache-Control") == ["no-store"]
+
+    status, headers, body = call_full(port, "GET", "/auth/globus/login", secure_phone())
+    assert status == 302 and header(headers, "Location") == [
+        "https://auth.globus.org/v2/oauth2/authorize?state=state-value"
+    ]
+    login_cookies = "\n".join(header(headers, "Set-Cookie"))
+    assert cookie_value(login_cookies, "vg_login") == "binding-value"
+    assert cookie_value(login_cookies, "vg_session") is None
+    assert {"HttpOnly", "SameSite=Lax", "Secure", "Path=/auth/globus", "Max-Age=600"} <= {
+        part.strip() for part in login_cookies.split(";")
+    }
+    assert header(headers, "Cache-Control") == ["no-store"]
+
+    callback_headers = secure_phone(**{
+        "Origin": "https://auth.globus.org",
+        "Sec-Fetch-Site": "cross-site",
+        "Sec-Fetch-Mode": "navigate",
+        "Cookie": "vg_login=binding-value",
+    })
+    status, headers, body = call_full(
+        port, "GET", "/auth/globus/callback?code=secret-code&state=state-value", callback_headers,
+    )
+    assert status == 303 and header(headers, "Location") == ["/app/#/home"]
+    cookies = "\n".join(header(headers, "Set-Cookie"))
+    assert cookie_value(cookies, "vg_session") == "globus-session-value"
+    assert cookie_value(cookies, "vg_login") == ""
+    assert cookie_value(cookies, "sb_session") == ""
+    session_part = next(value for value in header(headers, "Set-Cookie") if value.startswith("vg_session="))
+    assert {"HttpOnly", "SameSite=Strict", "Secure", "Path=/", "Max-Age=43200"} <= {
+        part.strip() for part in session_part.split(";")
+    }
+    assert header(headers, "Cache-Control") == ["no-store"]
+    assert header(headers, "Referrer-Policy") == ["no-referrer"]
+    assert body == b""
+    assert "secret-code" not in body.decode() and "state-value" not in body.decode()
+    captured = capsys.readouterr()
+    assert "secret-code" not in captured.out + captured.err
+    assert "globus-session-value" not in captured.out + captured.err
+
+    status, headers, body = call_full(port, "GET", "/auth/globus/me", secure_phone(**globus_cookie()))
+    assert status == 200 and header(headers, "Cache-Control") == ["no-store"]
+    assert json.loads(body) == {
+        "kind": "globus", "tenant": "a" * 64, "name": "A User", "preferred_username": "a@alcf.anl.gov",
+        "inference": {"connected": True, "needs_reauth": False, "expires_at": 1_800_003_600.0},
+    }
+    assert call(port, "GET", "/ping", secure_phone(**globus_cookie()))[0] == 200
+    assert call(port, "GET", "/web/state", secure_phone(**globus_cookie()))[0] == 200
+
+    status, headers, body = call_full(port, "POST", "/auth/globus/logout", secure_phone(**globus_cookie()), {})
+    assert status == 200 and json.loads(body) == {"ok": True}
+    cleared = "\n".join(header(headers, "Set-Cookie"))
+    assert cookie_value(cleared, "vg_session") == ""
+    assert {"HttpOnly", "SameSite=Strict", "Secure", "Path=/", "Max-Age=0"} <= {
+        part.strip() for part in cleared.split(";")
+    }
+    assert call(port, "GET", "/auth/globus/me", secure_phone(**globus_cookie()))[0] == 401
+
+
+def test_globus_callback_requires_binding_and_top_level_navigation(server, monkeypatch):
+    port, _ = server
+    fake = FakeGlobus()
+    monkeypatch.setattr(http_api, "GLOBUS_AUTH", fake)
+    base = secure_phone(**{"Origin": "https://auth.globus.org", "Sec-Fetch-Site": "cross-site"})
+
+    status, cookies, body = call(port, "GET", "/auth/globus/callback?code=code&state=state-value",
+                                 {**base, "Sec-Fetch-Mode": "navigate"})
+    assert status == 400 and not cookie_value(cookies, "vg_session")
+    assert cookie_value(cookies, "vg_login") == ""
+    assert b"code" not in body and b"state-value" not in body
+
+    fake.used = False
+    calls = len(fake.calls)
+    status, _, _ = call(port, "GET", "/auth/globus/callback?code=code&state=state-value",
+                        {**base, "Sec-Fetch-Mode": "no-cors", "Cookie": "vg_login=binding-value"})
+    assert status == 403 and len(fake.calls) == calls
+
+
+def test_globus_cookie_is_not_admin_or_a2a(server, monkeypatch):
+    port, _ = server
+    fake = FakeGlobus()
+    fake.active = True
+    monkeypatch.setattr(http_api, "GLOBUS_AUTH", fake)
+    remote = secure_phone(**globus_cookie())
+
+    assert call(port, "POST", "/a2a", remote, {"jsonrpc": "2.0"})[0] == 401
+    assert call(port, "GET", "/agent/reviews", remote)[0] == 403
+    assert call(port, "GET", "/agent/routines", remote)[0] == 403
+    assert call(port, "GET", "/web/phone-link", remote)[0] == 403
+    writes = [
+        ("POST", "/sources"), ("POST", "/index"),
+        ("POST", "/web/ticket"), ("POST", "/ai-note"), ("POST", "/zotero/add"),
+        ("PUT", "/skills/example"), ("PUT", "/digests/example"),
+        ("PATCH", "/sources/example"), ("DELETE", "/sources/example"),
+    ]
+    for method, path in writes:
+        assert call(port, method, path, remote, {})[0] == 403, (method, path)
+
+    assert call(port, "GET", "/ping", secure_phone(Cookie="sb_session=globus-session-value"))[0] == 401
+    assert call(port, "GET", "/auth/globus/me", secure_phone(Cookie="vg_session=legacy-admin-cookie"))[0] == 401
+    status, _, _ = call(port, "POST", "/app/login", secure_phone(), {"token": "secret-token"})
+    assert status == 200
+    admin_session = http_api.new_session()
+    assert call(port, "GET", "/auth/globus/me", secure_phone(Cookie=f"sb_session={admin_session}"))[0] == 401
+
+
+def test_globus_session_takes_precedence_over_legacy_cookie_and_invalid_session_fails_closed(server, monkeypatch):
+    fake = FakeGlobus()
+    fake.active = True
+    monkeypatch.setattr(http_api, "GLOBUS_AUTH", fake)
+    legacy = http_api.new_session()
+    both = secure_phone(Cookie=f"sb_session={legacy}; vg_session=globus-session-value")
+    assert http_api.principal(both)["kind"] == "globus"
+    stale = secure_phone(Cookie=f"sb_session={legacy}; vg_session=revoked")
+    assert http_api.principal(stale) is None
+
+
+def test_globus_capabilities_are_default_deny():
+    for path in ("/agent/reviews", "/agent/routines", "/agent/mcp-servers", "/agent/conversations/adopt",
+                 "/agent/projects/adopt", "/auth/globus/agent-token", "/web/phone-link", "/setup/suggest", "/duplicates", "/conflicts",
+                 "/skills", "/plugins/zotero/latest", "/zotero/xpi", "/sources/output", "/not-a-route"):
+        assert not http_api.globus_route_allowed("GET", path), path
+    for method in ("POST", "PUT", "PATCH", "DELETE", "OPTIONS"):
+        assert not http_api.globus_route_allowed(method, "/search")
+    assert http_api.globus_route_allowed("GET", "/search")
+    assert http_api.globus_route_allowed("GET", "/web/state")
+
+
+def test_missing_globus_config_keeps_legacy_and_a2a_behavior(server):
+    port, _ = server
+    status, headers, body = call_full(port, "GET", "/auth/globus/status", secure_phone())
+    assert status == 200 and json.loads(body) == {"enabled": False}
+    assert header(headers, "Cache-Control") == ["no-store"]
+    assert call(port, "GET", "/auth/globus/login", secure_phone())[0] == 503
+    assert call(port, "GET", "/ping", secure_phone(Authorization="Bearer secret-token"))[0] == 200
+    assert call(port, "POST", "/a2a", secure_phone(Authorization="Bearer secret-token"), {})[0] == 401

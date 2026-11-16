@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ModelsStore, parseKey, modelKey, providerState, pickableModels, checklist, endpointProblem, normalizeAddress, shownList } from '../src/settings/models-data.js';
+import { ModelsStore, cloudProviders, parseKey, modelKey, providerState, pickableModels, checklist, endpointProblem, normalizeAddress, shownList } from '../src/settings/models-data.js';
 
 const claudeModels = [
   { id: 'sonnet', label: 'Sonnet', hint: 'good for most questions', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], source: 'builtin', isDefault: false },
@@ -8,10 +8,11 @@ const claudeModels = [
 ];
 
 /** An engine in memory: settings.update merges like the real one (null role clears, other keys replace). */
-function fakeAi({ statuses } = {}) {
+function fakeAi({ statuses, providerModels } = {}) {
   const settings = { roles: { chat: { provider: 'codex', model: null }, researcher: { provider: 'codex', model: null } }, endpoints: [], shownModels: [], addedModels: [], defaultModel: null };
   const calls = { models: [], updates: [] };
   const lists = { claude: [...claudeModels], codex: [{ id: 'gpt-5.5', label: 'GPT-5.5', hint: null, efforts: ['low', 'high'], source: 'provider', isDefault: true }] };
+  Object.assign(lists, providerModels ?? {});
   const ai = {
     settings: {
       get: async () => structuredClone(settings),
@@ -120,6 +121,30 @@ test('the pickers offer the models of ready providers, and keep a current choice
   assert.deepEqual(pickableModels(store.state, null).map((o) => o.value), ['claude:sonnet', 'claude:haiku']);
   const kept = pickableModels(store.state, { provider: 'codex', model: 'gpt-5.5' });
   assert.deepEqual(kept.at(-1), { value: 'codex:gpt-5.5', label: 'Codex · gpt-5.5' });
+});
+
+test('status-discovered ALCF providers list raw models and persist tenant choices', async () => {
+  const { store, settings, calls } = await loaded({
+    statuses: [
+      { provider: 'oss:alcf-metis', state: 'ready', account: { kind: 'none', label: 'ALCF metis', plan: null } },
+      { provider: 'oss:alcf-sophia', state: 'ready', account: { kind: 'none', label: 'ALCF sophia', plan: null } },
+      { provider: 'oss:other-ready', state: 'ready', account: { kind: 'none', label: null, plan: null } },
+    ],
+    providerModels: {
+      'oss:alcf-metis': [{ id: 'gpt-oss-120b', label: 'gpt-oss-120b', hint: null, efforts: [], source: 'provider', isDefault: false }],
+      'oss:alcf-sophia': [{ id: 'openai/gpt-oss-120b', label: 'openai/gpt-oss-120b', hint: null, efforts: [], source: 'provider', isDefault: false }],
+    },
+  });
+  const providers = cloudProviders(store.state);
+  assert.equal(providers.filter((provider) => provider === 'oss:alcf-metis').length, 1);
+  assert.ok(providers.includes('oss:alcf-sophia'));
+  assert.ok(!providers.includes('oss:other-ready'));
+  assert.ok(calls.models.includes('oss:alcf-metis') && calls.models.includes('oss:alcf-sophia'));
+  assert.ok(pickableModels(store.state, null).some((option) => option.value === 'oss:alcf-metis:gpt-oss-120b'));
+  await store.saveTask('chat', 'oss:alcf-metis:gpt-oss-120b');
+  assert.deepEqual(settings.roles.chat, { provider: 'oss:alcf-metis', model: 'gpt-oss-120b' });
+  assert.equal(providerState(null, 'codex').pill, 'Not installed');
+  assert.deepEqual(await store.signIn('oss:alcf-metis'), { openUrl: '/auth/globus/login' });
 });
 
 test('the menu list is the ticked models with their provider labels', () => {

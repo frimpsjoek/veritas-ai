@@ -66,6 +66,12 @@ GET  /web/pdf?url=                              that PDF streamed with Range (a 
 POST /web/ticket {"route","query"}             a one-use, 120 s ticket for a frame/PDF/image URL (?ticket=), phase 3
 POST /app/login {"token"}                      sign a browser in: sets the `sb_session` cookie (401 on a wrong token)
 GET  /.well-known/agent-card.json              public A2A discovery (a2a_api.py)
+GET  /auth/globus/status                       whether independent Globus login is configured (no secrets)
+GET  /auth/globus/login                        start OIDC; sets a short-lived binding cookie, not a session
+GET  /auth/globus/callback                     verified code/state/nonce/PKCE exchange; strict vg_session cookie
+GET  /auth/globus/me                           safe Globus principal and inference status, never credentials
+POST /auth/globus/logout                       revoke only this independent Globus application session
+GET  /auth/globus/agent-token                  current sidecar-secret + tenant only; fresh ALCF credentials
 POST /a2a                                      A2A message/send; dedicated `data/a2a-token` only, never local/cookie auth
 
 Listens on 127.0.0.1 only. The phone reaches it through `tailscale serve`, which forwards tailnet requests to this
@@ -76,8 +82,10 @@ port with the Tailscale host name in the Host header. `request_class` sorts ever
 - proxied: anything else. It needs `Authorization: Bearer <data/api-token>` or an `sb_session` cookie from
   `POST /app/login`.
 So a web page cannot use the API, through DNS rebinding or otherwise, and a tailnet device without the token gets
-nothing. No CORS headers are sent. The sole exception to proxied browser/cookie auth is POST /a2a, which always requires
-its independent data/a2a-token, including on loopback.
+nothing. No CORS headers are sent. POST /a2a always requires its independent data/a2a-token, including on loopback.
+The only cross-site navigation exception is exact GET /auth/globus/callback, which still consumes one-use state and a
+browser-binding cookie. Globus `vg_session` requests get read-only shared-library routes plus private interactive
+workspaces; the sidecar proxy derives tenant from that verified session, never from an inbound tenant header.
 """
 from __future__ import annotations
 
@@ -100,6 +108,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import a2a_api
 import agent_api
+import globus_auth
 import kb
 import zotero
 import zotero_files
@@ -145,6 +154,37 @@ SESSIONS_FILE = kb.data_dir() / "web" / "sessions.json"
 SESSION_SECONDS = 365 * 24 * 3600
 SESSION_COOKIE = "sb_session"
 _sessions_lock = threading.Lock()
+GLOBUS_SESSION_COOKIE = "vg_session"
+GLOBUS_LOGIN_COOKIE = "vg_login"
+GLOBUS_AUTH: globus_auth.GlobusAuth | None = None
+AUTH_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache", "Referrer-Policy": "no-referrer"}
+
+# Slice 1 admits Globus identities only to shared-library reads. The sidecar and
+# every mutation remain administrator-only until per-user workspaces are wired.
+GLOBUS_READ_ROUTES = {
+    "/ping", "/status", "/sources", "/search", "/related", "/links", "/recent", "/note",
+    "/zotero", "/zotero/pdf", "/zotero/items", "/zotero/collections", "/zotero/status",
+    "/paper-note", "/paper-note/body", "/paper-figure", "/file", "/folder-file", "/site-icon",
+    "/web/state", "/web/page", "/web/pdf",
+}
+
+
+GLOBUS_AGENT_ROUTES = ("/ping", "/conversations", "/events", "/ask", "/providers", "/sessions", "/skills",
+                       "/projects", "/scholarly", "/radar", "/settings")
+
+
+def globus_route_allowed(method: str, path: str) -> bool:
+    if (method, path) in {("GET", "/auth/globus/me"), ("POST", "/auth/globus/logout"),
+                          ("GET", "/auth/globus/status"), ("GET", "/auth/globus/login"),
+                          ("GET", "/auth/globus/callback"), ("POST", "/web/state")}:
+        return True
+    if path.startswith("/agent/"):
+        relative = path[len("/agent"):]
+        if (relative.startswith(("/reviews", "/routines"))
+                or relative in ("/conversations/adopt", "/projects/adopt", "/radar/check")):
+            return False
+        return any(relative == allowed or relative.startswith(f"{allowed}/") for allowed in GLOBUS_AGENT_ROUTES)
+    return method == "GET" and path in GLOBUS_READ_ROUTES
 
 
 def request_class(headers: Mapping[str, str]) -> RequestClass:
@@ -201,18 +241,67 @@ def bearer_ok(headers: Mapping[str, str]) -> bool:
     return bool(sent) and hmac.compare_digest(sent.encode(), token().encode())
 
 
-def authorized(headers: Mapping[str, str]) -> bool:
-    """A Bearer token or a live sb_session cookie."""
-    if bearer_ok(headers):
-        return True
+def _cookie(headers: Mapping[str, str], name: str) -> str:
     try:
-        morsel = SimpleCookie(headers.get("Cookie") or "").get(SESSION_COOKIE)
+        morsel = SimpleCookie(headers.get("Cookie") or "").get(name)
     except CookieError:
-        return False
-    if not morsel or not morsel.value:
-        return False
-    created = _sessions().get(_session_hash(morsel.value), {}).get("created", 0)
-    return time.time() - created < SESSION_SECONDS
+        return ""
+    return morsel.value if morsel else ""
+
+
+def globus_principal(headers: Mapping[str, str]) -> dict | None:
+    raw = _cookie(headers, GLOBUS_SESSION_COOKIE)
+    if not raw or GLOBUS_AUTH is None:
+        return None
+    return GLOBUS_AUTH.principal(raw)
+
+
+def principal(headers: Mapping[str, str]) -> dict | None:
+    if bearer_ok(headers):
+        return {"kind": "admin"}
+    # A deliberate Globus sign-in is the account switch. An invalid/revoked
+    # Globus cookie fails closed rather than silently reusing a legacy admin cookie.
+    if _cookie(headers, GLOBUS_SESSION_COOKIE):
+        return globus_principal(headers)
+    session = _cookie(headers, SESSION_COOKIE)
+    if session:
+        created = _sessions().get(_session_hash(session), {}).get("created", 0)
+        if time.time() - created < SESSION_SECONDS:
+            return {"kind": "admin"}
+    return None
+
+
+def authorized(headers: Mapping[str, str]) -> bool:
+    """A legacy administrator credential or an independent Globus session."""
+    return principal(headers) is not None
+
+
+def globus_cookie(name: str, value: str, max_age: int, secure: bool, same_site: str, path: str) -> str:
+    parts = [f"{name}={value}", "HttpOnly", f"SameSite={same_site}", f"Path={path}", f"Max-Age={max_age}"]
+    if secure:
+        parts.append("Secure")
+    if max_age == 0:
+        parts.append("Expires=Thu, 01 Jan 1970 00:00:00 GMT")
+    return "; ".join(parts)
+
+
+def _require_globus() -> globus_auth.GlobusAuth:
+    if GLOBUS_AUTH is None:
+        raise globus_auth.AuthError(503, "invalid Globus configuration")
+    return GLOBUS_AUTH
+
+
+def _require_globus_principal(headers: Mapping[str, str]) -> dict:
+    identity = globus_principal(headers)
+    if identity is None:
+        raise globus_auth.AuthError(401, "Globus sign-in is required")
+    return identity
+
+
+def _web_state_path(identity: dict | None) -> Path | None:
+    if not identity or identity.get("kind") != "globus":
+        return None
+    return _require_globus().store.root / identity["tenant"] / "web-state.json"
 
 
 def searcher() -> kb.Searcher:
@@ -420,18 +509,29 @@ class Handler(BaseHTTPRequestHandler):
         data = json.dumps(body, ensure_ascii=False).encode()
         self.send_response(status)
         for name, value in (headers or {}).items():
-            self.send_header(name, value)
+            for item in value if isinstance(value, (list, tuple)) else [value]:
+                self.send_header(name, item)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+    def _redirect(self, status: int, location: str, cookies: list[str] | None = None) -> None:
+        self.send_response(status)
+        self.send_header("Location", location)
+        for cookie in cookies or []:
+            self.send_header("Set-Cookie", cookie)
+        for name, value in AUTH_HEADERS.items():
+            self.send_header(name, value)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def _send_file(self, path: Path) -> None:
         data = path.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", paper_notes.IMAGE_TYPES.get(path.suffix.lower(), "application/octet-stream"))
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "max-age=300")
+        self.send_header("Cache-Control", "private, no-store")
         self.end_headers()
         self.wfile.write(data)
 
@@ -468,6 +568,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _allowed(self) -> bool:
+        self._identity = None
         kind = request_class(self.headers)
         self._cors_origin = self.headers.get("Origin") if kind == "app" else None
         # A frame or PDF.js request of the hosted web app: no token header, a one-use ticket in the URL instead
@@ -483,7 +584,9 @@ class Handler(BaseHTTPRequestHandler):
                     return False
         path = urlparse(self.path).path
         is_a2a = self.command == "POST" and path == "/a2a"
-        if kind == "foreign":
+        callback = self.command == "GET" and path == globus_auth.CALLBACK_PATH
+        callback_navigation = callback and self.headers.get("Sec-Fetch-Mode", "") in ("", "navigate")
+        if kind == "foreign" and not callback_navigation:
             # Logged so a real client that gets wrongly classed as a website shows up in serve.log.
             print(f"403 foreign {self.command} {path} origin={self.headers.get('Origin')!r} "
                   f"sec-fetch-site={self.headers.get('Sec-Fetch-Site')!r}", file=sys.stderr, flush=True)
@@ -503,11 +606,19 @@ class Handler(BaseHTTPRequestHandler):
                 return True
             self._send(401, {"error": "a valid token is required"})
             return False
-        # The page, its scripts, sign-in page and A2A card are public; every data route stays behind the token.
+        # Static app files, the A2A card and the three login-flow entry routes are
+        # public. The callback still requires state + browser binding in globus_auth.
         public = ((self.command == "POST" and path == "/app/login") or
                   (self.command == "GET" and (path == "/app" or path.startswith("/app/") or
-                                              path == "/.well-known/agent-card.json")))
-        if kind == "local" or public or authorized(self.headers):
+                                              path in {"/.well-known/agent-card.json", "/auth/globus/status",
+                                                       "/auth/globus/login", "/auth/globus/agent-token",
+                                                       globus_auth.CALLBACK_PATH})))
+        identity = None if public else principal(self.headers)
+        self._identity = identity
+        if identity and identity.get("kind") == "globus" and not globus_route_allowed(self.command, path):
+            self._send(403, {"error": "this route requires administrator sign-in"})
+            return False
+        if kind == "local" or public or identity:
             return True
         self._send(401, {"error": "a valid token is required"})
         return False
@@ -523,6 +634,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             with kb.request_scope():
                 handler()
+        except globus_auth.AuthError as error:
+            self._send(error.status, {"error": str(error)}, AUTH_HEADERS)
         except FileNotFoundError as error:
             self._send(404, {"error": str(error)})
         except PermissionError as error:
@@ -542,7 +655,9 @@ class Handler(BaseHTTPRequestHandler):
         neither /agent nor /ai-note is in AGENT_ROUTES."""
         if route != "/agent" and not route.startswith("/agent/"):
             return False
-        agent_api.forward(self, AGENT_SIDECAR, self.command, self.path[len("/agent"):] or "/")
+        identity = getattr(self, "_identity", None)
+        tenant = identity.get("tenant") if identity and identity.get("kind") == "globus" else None
+        agent_api.forward(self, AGENT_SIDECAR, self.command, self.path[len("/agent"):] or "/", tenant=tenant)
         return True
 
     def do_GET(self) -> None:
@@ -562,6 +677,45 @@ class Handler(BaseHTTPRequestHandler):
         def handle() -> None:
             if agent and route not in AGENT_ROUTES:
                 raise PermissionError("not available to agents")
+            if route == "/auth/globus/status":
+                return self._send(200, {"enabled": GLOBUS_AUTH is not None}, AUTH_HEADERS)
+            if route == "/auth/globus/login":
+                manager = _require_globus()
+                url, binding = manager.start()
+                cookie = globus_cookie(GLOBUS_LOGIN_COOKIE, binding, globus_auth.STATE_TTL,
+                                       manager.config.secure_cookie, "Lax", "/auth/globus")
+                return self._redirect(302, url, [cookie])
+            if route == globus_auth.CALLBACK_PATH:
+                manager = _require_globus()
+                clear_login = globus_cookie(GLOBUS_LOGIN_COOKIE, "", 0, manager.config.secure_cookie,
+                                            "Lax", "/auth/globus")
+                try:
+                    session = manager.complete(q.get("state", ""), q.get("code", ""),
+                                               _cookie(self.headers, GLOBUS_LOGIN_COOKIE), q.get("error", ""))
+                except globus_auth.AuthError as error:
+                    return self._send(error.status, {"error": str(error)},
+                                      {**AUTH_HEADERS, "Set-Cookie": clear_login})
+                session_cookie = globus_cookie(GLOBUS_SESSION_COOKIE, session, globus_auth.SESSION_SECONDS,
+                                               manager.config.secure_cookie, "Strict", "/")
+                clear_legacy = globus_cookie(SESSION_COOKIE, "", 0, manager.config.secure_cookie, "Strict", "/")
+                return self._redirect(303, "/app/#/home", [session_cookie, clear_login, clear_legacy])
+            if route == "/auth/globus/agent-token":
+                manager = _require_globus()
+                sidecar = AGENT_SIDECAR
+                if sidecar is None:
+                    raise globus_auth.AuthError(503, "agent credential delivery is unavailable")
+                scheme, _, supplied = (self.headers.get("Authorization") or "").partition(" ")
+                tenant = self.headers.get("X-Veritas-Tenant") or ""
+                if (scheme.lower() != "bearer" or not re.fullmatch(r"[0-9a-f]{64}", tenant)
+                        or not hmac.compare_digest(supplied.encode(), sidecar.secret.encode())):
+                    raise globus_auth.AuthError(403, "agent credentials are not available to this caller")
+                credential = manager.inference_credential(tenant, force=q.get("refresh") == "1")
+                return self._send(200, credential, AUTH_HEADERS)
+            if route == "/auth/globus/me":
+                manager = _require_globus()
+                identity = _require_globus_principal(self.headers)
+                return self._send(200, {**identity, "inference": manager.inference_status(identity["tenant"])},
+                                  AUTH_HEADERS)
             if route == "/.well-known/agent-card.json":
                 return self._send(200, a2a_api.agent_card())
             if self._forward_to_agent_sidecar(route):
@@ -570,6 +724,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if route == "/ping":
                 return self._send(200, {"ok": True})
+            if route == "/web/state":
+                return self._send(200, web_app.read_state(_web_state_path(getattr(self, "_identity", None))),
+                                  {"Cache-Control": "no-store", "Pragma": "no-cache"})
             if route == "/app" or route.startswith("/app/"):
                 return web_app.serve(self, route)
             if route == "/web/phone-link":
@@ -665,8 +822,6 @@ class Handler(BaseHTTPRequestHandler):
                 return pdf_route.stream(self, found, kind)
             elif route == "/paper-figure":
                 result = {"image": paper_figures.figure(q.get("doi", ""), q.get("arxiv"), q.get("url"))}
-            elif route == "/web/state":
-                result = web_app.read_state()
             elif route == "/zotero/edits":
                 result = paper_notes.pending_edits()
             elif route == "/zotero/pending-adds":
@@ -741,6 +896,12 @@ class Handler(BaseHTTPRequestHandler):
         def handle() -> None:
             if agent and route not in AGENT_ROUTES:
                 raise PermissionError("not available to agents")
+            if route == "/auth/globus/logout":
+                manager = _require_globus()
+                _require_globus_principal(self.headers)
+                manager.logout(_cookie(self.headers, GLOBUS_SESSION_COOKIE))
+                cleared = globus_cookie(GLOBUS_SESSION_COOKIE, "", 0, manager.config.secure_cookie, "Strict", "/")
+                return self._send(200, {"ok": True}, {**AUTH_HEADERS, "Set-Cookie": cleared})
             if route == "/a2a":
                 return a2a_api.message_send(self, AGENT_SIDECAR)
             if self._forward_to_agent_sidecar(route):
@@ -763,7 +924,8 @@ class Handler(BaseHTTPRequestHandler):
                 # Safari drops a Secure cookie set over plain http (a tailscale serve http:// port), and that hop is inside WireGuard anyway
                 secure = " Secure;" if self.headers.get("X-Forwarded-Proto") == "https" else ""
                 cookie = f"{SESSION_COOKIE}={new_session()}; HttpOnly;{secure} SameSite=Strict; Path=/; Max-Age={SESSION_SECONDS}"
-                return self._send(200, {"ok": True}, {"Set-Cookie": cookie})
+                clear_globus = globus_cookie(GLOBUS_SESSION_COOKIE, "", 0, bool(secure.strip()), "Strict", "/")
+                return self._send(200, {"ok": True}, {"Set-Cookie": [cookie, clear_globus]})
             if route == "/ai-note":
                 body = self._body()
                 result = agent_api.create_ai_note(body["folder"], body["title"], body["markdown"], body["reviewId"], body.get("frontMatter"))
@@ -846,7 +1008,9 @@ class Handler(BaseHTTPRequestHandler):
                 if int(self.headers.get("Content-Length") or 0) > web_app.MAX_BODY:
                     return self._send(413, {"error": "too large"})
                 try:
-                    self._send(200, web_app.update_state(self._body(limit=web_app.MAX_BODY)))
+                     self._send(200, web_app.update_state(self._body(limit=web_app.MAX_BODY),
+                                                             _web_state_path(getattr(self, "_identity", None))),
+                                  {"Cache-Control": "no-store", "Pragma": "no-cache"})
                 except web_app.Refused as refused:
                     self._send(refused.status, {"error": refused.message})
                 except json.JSONDecodeError:
@@ -982,7 +1146,7 @@ class Handler(BaseHTTPRequestHandler):
 def restart_when_code_changes() -> None:
     """A server outlives the Obsidian that started it and serves the phone, so after an update it replaces itself
     with the new code (same process, same port) instead of leaving the phone with nothing."""
-    files = [kb.HOME / name for name in ("kb.py", "http_api.py", "zotero.py", "mlx_embed.py", "keyword_index.py", "media.py", "zotero_files.py", "paper_notes.py", "agent_api.py", "a2a_api.py", "plugin_updates.py", "skills.py", "radar_api.py", "web_app.py", "pdf_route.py", "pending_adds.py", "paper_figures.py", "sources.py", "site_icons.py")]
+    files = [kb.HOME / name for name in ("kb.py", "http_api.py", "zotero.py", "mlx_embed.py", "keyword_index.py", "media.py", "zotero_files.py", "paper_notes.py", "agent_api.py", "a2a_api.py", "globus_auth.py", "user_store.py", "plugin_updates.py", "skills.py", "radar_api.py", "web_app.py", "pdf_route.py", "pending_adds.py", "paper_figures.py", "sources.py", "site_icons.py")]
     files.append(kb.HOME / agent_api.AGENTD_ENTRY)  # a rebuilt sidecar is an update too
     started = {f: f.stat().st_mtime for f in files if f.exists()}
     while True:
@@ -998,9 +1162,14 @@ def sidecar_kb_url(port: int) -> str:
 
 
 def serve(port: int) -> None:
-    global AGENT_SIDECAR
+    global AGENT_SIDECAR, GLOBUS_AUTH
     token()  # create it on first start, so the Mac plugin can hand it to the phone
     a2a_api.ensure_token()  # the A2A-only credential is independent of browser sign-in
+    try:
+        GLOBUS_AUTH = globus_auth.default()
+    except globus_auth.AuthError:
+        GLOBUS_AUTH = None
+        print("Globus sign-in disabled: invalid Globus configuration", file=sys.stderr)
     try:
         # The sidecar reaches the library through this server, on the port it actually runs on (it used to be told
         # 27182 whatever the port, so a server on another port gave an AI that could not see the library).

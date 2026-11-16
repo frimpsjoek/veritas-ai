@@ -129,6 +129,45 @@ test('turn(): a 401 is reported as failed{signed_out}', async () => {
   assert.equal(events[0].error.kind, 'signed_out');
 });
 
+test('dynamic credentials are read per request and a 401 refreshes and retries once', async () => {
+  const fetchFn = scriptedFetch([
+    { models: ['model-a'] },
+    { models: ['model-a'] },
+    { status: 401, text: 'expired' },
+    { chunks: [{ choices: [{ delta: { content: 'fresh answer' } }] }, { choices: [{ delta: {}, finish_reason: 'stop' }] }] },
+  ]);
+  const credentials = [];
+  const apiKey = async (force = false) => {
+    credentials.push(force);
+    return force ? 'fresh-token' : 'stale-token';
+  };
+  const provider = openaiProvider(fakePlatform(fetchFn), { baseUrl: 'https://inference-api.alcf.anl.gov/resource_server/metis/api/v1', apiKey });
+  assert.equal((await provider.status()).state, 'ready');
+  assert.deepEqual((await provider.models()).map((m) => m.id), ['model-a']);
+  const events = await collect(provider.turn(baseReq(), new AbortController().signal));
+  assert.equal(events.at(-1).text, 'fresh answer');
+  assert.equal(fetchFn.calls.filter((call) => call.url.endsWith('/chat/completions')).length, 2);
+  assert.deepEqual(credentials, [false, false, false, true]);
+  for (const call of fetchFn.calls.slice(0, 3)) assert.equal(call.opts.headers.authorization, 'Bearer stale-token');
+  assert.equal(fetchFn.calls.at(-1).opts.headers.authorization, 'Bearer fresh-token');
+});
+
+test('a rejected forced credential refresh is signed out without a third completion request', async () => {
+  const fetchFn = scriptedFetch([{ status: 401, text: 'expired' }]);
+  const provider = openaiProvider(fakePlatform(fetchFn), {
+    baseUrl: 'https://inference-api.alcf.anl.gov/resource_server/metis/api/v1',
+    apiKey: async (force = false) => {
+      if (force) throw Object.assign(new Error('ALCF credential delivery was rejected'), { status: 401 });
+      return 'stale-token';
+    },
+  });
+  const events = await collect(provider.turn(baseReq(), new AbortController().signal));
+  assert.equal(events.length, 1);
+  assert.deepEqual(events[0].error, { kind: 'signed_out', message: 'Sign in with Globus again.' });
+  assert.equal(fetchFn.calls.length, 1);
+  assert.ok(!events[0].error.message.includes('stale-token'));
+});
+
 test('turn(): reaching the tool-call step cap forces one tools-off final answer instead of failing', async () => {
   const toolCallChunk = { chunks: [{ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c', function: { name: 'search_library', arguments: '{}' } }] } }] }, { choices: [{ delta: {}, finish_reason: 'tool_calls' }] }] };
   const finalChunk = { chunks: [{ choices: [{ delta: { content: 'Here is what I found so far.' } }] }, { choices: [{ delta: {}, finish_reason: 'stop' }] }] };

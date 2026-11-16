@@ -8,6 +8,8 @@
 // Binds 127.0.0.1 only. Every control route (everything but /mcp) requires `Authorization: Bearer <secret>`,
 // where the secret is handed to this process by the Python supervisor (SECOND_BRAIN_AGENTD_SECRET) so it never
 // has to be discovered. Never touches the Python process's LOCK/WRITE_LOCK: this process doesn't know they exist.
+// With a verified tenant header from Python, resolveService leases that tenant's isolated interactive runtime and
+// /mcp/<tenant> gives its gateway a separate MCP bearer surface; no-tenant requests keep the legacy runtime.
 import { createSecretStore } from '../secrets.js';
 import http from 'node:http';
 import { URL } from 'node:url';
@@ -18,12 +20,19 @@ import { createLocalRuntime } from '../core.js';
 import { createProviders } from '../providers/index.js';
 import { createSettingsStore } from '../settings.js';
 import { errorMessage } from '../errors.js';
+import { createTenantPool } from './tenant-runtime.mjs';
 
 const LONG_POLL_MS = 25_000;
+const MAX_BODY_BYTES = 64 * 1024 * 1024;
 
 async function readBody(req) {
   const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
+  let bytes = 0;
+  for await (const chunk of req) {
+    bytes += chunk.length;
+    if (bytes > MAX_BODY_BYTES) throw Object.assign(new Error('agent request is too large'), { status: 413 });
+    chunks.push(chunk);
+  }
   return Buffer.concat(chunks).toString('utf8');
 }
 
@@ -191,9 +200,58 @@ export function routes() {
   ];
 }
 
+const TENANT = /^[0-9a-f]{64}$/;
+const TENANT_BACKGROUND = /^\/(reviews|routines)(\/|$)/;
+
+function tenantId(raw) {
+  if (!raw) return null;
+  if (!TENANT.test(raw)) throw Object.assign(new Error('invalid tenant'), { status: 400 });
+  return raw;
+}
+
+/** @param {unknown} error */
+function httpErrorStatus(error) {
+  const status = /** @type {any} */ (error)?.status;
+  return typeof status === 'number' ? status : 500;
+}
+
+const STORAGE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+const ADOPTIONS = new Set(['/conversations/adopt', '/projects/adopt']);
+const TENANT_URL_ADMIN_ONLY = new Set(['/radar/check']);
+
+function validateResultRef(ref) {
+  if (!ref || typeof ref !== 'object' || Array.isArray(ref) || typeof ref.id !== 'string' || !STORAGE_ID.test(ref.id)) {
+    throw Object.assign(new Error('invalid tenant result reference'), { status: 403 });
+  }
+  if (ref.version == null) return;
+  if (!Number.isSafeInteger(ref.version) || ref.version < 1) {
+    throw Object.assign(new Error('invalid tenant result version'), { status: 403 });
+  }
+}
+
+function validateTenantArgs(pathname, method, args) {
+  if (ADOPTIONS.has(pathname)) throw Object.assign(new Error('adoption is administrator-only'), { status: 403 });
+  for (const key of ['id', 'project']) {
+    const value = args[key];
+    if (value != null && (typeof value !== 'string' || !STORAGE_ID.test(value))) {
+      throw Object.assign(new Error('invalid tenant object identifier'), { status: 403 });
+    }
+  }
+  if (pathname === '/settings' && method === 'POST'
+      && ['mcp', 'endpoints', 'local'].some((key) => Object.hasOwn(args, key))) {
+    throw Object.assign(new Error('custom MCP and OpenAI-compatible endpoints are administrator-only'), { status: 403 });
+  }
+  if (pathname === '/sessions/restore') validateResultRef(args.ref);
+  if (TENANT_URL_ADMIN_ONLY.has(pathname)) {
+    throw Object.assign(new Error('tenant-controlled network checks are administrator-only'), { status: 403 });
+  }
+}
+
 /**
  * @param {import("../service").AgentService} service
- * @param {{ secret: string, mcpHandler: (req: { headers: Record<string,string>, body: string }) => Promise<{status:number, body:string}> }} opts
+ * @param {{ secret: string, mcpHandler: (req: { headers: Record<string,string>, body: string }) => Promise<{status:number, body:string}>,
+ *           resolveService?: (tenant: string) => Promise<{service: any, mcpHandler: any, release: () => void}>,
+ *           resolveMcpService?: (tenant: string) => Promise<{service: any, mcpHandler: any, release: () => void}> }} opts
  */
 export function createAgentd(service, opts) {
   const table = routes();
@@ -210,11 +268,23 @@ export function createAgentd(service, opts) {
     const headers = {};
     for (const [k, v] of Object.entries(req.headers)) headers[k] = Array.isArray(v) ? v.join(',') : v ?? '';
 
-    if (url.pathname === '/mcp') {
-      const body = await readBody(req);
-      const out = await opts.mcpHandler({ headers, body });
-      res.writeHead(out.status, { 'content-type': 'application/json' });
-      res.end(out.body);
+    if (url.pathname === '/mcp' || url.pathname.startsWith('/mcp/')) {
+      try {
+        const tenant = tenantId(url.pathname === '/mcp' ? null : url.pathname.slice('/mcp/'.length));
+        if (tenant && !opts.resolveMcpService) { json(res, 404, { error: 'unknown tenant' }); return; }
+        const lease = tenant ? await opts.resolveMcpService?.(tenant) : null;
+        try {
+          const body = await readBody(req);
+          const handler = lease?.mcpHandler ?? opts.mcpHandler;
+          const out = await handler({ headers, body });
+          res.writeHead(out.status, { 'content-type': 'application/json' });
+          res.end(out.body);
+        } finally {
+          lease?.release();
+        }
+      } catch (error) {
+        json(res, httpErrorStatus(error), { error: errorMessage(error) });
+      }
       return;
     }
 
@@ -223,16 +293,26 @@ export function createAgentd(service, opts) {
     const row = table.find((r) => r.method === req.method && r.path === url.pathname);
     if (!row) { json(res, 404, { error: 'not found' }); return; }
 
-    const bodyText = await readBody(req);
-    const bodyArgs = bodyText ? tryParse(bodyText) ?? {} : {};
-    const args = { ...query, ...bodyArgs };
-    const controller = new AbortController();
-    req.on('close', () => controller.abort());
+    let lease = null;
     try {
-      const result = await row.call(service, args, { signal: controller.signal });
+      const tenant = tenantId(req.headers['x-veritas-tenant']);
+      if (tenant && !opts.resolveService) { json(res, 400, { error: 'invalid tenant route' }); return; }
+      if (tenant && (TENANT_BACKGROUND.test(url.pathname) || url.pathname.startsWith('/mcp-servers') || ADOPTIONS.has(url.pathname))) {
+        json(res, 403, { error: 'this operation is administrator-only' }); return;
+      }
+      const bodyText = await readBody(req);
+      const bodyArgs = bodyText ? tryParse(bodyText) ?? {} : {};
+      const args = { ...query, ...bodyArgs };
+      if (tenant) validateTenantArgs(url.pathname, req.method, args);
+      lease = tenant ? await opts.resolveService?.(tenant) : null;
+      const controller = new AbortController();
+      req.on('close', () => controller.abort());
+      const result = await row.call(lease?.service ?? service, args, { signal: controller.signal });
       json(res, 200, result === undefined ? null : result);
     } catch (error) {
-      json(res, 500, { error: errorMessage(error) });
+      json(res, httpErrorStatus(error), { error: errorMessage(error) });
+    } finally {
+      lease?.release();
     }
   });
 
@@ -286,15 +366,25 @@ async function main() {
   const skills = createHttpSkillSource(platform.fetch, { baseUrl: kbBaseUrl });
   const service = await createLocalRuntime({ platform, library, notes, skills, dataDir, notesDir, providers, gateway });
 
-  const agentd = createAgentd(service, { secret, mcpHandler: createMcpHttpHandler(gateway) });
-  gatewaySettings.mcpUrl = `http://127.0.0.1:${await agentd.listen(requestedPort)}/mcp`;
+  const tenantOptions = {
+    platform, tenantRoot: `${dataDir}/../users`, kbBaseUrl, agentSecret: secret, port: 0,
+  };
+  const tenants = createTenantPool(tenantOptions);
+  const agentd = createAgentd(service, {
+    secret, mcpHandler: createMcpHttpHandler(gateway),
+    resolveService: (tenant) => tenants.acquire(tenant),
+    resolveMcpService: (tenant) => tenants.acquireExisting(tenant),
+  });
+  const boundPort = await agentd.listen(requestedPort);
+  tenantOptions.port = boundPort;
+  gatewaySettings.mcpUrl = `http://127.0.0.1:${boundPort}/mcp`;
   const port = new URL(gatewaySettings.mcpUrl).port;
 
   const status = { port: Number(port), pid: process.pid };
   console.log(JSON.stringify(status)); // supervise() reads this as its first stdout line
   await platform.fs.writeAtomic(`${dataDir}/agentd.json`, JSON.stringify(status, null, 2));
 
-  const stop = async () => { await agentd.close(); await service.dispose(); process.exit(0); };
+  const stop = async () => { await agentd.close(); await tenants.dispose(); await service.dispose(); process.exit(0); };
   process.on('SIGTERM', stop);
   process.on('SIGINT', stop);
   // A server killed with -9 (or by macOS when memory runs out) can't stop its sidecar, and the orphan would keep

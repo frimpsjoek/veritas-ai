@@ -63,6 +63,12 @@ Requests accept text parts and return Markdown in an A2A `Message`. Invalid requ
 
 To revoke and rotate the A2A credential, stop Veritas, delete `data/a2a-token` (or `$VERITAS_DATA/a2a-token`), and start Veritas again. Give the newly generated credential only to the remote agent hub. The card and error responses never contain the credential.
 
+## Independent Globus sign-in
+
+Optional `data/globus-auth.json` enables an independent Globus login using the registered Veritas HTTPS callback and the ALCF Inference scope/policy. `GET /auth/globus/status` exposes only whether this is configured; `/login` starts a PKCE/state/nonce flow, `/callback` verifies it and issues a `vg_session` cookie, `/me` returns a safe principal, and `/logout` revokes that application session. The existing administrator access-code cookie and A2A credential are unrelated.
+
+Interactive `/agent/*` calls with a Globus cookie resolve a tenant-scoped runtime with its own data and MCP handler; spoofed tenant headers are ignored. Background reviews/routines and shared administrator writes stay outside that boundary. `GET /auth/globus/agent-token` is not browser-authenticated: it requires the current sidecar secret and a trusted tenant, returns only a freshly refreshed user credential with `no-store`, and sends that credential only into the matching Node provider runtime. See `docs/guide/globus-alcf.md` for detailed configuration, storage, discovery, runtime limits and failure behavior.
+
 ## Using it
 
 The MCP server (`server.py`) provides (all tools accept `zotero/KEY` or `@citekey` for papers) `search_notes`, `read_note`, `note_links`, `related_notes`, `recent_notes` and `index_status`. It is registered in:
