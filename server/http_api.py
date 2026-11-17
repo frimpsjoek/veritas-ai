@@ -682,6 +682,19 @@ class Handler(BaseHTTPRequestHandler):
             if restricted:
                 guard(key if ":/" in key else zotero.PREFIX + key.removeprefix(zotero.PREFIX))
 
+        def guard_attachment(key: str) -> None:
+            parent = zotero.attachment_parent(key)
+            library = zotero.root().resolve()
+            prefix = ""
+            if library != zotero.ZOTERO.resolve():
+                selected = next((lib for lib in kb.LAYOUT.libraries if lib.path.resolve() == library), None)
+                if selected is None:
+                    raise PermissionError("cannot verify PDF ownership")
+                prefix = selected.prefix
+            guard(prefix + zotero.PREFIX + parent)
+
+        attachment_guard = guard_attachment if restricted else None
+
         def handle() -> None:
             if agent and route not in AGENT_ROUTES:
                 raise PermissionError("not available to agents")
@@ -788,9 +801,10 @@ class Handler(BaseHTTPRequestHandler):
                 if result is None:
                     raise FileNotFoundError(f"no Zotero item {key!r}")
             elif route == "/zotero/pdf":
-                guard_zotero(q.get("key", ""))
                 lib = kb.zotero_ref(q["library"] + ":/")[0] if q.get("library") else zotero.ZOTERO
                 with zotero.library(lib):
+                    if attachment_guard:
+                        attachment_guard(q.get("key", ""))
                     return pdf_route.serve(self, q.get("key", ""))
             elif route == "/site-icon":
                 try:
@@ -813,16 +827,18 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(data)
                 return
             elif route == "/web/page":
-                result = web_page.page(q.get("url", ""), q.get("prefer"))
+                result = web_page.page(q.get("url", ""), q.get("prefer"), guard_attachment=attachment_guard)
             elif route == "/web/pdf":
                 try:
-                    found = web_page.pdf_file(q.get("url", ""))
+                    found = web_page.pdf_file(q.get("url", ""), guard_attachment=attachment_guard)
                 except web_page.Refused as error:
                     return self._send(400, {"error": str(error)})
                 except pdf_route.Refused as refusal:
                     return self._send(refusal.status, {"error": refusal.message})
                 except ValueError as error:
                     return self._send(415, {"error": str(error)})
+                except (PermissionError, FileNotFoundError):
+                    raise
                 except OSError:
                     return self._send(502, {"error": "Second Brain couldn't reach the site."})
                 return pdf_route.stream(self, found, "application/pdf")
@@ -840,6 +856,9 @@ class Handler(BaseHTTPRequestHandler):
                 result = pending_adds.pending()
             elif route == "/zotero/status":
                 result = zotero_status()
+                if restricted:
+                    result = {**result, "items": {key: state for key, state in result["items"].items()
+                                                if zotero.PREFIX + key not in hidden}}
             elif route == "/zotero/collections":
                 result = kb.zotero_collections()
             elif route == "/zotero/items":
@@ -857,10 +876,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_file(found)
             elif route == "/paper-note/body":
                 guard_zotero(q["key"])
-                result = paper_notes.body(q["key"].removeprefix(zotero.PREFIX))
+                result = paper_notes.body(q["key"].removeprefix(zotero.PREFIX), guard=guard if restricted else None)
             elif route == "/paper-note":
                 guard_zotero(q["key"])
-                result = paper_notes.summary(q["key"].removeprefix(zotero.PREFIX))
+                result = paper_notes.summary(q["key"].removeprefix(zotero.PREFIX), guard=guard if restricted else None)
             elif route == "/plugins/zotero/latest":
                 result = plugin_updates.latest_zotero(ZOTERO_DIST, OBSIDIAN_DIST)
                 if result is None:

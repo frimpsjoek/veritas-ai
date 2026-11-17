@@ -84,7 +84,7 @@ def _vault() -> Path:
     return kb.VAULT
 
 
-def find(key: str, thorough: bool = False) -> str | None:
+def find(key: str, thorough: bool = False, *, guard=None) -> str | None:
     """Vault-relative path of the paper's note, or None. Looks in Papers/ first, then the index; thorough also
     reads the front matter of every note in the vault (used before making a note, so a note the user moved out
     of Papers/ since the last index run isn't duplicated)."""
@@ -93,6 +93,9 @@ def find(key: str, thorough: bool = False) -> str | None:
     if folder.is_dir():
         for path in folder.rglob("*.md"):
             try:
+                # The scan reads content too; skip inaccessible candidates before inspecting frontmatter.
+                if guard:
+                    guard(str(path.relative_to(_vault())))
                 head = path.read_text(encoding="utf-8", errors="replace")[:2000]
             except OSError:
                 continue
@@ -589,11 +592,13 @@ def _hash(text: str) -> str:
     return hashlib.sha1(text.strip().encode()).hexdigest()[:16]
 
 
-def summary(key: str) -> dict:
+def summary(key: str, *, guard=None) -> dict:
     """For Zotero's item pane: whether the paper has a note, and what the "My notes" part says."""
-    rel = find(key)
+    rel = find(key, guard=guard)
     if not rel:
         return {"path": None}
+    if guard:
+        guard(rel)
     mine = _section(_read(_vault() / rel))[0].strip()
     return {"path": rel, "title": Path(rel).stem, "my_notes": mine[:1500], "words": len(mine.split())}
 
@@ -617,11 +622,13 @@ def references(text: str, own: tuple[str, ...] = ()) -> list[dict]:
     return out
 
 
-def body(key: str) -> dict:
+def body(key: str, *, guard=None) -> dict:
     """The whole "My notes" section, for the editor in Zotero, with the hash a save must quote."""
-    rel = find(key)
+    rel = find(key, guard=guard)
     if not rel:
         return {"path": None, "text": "", "hash": _hash(""), "references": []}
+    if guard:
+        guard(rel)
     mine = _section(_read(_vault() / rel))[0]
     return {"path": rel, "text": mine, "hash": _hash(mine), "references": references(mine, (key,))}
 

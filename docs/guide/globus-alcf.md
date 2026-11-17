@@ -147,6 +147,13 @@ read/search size caps as agent requests. They cannot mutate sources/index, write
 links, select another tenant with a request header or inherit provider settings from the legacy runtime.
 Administrator/Bearer and loopback requests keep the existing global runtime and independent access-code session.
 
+Local Zotero PDFs are authorized against their indexed parent in the selected library, not the attachment key.
+This also applies to local copies reached through DOI links in the web page/PDF panel. Unknown, unindexed or
+unreadable ownership fails closed for restricted callers, even when no items are marked private. Named aliases
+of the default library use its unprefixed index paths. Paper-note reads additionally check the resolved vault note
+before reading its content. Zotero status responses omit private item keys without changing the shared status cache;
+administrator reads and PDF Range support retain their existing behavior. Collection metadata policy is unchanged.
+
 ## Checks
 
 After authorized deployment, test both successful Globus sign-in and cancellation in a browser. Confirm that only
