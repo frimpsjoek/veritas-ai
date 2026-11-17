@@ -523,7 +523,7 @@ export async function createLocalRuntime(deps) {
     const summary = view.results.find((r) => r.ref.id === ref.id);
     if (!summary) return null;
     const version = ref.version ?? summary.ref.version;
-    if (!version || version > summary.ref.version) return null;
+    if (!Number.isSafeInteger(version) || version < 1 || version > summary.ref.version) return null;
     return store.readResult(id, ref.id, version);
   }
 

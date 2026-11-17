@@ -192,6 +192,28 @@ test('the route table dispatches GET /conversations to conversations.list, with 
   });
 });
 
+test('GET /sessions/read treats invalid versions as missing instead of surfacing storage errors', async () => {
+  const service = await makeService([]);
+  const id = await service.conversations.create('chat');
+  await service.sessions.put(id, { kind: 'find', query: 'widgets' }, {
+    ref: { id: '', version: 0 }, kind: 'papers', title: 'Widgets', rows: [], columns: [],
+  });
+  await withServer(service, async (base) => {
+    for (const version of [-1, 0.5, 1.5]) {
+      const res = await fetch(`${base}/sessions/read?id=${id}&result=R1&version=${version}`, {
+        headers: { authorization: 'Bearer s3cret' },
+      });
+      assert.equal(res.status, 200, `invalid V${version} is not a server error`);
+      assert.equal(await res.json(), null);
+    }
+    const valid = await fetch(`${base}/sessions/read?id=${id}&result=R1&version=1`, {
+      headers: { authorization: 'Bearer s3cret' },
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).ref.version, 1);
+  });
+});
+
 test('an unknown route is a 404, not a crash', async () => {
   const service = await makeService([]);
   await withServer(service, async (base) => {
