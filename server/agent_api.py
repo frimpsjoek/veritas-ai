@@ -175,7 +175,9 @@ def ask(sidecar: Sidecar | None, question: str) -> list[dict]:
             "Authorization": f"Bearer {sidecar.secret}", "Content-Type": "application/json",
         })
         response = conn.getresponse()
-        data = response.read()
+        data = response.read(MAX_AGENT_RESPONSE_BYTES + 1)
+        if len(data) > MAX_AGENT_RESPONSE_BYTES:
+            raise SidecarError("the agent sidecar response is too large")
         if response.status != 200:
             raise SidecarError(f"the agent sidecar returned HTTP {response.status}")
         events = json.loads(data)
@@ -211,8 +213,18 @@ def forward(handler, sidecar: Sidecar | None, method: str, path: str, tenant: st
         handler._send(503, {"error": "the agent sidecar is (re)starting", "help": "try again in a few seconds"})
         return
 
-    length = int(handler.headers.get("Content-Length") or 0)
+    raw_length = handler.headers.get("Content-Length")
+    try:
+        length = (int(raw_length) if raw_length is not None and raw_length.isascii() and raw_length.isdigit()
+                  else 0 if raw_length is None else -1)
+    except ValueError:  # absurd digit strings can exceed CPython's integer conversion limit
+        length = -1
+    if length < 0:
+        handler.close_connection = True  # the invalid body was deliberately not consumed
+        handler._send(400, {"error": "invalid agent request Content-Length"})
+        return
     if length > MAX_AGENT_BODY_BYTES:
+        handler.close_connection = True  # the oversized body was deliberately not consumed
         handler._send(413, {"error": "agent request is too large"})
         return
     body = handler.rfile.read(length) if length else b""

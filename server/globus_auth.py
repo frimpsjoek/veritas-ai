@@ -106,6 +106,11 @@ def _expiry(resource: dict) -> float | None:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) else None
 
 
+def _has_inference_scope(resource: dict) -> bool:
+    scope = resource.get("scope")
+    return isinstance(scope, str) and INFERENCE_SCOPE in scope.split()
+
+
 class GlobusAuth:
     def __init__(self, config: Config, store: UserStore, client_factory=_default_client, now=time.time):
         self.config = config
@@ -211,7 +216,9 @@ class GlobusAuth:
         access = resource.get("access_token")
         refresh = resource.get("refresh_token")
         expires = _expiry(resource)
-        if not all(isinstance(value, str) and value for value in (access, refresh)) or expires is None or expires <= float(self.now()):
+        if (not _has_inference_scope(resource)
+                or not all(isinstance(value, str) and value for value in (access, refresh))
+                or expires is None or expires <= float(self.now())):
             raise AuthError(403, "ALCF Inference authorization is required")
         tenant = self.store.tenant_id(subject)
         # A refresh already in flight finishes before the fresh login replaces
@@ -298,7 +305,8 @@ class GlobusAuth:
             access = resource.get("access_token")
             refresh = resource.get("refresh_token") or token["refresh_token"]
             expires = _expiry(resource)
-            if (not isinstance(access, str) or not access or not isinstance(refresh, str) or not refresh
+            if (not _has_inference_scope(resource)
+                    or not isinstance(access, str) or not access or not isinstance(refresh, str) or not refresh
                     or expires is None or expires <= float(self.now())):
                 raise AuthError(502, "ALCF Inference refresh returned invalid credentials")
             fresh = {

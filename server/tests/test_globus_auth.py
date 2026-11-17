@@ -128,6 +128,7 @@ class AuthFixture:
                 "access_token": "inference-access",
                 "refresh_token": "inference-refresh",
                 "expires_at_seconds": NOW + 3600,
+                "scope": globus_auth.INFERENCE_SCOPE,
             },
         }
         self.userinfo = profile()
@@ -391,7 +392,7 @@ def test_callback_rejects_invalid_id_claims(store: UserStore, change):
     assert not (store.root / store.tenant_id("subject-A") / "globus-tokens.json").exists()
 
 
-@pytest.mark.parametrize("problem", ["subject", "openid", "inference", "refresh"])
+@pytest.mark.parametrize("problem", ["subject", "openid", "inference", "refresh", "scope"])
 def test_callback_requires_matching_userinfo_and_inference_credentials(store: UserStore, problem):
     fixture = AuthFixture()
     auth = manager(store, fixture)
@@ -402,8 +403,10 @@ def test_callback_requires_matching_userinfo_and_inference_credentials(store: Us
         fixture.tokens.pop("auth.globus.org")
     elif problem == "inference":
         fixture.tokens.pop(globus_auth.INFERENCE_RS)
-    else:
+    elif problem == "refresh":
         fixture.tokens[globus_auth.INFERENCE_RS].pop("refresh_token")
+    else:
+        fixture.tokens[globus_auth.INFERENCE_RS]["scope"] = f"https://auth.globus.org/scopes/{globus_auth.INFERENCE_RS}/view"
     with pytest.raises(globus_auth.AuthError):
         complete(auth, binding, query["state"][0])
     assert not store.sessions_file.exists()
@@ -454,6 +457,7 @@ def prepare_refresh(store: UserStore, fixture: AuthFixture, tenant: str, **chang
             "access_token": "new-access",
             "refresh_token": "rotated-refresh",
             "expires_at_seconds": NOW + 3600,
+            "scope": globus_auth.INFERENCE_SCOPE,
         },
     }
     return auth, token
@@ -517,6 +521,17 @@ def test_refresh_rejects_wrong_resource_and_client_rotation(store: UserStore):
     assert error.value.status == 401
     assert len(fixture.refresh_calls) == calls
     assert auth.inference_status(tenant) == {"connected": False, "needs_reauth": True, "expires_at": None}
+
+
+def test_refresh_rejects_narrower_scope_without_replacing_credentials(store: UserStore):
+    fixture = AuthFixture()
+    tenant = store.tenant_id("subject-A")
+    auth, previous = prepare_refresh(store, fixture, tenant)
+    fixture.tokens[globus_auth.INFERENCE_RS]["scope"] = f"https://auth.globus.org/scopes/{globus_auth.INFERENCE_RS}/view"
+    with pytest.raises(globus_auth.AuthError) as error:
+        auth.inference_access_token(tenant)
+    assert error.value.status == 502
+    assert store.inference(tenant) == previous
 
 
 def test_concurrent_refresh_runs_once_per_tenant(store: UserStore):

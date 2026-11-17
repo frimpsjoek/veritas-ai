@@ -25,6 +25,7 @@ class FakeHandler:
         self.rfile = io.BytesIO(body)
         self.sent = None       # (status, body) from _send
         self.response = None   # (status, headers dict, body bytes) from the raw send_response path
+        self.close_connection = False
 
     def _send(self, status, body):
         self.sent = (status, body)
@@ -140,6 +141,29 @@ def test_forward_rejects_an_oversized_sidecar_response_without_forwarding_it(mon
     assert handler.response is None, "no prefix of an oversized private response reaches the browser"
     assert reads == [9], "read only cap+1 rather than buffering the entire sidecar stream"
     assert closed == [True]
+
+
+@pytest.mark.parametrize("raw_length", ["-1", "nope", "1.0", "１２", "9" * 5000])
+def test_forward_rejects_invalid_content_lengths_without_reading(raw_length):
+    handler = FakeHandler(b"unread-private-body")
+    handler.headers["Content-Length"] = raw_length
+    sidecar = agent_api.Sidecar(node=Path("node"), secret="s", port=1234)
+    agent_api.forward(handler, sidecar, "POST", "/chat")
+    assert handler.sent == (400, {"error": "invalid agent request Content-Length"})
+    assert handler.rfile.tell() == 0
+    assert handler.close_connection is True
+    assert handler.response is None
+
+
+def test_forward_rejects_oversized_content_length_without_reading(monkeypatch):
+    monkeypatch.setattr(agent_api, "MAX_AGENT_BODY_BYTES", 8)
+    handler = FakeHandler(b"123456789")
+    sidecar = agent_api.Sidecar(node=Path("node"), secret="s", port=1234)
+    agent_api.forward(handler, sidecar, "POST", "/chat")
+    assert handler.sent == (413, {"error": "agent request is too large"})
+    assert handler.rfile.tell() == 0
+    assert handler.close_connection is True
+    assert handler.response is None
 
 
 # ---------- /ai-note ----------
@@ -262,7 +286,39 @@ def test_ask_sends_question_to_the_sidecar():
         server.server_close()
 
 
+def test_ask_rejects_oversized_sidecar_response_before_json_parsing(monkeypatch):
+    monkeypatch.setattr(agent_api, "MAX_AGENT_RESPONSE_BYTES", 8)
+    reads, closed = [], []
+
+    class Response:
+        status = 200
+
+        def read(self, amount=-1):
+            reads.append(amount)
+            return b"private-unbounded-response"[:9 if amount < 0 else amount]
+
+    class Connection:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def request(self, *_args, **_kwargs):
+            pass
+
+        def getresponse(self):
+            return Response()
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(agent_api.http.client, "HTTPConnection", Connection)
+    sidecar = agent_api.Sidecar(node=Path("node"), secret="s", port=1234)
+    with pytest.raises(agent_api.SidecarError, match="^the agent sidecar response is too large$"):
+        agent_api.ask(sidecar, "ping")
+    assert reads == [9]
+    assert closed == [True]
+
+
 def test_ask_when_the_sidecar_is_unreachable_is_a_sidecar_error():
-    sidecar = agent_api.Sidecar(node=Path("/usr/bin/node"), secret="s", port=1)
+    sidecar = agent_api.Sidecar(node=Path("node"), secret="s", port=1)
     with pytest.raises(agent_api.SidecarError):
         agent_api.ask(sidecar, "ping")
