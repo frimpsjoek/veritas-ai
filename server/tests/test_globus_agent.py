@@ -535,6 +535,38 @@ def test_paper_note_scan_skips_private_candidate_before_public_match(library_ser
     assert "Private sentinel" not in json.dumps(result)
 
 
+@pytest.mark.parametrize("prefix", ["", "lab:/"])
+def test_paper_note_reference_enrichment_hides_private_papers(library_server, prefix):
+    port, root, _, _ = library_server
+    papers = root / "vault" / "Papers"
+    papers.mkdir()
+    authored = "Keep these citations: [@secretref; @publicref; @missingref; @PUBLIC01]."
+    (papers / "public.md").write_text(f"---\nzotero-key: PUBLIC01\n---\n## My notes\n{authored}\n")
+    db = http_api.kb.connect()
+    db.execute("INSERT INTO notes(path,source,tags) VALUES ('Papers/public.md','personal','')")
+    db.execute("UPDATE notes SET title=?, meta=? WHERE path=?", (
+        "Private citation title", json.dumps({"citekey": "secretref", "authors": ["Private Author"],
+                                             "year": "1999", "venue": "Private venue"}),
+        prefix + "zotero/PARENT01"))
+    db.execute("INSERT INTO notes(path,source,tags,title,meta) VALUES (?,'zotero','',?,?)", (
+        prefix + "zotero/CITPUB01", "Public citation title",
+        json.dumps({"citekey": "publicref", "authors": ["Public Writer"], "year": "2025", "venue": "Public venue"})))
+    db.commit()
+    db.close()
+
+    public_ref = {"citekey": "publicref", "key": prefix + "zotero/CITPUB01" if prefix else "CITPUB01",
+                  "title": "Public citation title", "label": "Writer 2025", "venue": "Public venue"}
+    unknown_ref = {"citekey": "missingref", "key": None}
+    private_ref = {"citekey": "secretref", "key": prefix + "zotero/PARENT01" if prefix else "PARENT01",
+                   "title": "Private citation title", "label": "Author 1999", "venue": "Private venue"}
+    for admin in (False, True):
+        auth = {"Authorization": "Bearer admin-token"} if admin else cookie(SESSION_A)
+        status, _, result = json_call(port, "GET", "/paper-note/body?key=PUBLIC01", auth)
+        assert status == 200 and result["text"] == authored
+        assert result["hash"] == http_api.paper_notes._hash(authored)
+        assert result["references"] == ([private_ref, public_ref, unknown_ref] if admin else [public_ref, unknown_ref])
+
+
 def test_web_state_is_private_per_tenant(tenant_server):
     port, _, _, _ = tenant_server
     assert call(port, "POST", "/web/state", cookie(SESSION_A), {"files": {"private.txt": "A"}})[0] == 200

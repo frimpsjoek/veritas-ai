@@ -603,7 +603,7 @@ def summary(key: str, *, guard=None) -> dict:
     return {"path": rel, "title": Path(rel).stem, "my_notes": mine[:1500], "words": len(mine.split())}
 
 
-def references(text: str, own: tuple[str, ...] = ()) -> list[dict]:
+def references(text: str, own: tuple[str, ...] = (), *, guard=None) -> list[dict]:
     """The papers text cites, for the editor's References list."""
     keys = [k for k in cited(text) if k not in own]
     known = lookup(keys)
@@ -613,6 +613,12 @@ def references(text: str, own: tuple[str, ...] = ()) -> list[dict]:
         if not entry:
             out.append({"citekey": k, "key": None})
             continue
+        if guard:
+            path = entry["key"] if ":/" in entry["key"] else zotero.PREFIX + entry["key"]
+            try:
+                guard(path)
+            except (PermissionError, FileNotFoundError):
+                continue
         authors = entry["meta"].get("authors", [])
         who = authors[0].split(" ")[-1] + (" et al." if len(authors) > 2 else f" & {authors[1].split(' ')[-1]}"
                                              if len(authors) == 2 else "") if authors else ""
@@ -630,7 +636,7 @@ def body(key: str, *, guard=None) -> dict:
     if guard:
         guard(rel)
     mine = _section(_read(_vault() / rel))[0]
-    return {"path": rel, "text": mine, "hash": _hash(mine), "references": references(mine, (key,))}
+    return {"path": rel, "text": mine, "hash": _hash(mine), "references": references(mine, (key,), guard=guard)}
 
 
 class Conflict(Exception):
