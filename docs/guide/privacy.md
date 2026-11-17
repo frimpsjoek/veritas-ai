@@ -22,4 +22,12 @@ available on a configured public reverse proxy. Its per-user chats, model choice
 directories, separate from the legacy administrator runtime and other Globus users. Ordinary library sources/admin
 settings remain an administrator trust domain rather than writable tenant data.
 
+**Optional Zotero WebDAV attachments:** metadata continues to use Zotero's own service. If the operator enables hosted
+file sync, desktop Zotero sends personal-library attachment ZIP/property files directly to Veritas over HTTPS using a
+separate random username/password for each verified Globus tenant. Veritas stores only a PBKDF2 verifier, not the
+password. Attachment blobs and tenant storage directories are outside the public web app, not cross-tenant readable,
+and not exposed to agents as library passages by this feature. This is authoritative user data, not a disposable
+search-index cache; rotating/revoking a credential affects new authentications and does not delete stored attachments.
+See [Globus and ALCF](globus-alcf.md) for configuration, quotas and the required real-client rollout checks.
+
 See [Globus and ALCF](globus-alcf.md) for the callback, cookie and sidecar credential boundaries.
