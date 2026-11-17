@@ -108,8 +108,12 @@ The fixed ALCF chat destinations are under `https://inference-api.alcf.anl.gov/r
 Successful discovery responses are runtime-local and cached for at most 60 seconds. Discovery uses the user's token and
 never falls back to stale data after authorization rejection. Chat, status, model and repair calls fetch refreshed user
 credentials through a sidecar-secret-only Python broker, without putting them in the Node environment, shared files,
-prompt-prefix caches or settings. Upstream 401 causes one forced refresh and retry; simultaneous forced requests in this
+prompt-prefix caches or settings. Upstream 401/403 causes one forced refresh and retry; simultaneous forced requests in this
 tenant share that operation.
+
+ALCF completion streams have a 64 MiB total/per-line byte limit. Line framing processes incoming bytes incrementally;
+oversized streams are cancelled with a fixed error instead of exposing upstream content. Early stream termination
+also closes the reader.
 
 The access-code/Bearer and A2A credentials remain independent, and each successful login method clears its previous
 browser cookie to make account switches explicit. A Globus cookie is not an A2A credential, an administrator API token,
@@ -129,9 +133,12 @@ address checks are administrator-only, so tenant input cannot turn the shared ho
 
 Background literature reviews and routines are administrator-only in this slice; tenant `/agent/reviews*` and
 `/agent/routines*` requests return 403, and tenant schedulers do not own timer work. Up to 16 interactive runtimes are
-loaded at once. Idle runtimes are disposed after 30 minutes when no request is in flight, or as idle least-recently-used
-capacity is needed; disposal rechecks activity before deleting every candidate. Their persisted state remains on disk
-and can be opened again.
+loaded at once, counting construction and disposal toward the cap. Pending acquisitions, active requests and detached
+interactive columns steps (including final persistence) prevent eviction. Idle runtimes are disposed after 30 minutes
+or as idle least-recently-used capacity is needed; disposal rechecks activity before deleting every candidate. Their
+persisted state remains on disk and can be opened again. A failed disposal retains its slot until sidecar restart,
+because partially disposed resources must not be reused. At capacity with no idle runtime, new tenants receive 503
+and can retry after active work finishes.
 
 ## Authorization boundary
 

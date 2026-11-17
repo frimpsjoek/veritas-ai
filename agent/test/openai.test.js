@@ -43,6 +43,23 @@ function unterminatedBody(text, onCancel) {
   }) };
 }
 
+function trackedBody(chunks, { cancelError, readError } = {}) {
+  const iterator = chunks[Symbol.iterator]();
+  const counts = { reads: 0, cancellations: 0, releases: 0 };
+  return { counts, getReader: () => ({
+    async read() {
+      counts.reads += 1;
+      if (readError) throw readError;
+      return iterator.next();
+    },
+    async cancel() {
+      counts.cancellations += 1;
+      if (cancelError) throw cancelError;
+    },
+    releaseLock() { counts.releases += 1; },
+  }) };
+}
+
 // ---------- pure helpers ----------
 
 test('toOpenAiTools maps ToolSession.specs to function tool defs', () => {
@@ -77,7 +94,167 @@ test('parseSse yields parsed JSON chunks and stops at [DONE]', async () => {
   assert.deepEqual(chunks, [{ a: 1 }, { a: 2 }]);
 });
 
+test('parseSse frames a long chunked line without re-encoding or decoding unfinished prefixes', async (t) => {
+  const text = 'x'.repeat(256 * 1024);
+  const bytes = new TextEncoder().encode(`data: ${JSON.stringify({ text })}\n`);
+  function* chunks() {
+    for (let offset = 0; offset < bytes.length; offset += 31) yield bytes.subarray(offset, offset + 31);
+  }
+  const body = trackedBody(chunks());
+  const encode = t.mock.method(TextEncoder.prototype, 'encode');
+  const decode = t.mock.method(TextDecoder.prototype, 'decode');
+  assert.deepEqual(await collect(parseSse(body, { maxBytes: bytes.length, maxLineBytes: bytes.length - 1 })), [{ text }]);
+  assert.equal(encode.mock.callCount(), 0, 'raw-byte framing must not re-encode accumulated text');
+  assert.equal(decode.mock.callCount(), 1, 'decode only the complete line');
+  assert.deepEqual(body.counts, { reads: Math.ceil(bytes.length / 31) + 1, cancellations: 0, releases: 1 });
+});
+
+test('parseSse preserves UTF-8, CRLF, multiple lines, ignored fields and the unterminated-tail behavior', async () => {
+  const expected = { text: '\u00e9\u4e2d\ud83d\ude00' };
+  const first = `data: ${JSON.stringify(expected)}\r\n`;
+  const bytes = new TextEncoder().encode(`${first}\n: comment\nevent: message\ndata: invalid\ndata: {"n":2}\ndata: {"ignored":true}`);
+  // Every possible split includes splits inside multibyte characters and CRLF.
+  for (let split = 0; split <= bytes.length; split += 1) {
+    const body = trackedBody([bytes.subarray(0, split), bytes.subarray(split)]);
+    assert.deepEqual(await collect(parseSse(body, { maxBytes: bytes.length, maxLineBytes: new TextEncoder().encode(first).length - 1 })), [expected, { n: 2 }]);
+    assert.deepEqual(body.counts, { reads: 3, cancellations: 0, releases: 1 });
+  }
+});
+
+test('parseSse cancels chunked line overflow before decoding or reading further', async (t) => {
+  const block = new Uint8Array(1024).fill(120);
+  const body = trackedBody(Array(66).fill(block));
+  const decode = t.mock.method(TextDecoder.prototype, 'decode');
+  await assert.rejects(collect(parseSse(body, { maxBytes: 128 * 1024, maxLineBytes: 64 * 1024 })), {
+    message: 'ALCF completion stream limit exceeded', status: 413,
+  });
+  assert.equal(decode.mock.callCount(), 0);
+  assert.deepEqual(body.counts, { reads: 65, cancellations: 1, releases: 1 });
+});
+
+test('parseSse enforces raw-byte line limits, including partial UTF-8 and complete lines', async () => {
+  for (const chunks of [
+    [new Uint8Array([0xf0, 0x9f]), new Uint8Array([0x98])],
+    [new TextEncoder().encode('abc\n')],
+  ]) {
+    const body = trackedBody(chunks, { cancelError: new Error('private cancellation failure') });
+    await assert.rejects(collect(parseSse(body, { maxBytes: 100, maxLineBytes: 2 })), {
+      message: 'ALCF completion stream limit exceeded', status: 413,
+    });
+    assert.equal(body.counts.cancellations, 1);
+    assert.equal(body.counts.releases, 1);
+  }
+});
+
+test('parseSse checks the total cap before decoding even a chunk containing complete lines', async (t) => {
+  const line = new TextEncoder().encode('data: {"n":1}\n');
+  const body = trackedBody([line, line, line]);
+  const decode = t.mock.method(TextDecoder.prototype, 'decode');
+  const stream = parseSse(body, { maxBytes: line.length * 2 - 1, maxLineBytes: line.length - 1 });
+  assert.deepEqual((await stream.next()).value, { n: 1 });
+  await assert.rejects(stream.next(), { status: 413 });
+  assert.equal(decode.mock.callCount(), 1);
+  assert.deepEqual(body.counts, { reads: 2, cancellations: 1, releases: 1 });
+});
+
+test('parseSse stops at DONE without decoding trailing lines and cancels once', async (t) => {
+  const bytes = new TextEncoder().encode('data: {"n":1}\ndata: [DONE]\ndata: {"n":2}\n');
+  const body = trackedBody([bytes, bytes]);
+  const decode = t.mock.method(TextDecoder.prototype, 'decode');
+  assert.deepEqual(await collect(parseSse(body)), [{ n: 1 }]);
+  assert.equal(decode.mock.callCount(), 2);
+  assert.deepEqual(body.counts, { reads: 1, cancellations: 1, releases: 1 });
+});
+
+test('parseSse cancels once on consumer return or break, even if cancellation rejects', async () => {
+  for (const explicitReturn of [true, false]) {
+    const body = trackedBody([new TextEncoder().encode('data: {"n":1}\ndata: {"n":2}\n')], {
+      cancelError: new Error('private cancellation failure'),
+    });
+    const stream = parseSse(body);
+    if (explicitReturn) {
+      assert.deepEqual((await stream.next()).value, { n: 1 });
+      await stream.return();
+      await stream.return();
+    } else {
+      for await (const chunk of stream) { assert.deepEqual(chunk, { n: 1 }); break; }
+    }
+    assert.deepEqual(body.counts, { reads: 1, cancellations: 1, releases: 1 });
+  }
+});
+
+test('parseSse preserves read failures and releases its reader after attempted cancellation', async () => {
+  const error = new Error('read failed');
+  const body = trackedBody([], { readError: error, cancelError: new Error('cancel failed') });
+  await assert.rejects(collect(parseSse(body)), (actual) => actual === error);
+  assert.deepEqual(body.counts, { reads: 1, cancellations: 1, releases: 1 });
+});
+
+test('parseSse owns unfinished fragments rather than retaining input buffer views', async () => {
+  const buffer = new Uint8Array(1024 * 1024);
+  const first = new TextEncoder().encode('data: {"text":"');
+  buffer.set(first);
+  function* chunks() {
+    yield buffer.subarray(0, first.length);
+    buffer.fill(120);
+    yield new TextEncoder().encode('ok"}\n');
+  }
+  assert.deepEqual(await collect(parseSse(trackedBody(chunks()))), [{ text: 'ok' }]);
+});
+
 // ---------- full turn loop ----------
+
+test('turn releases and cancels a real response stream once on abort or consumer return', async () => {
+  for (const abort of [true, false]) {
+    let cancellations = 0;
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"hi"}}]}\n'));
+      },
+      cancel() { cancellations += 1; },
+    });
+    const provider = openaiProvider(fakePlatform(async () => ({ ok: true, body })), {
+      baseUrl: 'https://inference-api.alcf.anl.gov/resource_server/metis/api/v1',
+      apiKey: async () => 'user-token',
+    });
+    const controller = new AbortController();
+    const turn = provider.turn(baseReq(), controller.signal);
+    assert.deepEqual((await turn.next()).value, { type: 'text', delta: 'hi' });
+    assert.equal(body.locked, true);
+    if (abort) {
+      controller.abort();
+      assert.deepEqual(await collect(turn), [{ type: 'failed', error: { kind: 'cancelled', message: 'Interrupted.' } }]);
+    } else {
+      await turn.return();
+      await turn.return();
+    }
+    assert.equal(body.locked, false);
+    assert.equal(cancellations, 1);
+  }
+});
+
+test('dynamic completions default to a 64 MiB total cap across short-enough lines', async () => {
+  const block = new Uint8Array(1024 * 1024).fill(120);
+  block[block.length - 1] = 10;
+  const body = trackedBody(Array(66).fill(block));
+  const provider = openaiProvider(fakePlatform(async () => ({ ok: true, body })), {
+    baseUrl: 'https://inference-api.alcf.anl.gov/resource_server/metis/api/v1',
+    apiKey: async () => 'user-token',
+  });
+  assert.deepEqual(await collect(provider.turn(baseReq(), new AbortController().signal)), [{
+    type: 'failed', error: { kind: 'provider_crashed', message: 'ALCF completion stream is too large.' },
+  }]);
+  assert.deepEqual(body.counts, { reads: 65, cancellations: 1, releases: 1 });
+});
+
+test('static endpoints remain unbounded even with a configured dynamic stream limit', async () => {
+  const provider = openaiProvider(fakePlatform(scriptedFetch([
+    { chunks: [{ choices: [{ delta: { content: 'static answer' } }] }] },
+  ])), { baseUrl: 'http://127.0.0.1:1/v1', apiKey: 'static-key', maxStreamBytes: 1 });
+  const events = await collect(provider.turn(baseReq(), new AbortController().signal));
+  assert.equal(events.at(-1).type, 'final');
+  assert.equal(events.at(-1).text, 'static answer');
+});
 
 test('turn(): a tool call is executed in-process via ToolSession.call, then the model answers', async () => {
   const calls = [];

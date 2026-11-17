@@ -3,9 +3,17 @@ import assert from 'node:assert/strict';
 import { createTenantPool, createTenantRuntime, createAlcfCredentialClient } from '../src/node/tenant-runtime.mjs';
 import { memoryFs } from './support/memory-fs.mjs';
 import { createSettingsStore } from '../src/settings.js';
+import { createLocalRuntime } from '../src/core.js';
 
 const A = 'a'.repeat(64);
 const B = 'b'.repeat(64);
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
 
 function platform(fs) {
   return {
@@ -169,6 +177,116 @@ test('17 simultaneous cold starts fill an empty 16-slot pool with only one rejec
   for (const outcome of fulfilled) outcome.value.release();
   await pool.dispose();
 });
+
+for (const eviction of ['sweep', 'capacity']) {
+  test(`pending acquisition claims protect publication from ${eviction} eviction`, async (t) => {
+    let disposed = false;
+    let probe;
+    const pool = createTenantPool({
+      maxRuntimes: 1,
+      buildRuntime(tenant) {
+        if (tenant === A) {
+          // Run after the build's await publishes, but before acquire delivers its leases.
+          queueMicrotask(() => queueMicrotask(() => {
+            probe = eviction === 'sweep' ? pool.evictIdle(true)
+              : assert.rejects(pool.acquire(B), (error) => error.status === 503);
+            probe.catch(() => {});
+          }));
+        }
+        return { service: { async dispose() { disposed = true; } } };
+      },
+    });
+    t.after(() => pool.dispose());
+    const [first, second] = await Promise.all([pool.acquire(A), pool.acquire(A)]);
+    assert.equal(disposed, false, 'a delivered lease must not refer to a disposed service');
+    await probe;
+    assert.equal(first.service, second.service);
+    first.release();
+    first.release();
+    await assert.rejects(pool.acquire(B), (error) => error.status === 503);
+    second.release();
+    (await pool.acquire(B)).release();
+  });
+
+  test(`real detached columns survive ${eviction} eviction after the request releases`, { timeout: 5_000 }, async (t) => {
+    const finishing = deferred();
+    const finishPersistence = deferred();
+    const fs = memoryFs();
+    const remove = fs.remove;
+    fs.remove = async (path) => {
+      finishing.resolve();
+      await finishPersistence.promise;
+      return remove(path);
+    };
+    let finishTurn;
+    let turnSignal;
+    let startTurn;
+    const started = new Promise((resolve) => { startTurn = resolve; });
+    const provider = {
+      id: 'fake', caps: {},
+      async *turn(_req, signal) {
+        turnSignal = signal;
+        await new Promise((resolve) => {
+          finishTurn = resolve;
+          signal.addEventListener('abort', resolve, { once: true });
+          startTurn();
+        });
+        const json = { rows: [{ row: 'x:1', cells: [{ column: 'sample', status: 'found', value: '10', quotes: ['Sample size is 10.'] }] }] };
+        yield { type: 'final', text: JSON.stringify(json), json, usage: {} };
+      },
+      async dispose() {},
+    };
+    const pool = createTenantPool({
+      maxRuntimes: 1,
+      async buildRuntime(tenant) {
+        const service = await createLocalRuntime({
+          platform: platform(fs), dataDir: `users/${tenant}/agent`,
+          library: {}, notes: {}, providers: new Map([['fake', provider]]),
+          gateway: {
+            open() { return { specs: [], seen: () => [], close() {} }; },
+            async dispose() {},
+          },
+          getRoleModel: async () => ({ provider: 'fake', model: null }),
+          routines: { isOwner: () => false },
+        });
+        return { service };
+      },
+    });
+    t.after(async () => { finishTurn?.(); finishPersistence.resolve(); await pool.dispose(); });
+    const request = await pool.acquire(A);
+    const service = request.service;
+    const id = await service.conversations.create('chat');
+    const { ref } = await service.sessions.put(id, { kind: 'find', query: 'fixture' }, {
+      kind: 'papers', title: 'Fixture', from: [], change: 'Found papers',
+      rows: [{ id: 'x:1', title: 'Fixture', abstract: 'Sample size is 10.', ref: { kind: 'web', url: 'https://example.org/paper' } }],
+      columns: [], cells: {},
+    });
+    const { step } = await service.sessions.run(id, {
+      kind: 'columns', on: ref, rows: 'all', text: 'abstract',
+      add: [{ id: 'sample', name: 'Sample size', instruction: 'How many?', kind: 'text' }],
+    });
+    request.release();
+    await started;
+    if (eviction === 'sweep') await pool.evictIdle(true);
+    else await assert.rejects(pool.acquire(B), (error) => error.status === 503);
+    assert.equal(turnSignal.aborted, false, 'request completion must not make detached work evictable');
+    const resident = await pool.acquireExisting(A);
+    assert.equal(resident.service, service);
+    resident.release();
+    finishTurn();
+    await finishing.promise;
+    await assert.rejects(pool.acquire(B), (error) => error.status === 503);
+    assert.equal(service.hasActiveWork(), true, 'work includes final persistence, not only provider turns');
+    finishPersistence.resolve();
+    const events = [];
+    for await (const event of service.sessions.events(id, step, 0)) events.push(event);
+    assert.equal(events.at(-1).data.status, 'done');
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(service.hasActiveWork(), false);
+    (await pool.acquire(B)).release();
+    await assert.rejects(pool.acquireExisting(A), (error) => error.status === 404);
+  });
+}
 
 test('simultaneous full-pool replacements dispose distinct idle runtimes and preserve the cap', async () => {
   const C = 'c'.repeat(64);
@@ -337,3 +455,206 @@ test('a failed runtime construction can be retried', async () => {
   await pool.dispose();
   assert.equal(attempts, 2);
 });
+
+test('disposal keeps its capacity until resources are gone', async (t) => {
+  const gate = deferred();
+  const builds = [];
+  const pool = createTenantPool({
+    maxRuntimes: 1,
+    buildRuntime(tenant) {
+      builds.push(tenant);
+      return { service: { dispose: () => tenant === A ? gate.promise : Promise.resolve() } };
+    },
+  });
+  t.after(async () => { gate.resolve(); await pool.dispose(); });
+  (await pool.acquire(A)).release();
+  const replacement = pool.acquire(B);
+  const sameReplacement = pool.acquire(B);
+  await assert.rejects(pool.acquire('c'.repeat(64)), (error) => error.status === 503);
+  await assert.rejects(pool.acquireExisting(A), (error) => error.status === 404);
+  await assert.rejects(pool.acquireExisting(B), (error) => error.status === 404);
+  assert.deepEqual(builds, [A]);
+  gate.resolve();
+  const [first, second] = await Promise.all([replacement, sameReplacement]);
+  assert.equal(first.service, second.service);
+  assert.deepEqual(builds, [A, B]);
+  first.release();
+  second.release();
+});
+
+test('replacement and reacquisition recheck the same freed slot without exceeding capacity', async (t) => {
+  const gate = deferred();
+  const builds = [];
+  let live = 0;
+  const pool = createTenantPool({
+    maxRuntimes: 1,
+    buildRuntime(tenant) {
+      builds.push(tenant);
+      live += 1;
+      assert.equal(live, 1, 'construction must not overlap another live or disposing runtime');
+      return { service: { async dispose() { await gate.promise; live -= 1; } } };
+    },
+  });
+  t.after(async () => { gate.resolve(); await pool.dispose(); });
+  (await pool.acquire(A)).release();
+  const replacement = pool.acquire(B);
+  const reacquisition = pool.acquire(A);
+  const outcomes = Promise.allSettled([replacement, reacquisition]);
+  gate.resolve();
+  const results = await outcomes;
+  const admitted = results.filter((r) => r.status === 'fulfilled');
+  const rejected = results.filter((r) => r.status === 'rejected');
+  assert.equal(admitted.length, 1);
+  assert.equal(rejected.length, 1);
+  assert.equal(rejected[0].reason.status, 503);
+  assert.equal(builds.length, 2);
+  admitted[0].value.release();
+});
+
+test('MCP acquisition never constructs or waits and reserves ready runtimes synchronously', async (t) => {
+  const gate = deferred();
+  let builds = 0;
+  const runtime = { service: { async dispose() {} }, mcpHandler: () => 'mcp' };
+  const pool = createTenantPool({
+    maxRuntimes: 1,
+    buildRuntime() { builds += 1; return gate.promise; },
+  });
+  t.after(() => pool.dispose());
+  await assert.rejects(pool.acquireExisting(A), (error) => error.status === 404);
+  assert.equal(builds, 0);
+  const pending = pool.acquire(A);
+  await assert.rejects(pool.acquireExisting(A), (error) => error.status === 404);
+  gate.resolve(runtime);
+  (await pending).release();
+  const existing = pool.acquireExisting(A);
+  await assert.rejects(pool.acquire(B), (error) => error.status === 503);
+  const lease = await existing;
+  assert.equal(lease.mcpHandler, runtime.mcpHandler);
+  lease.release();
+  assert.equal(builds, 1);
+});
+
+test('failed single-flight construction releases capacity and all claims', async (t) => {
+  const gate = deferred();
+  let attempts = 0;
+  const pool = createTenantPool({
+    maxRuntimes: 1,
+    buildRuntime() {
+      attempts += 1;
+      if (attempts === 1) return gate.promise;
+      return { service: { async dispose() {} } };
+    },
+  });
+  t.after(() => pool.dispose());
+  const first = assert.rejects(pool.acquire(A), /build failed/);
+  const second = assert.rejects(pool.acquire(A), /build failed/);
+  gate.reject(new Error('build failed'));
+  await Promise.all([first, second]);
+  assert.equal(attempts, 1);
+  (await pool.acquire(B)).release();
+  (await pool.acquire(A)).release();
+  assert.equal(attempts, 3);
+});
+
+for (const synchronous of [true, false]) {
+  test(`${synchronous ? 'thrown' : 'rejected'} disposal quarantines capacity and fails shutdown visibly`, async () => {
+    const error = new Error('disposal failed');
+    let builds = 0;
+    let disposals = 0;
+    const pool = createTenantPool({
+      maxRuntimes: 1,
+      buildRuntime() {
+        builds += 1;
+        return { service: { dispose() {
+          disposals += 1;
+          if (synchronous) throw error;
+          return Promise.reject(error);
+        } } };
+      },
+    });
+    (await pool.acquire(A)).release();
+    await assert.rejects(pool.acquire(B), (e) => e === error);
+    await assert.rejects(pool.acquire(A), (e) => e === error);
+    await assert.rejects(pool.acquire(B), (e) => e.status === 503);
+    await assert.rejects(pool.acquireExisting(A), (e) => e.status === 404);
+    await pool.evictIdle(true);
+    await assert.rejects(pool.dispose(), (e) => e instanceof AggregateError && e.errors[0] === error);
+    await assert.rejects(pool.dispose(), AggregateError);
+    assert.equal(builds, 1);
+    assert.equal(disposals, 1, 'failed disposal is not retried against a partially disposed service');
+  });
+}
+
+test('shutdown rejects new and pending leases and disposes late construction exactly once', async () => {
+  const gate = deferred();
+  const started = deferred();
+  let disposals = 0;
+  const pool = createTenantPool({
+    buildRuntime() { started.resolve(); return gate.promise; },
+  });
+  const pending = assert.rejects(pool.acquire(A), /shutting down/);
+  const alsoPending = assert.rejects(pool.acquire(A), /shutting down/);
+  await started.promise;
+  const shutdown = pool.dispose();
+  assert.equal(pool.dispose(), shutdown);
+  await assert.rejects(pool.acquire(B), /shutting down/);
+  await assert.rejects(pool.acquireExisting(A), /shutting down/);
+  gate.resolve({ service: { async dispose() { disposals += 1; } } });
+  await Promise.all([shutdown, pending, alsoPending]);
+  await assert.rejects(pool.acquire(A), /shutting down/);
+  assert.equal(disposals, 1);
+});
+
+test('shutdown during replacement waits for disposal but never builds its successor', async () => {
+  const gate = deferred();
+  const builds = [];
+  const pool = createTenantPool({
+    maxRuntimes: 1,
+    buildRuntime(tenant) {
+      builds.push(tenant);
+      return { service: { dispose: () => gate.promise } };
+    },
+  });
+  (await pool.acquire(A)).release();
+  const replacement = assert.rejects(pool.acquire(B), /shutting down/);
+  const reacquire = assert.rejects(pool.acquire(A), /shutting down/);
+  const shutdown = pool.dispose();
+  gate.resolve();
+  await Promise.all([shutdown, replacement, reacquire]);
+  assert.deepEqual(builds, [A]);
+});
+
+for (const change of ['work', 'idle deadline']) {
+  test(`sweep rechecks ${change} after another disposal yields`, async (t) => {
+    let now = 0;
+    let working = false;
+    const gate = deferred();
+    const disposed = [];
+    const pool = createTenantPool({
+      clock: () => now, idleMs: 100,
+      buildRuntime(tenant) {
+        return { service: {
+          hasActiveWork: () => tenant === B && working,
+          async dispose() { disposed.push(tenant); if (tenant === A) await gate.promise; },
+        } };
+      },
+    });
+    t.after(async () => { gate.resolve(); await pool.dispose(); });
+    (await pool.acquire(A)).release();
+    (await pool.acquire(B)).release();
+    now = 200;
+    const sweeping = pool.evictIdle();
+    const request = await pool.acquire(B);
+    if (change === 'work') working = true;
+    request.release();
+    // Only the work predicate, not the renewed idle deadline, can protect this case.
+    if (change === 'work') now += 200;
+    gate.resolve();
+    await sweeping;
+    assert.deepEqual(disposed, [A]);
+    working = false;
+    now += 200;
+    await pool.evictIdle();
+    assert.deepEqual(disposed, [A, B]);
+  });
+}

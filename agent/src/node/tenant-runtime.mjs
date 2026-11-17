@@ -124,7 +124,7 @@ export async function createTenantRuntime(deps) {
 }
 
 /**
- * Bounded pool with single-flight construction and active-request-safe idle eviction.
+ * Bounded pool with single-flight construction and request/work-safe idle eviction.
  * The factory is injectable so lifecycle tests need no network or real provider subprocesses.
  */
 export function createTenantPool(deps) {
@@ -132,80 +132,104 @@ export function createTenantPool(deps) {
   const idleMs = deps.idleMs ?? 30 * 60_000;
   const maxRuntimes = deps.maxRuntimes ?? 16;
   const build = deps.buildRuntime ?? ((tenant) => createTenantRuntime({ ...deps, tenant }));
-  const records = new Map();
-  const inProgress = new Map();
-  const constructing = new Set();
+  const entries = new Map();
+  let closed = false;
+  let shutdown;
 
-  function lease(record) {
-    record.active += 1;
-    record.lastUsed = clock();
+  function lease(entry) {
     let released = false;
     return {
-      service: record.service,
-      mcpHandler: record.mcpHandler,
+      service: entry.runtime.service,
+      mcpHandler: entry.runtime.mcpHandler,
       release() {
         if (released) return;
         released = true;
-        record.active = Math.max(0, record.active - 1);
-        record.lastUsed = clock();
+        entry.claims -= 1;
+        entry.lastUsed = clock();
       },
     };
   }
 
-  async function disposeRecord(tenant, record) {
-    // A previous candidate may have been reacquired while an older tenant's
-    // disposal was awaited. Never dispose that active/replaced runtime.
-    if (records.get(tenant) !== record || record.active !== 0) return;
-    records.delete(tenant);
-    const disposing = Promise.resolve(record.service.dispose()).finally(() => {
-      if (inProgress.get(tenant) === disposing) inProgress.delete(tenant);
+  function idle(entry) {
+    return entry.state === 'ready' && entry.claims === 0 && !entry.runtime.service.hasActiveWork?.();
+  }
+
+  function disposeEntry(tenant, entry) {
+    entry.state = 'disposing';
+    entry.promise = Promise.resolve().then(() => entry.runtime.service.dispose()).then(() => {
+      entries.delete(tenant);
     });
-    inProgress.set(tenant, disposing);
-    return disposing;
+    // A failed disposal retains its tombstone and capacity: the resources may still be live.
+    return entry.promise;
   }
 
   async function evictIdle(forceOne = false) {
-    const candidates = [...records.entries()]
-      .filter(([, record]) => record.active === 0 && (forceOne || clock() - record.lastUsed >= idleMs))
+    const candidates = [...entries.entries()]
+      .filter(([, entry]) => idle(entry) && (forceOne || clock() - entry.lastUsed >= idleMs))
       .sort(([, a], [, b]) => a.lastUsed - b.lastUsed);
-    for (const [tenant, record] of candidates) await disposeRecord(tenant, record);
+    for (const [tenant, entry] of candidates) {
+      // Earlier disposal yielded: recheck both claims and work, and the idle deadline.
+      if (!closed && entries.get(tenant) === entry && idle(entry)
+          && (forceOne || clock() - entry.lastUsed >= idleMs)) await disposeEntry(tenant, entry);
+    }
   }
 
-  function construct(tenant) {
-    // Reserve before yielding: queued constructions must not all see one another as
-    // occupying a slot before any has had a chance to build. Disposal promises and
-    // same-tenant waiters in `inProgress` are not additional runtime reservations.
-    const needsEviction = records.size + constructing.size >= maxRuntimes;
-    const idle = needsEviction ? [...records.entries()].filter(([, record]) => record.active === 0)
-      .sort(([, a], [, b]) => a.lastUsed - b.lastUsed)[0] : null;
-    if (needsEviction && !idle) return Promise.reject(tenantError(503, 'too many active Veritas workspaces; try again later'));
-    constructing.add(tenant);
-    // Remove and begin disposing this candidate before another admission can select it.
-    const eviction = idle ? disposeRecord(...idle) : null;
-    const creating = Promise.resolve().then(async () => {
-      if (eviction) await eviction;
-      const record = await build(tenant);
-      records.set(tenant, { ...record, active: 0, lastUsed: clock() });
-      return records.get(tenant);
-    }).finally(() => {
-      constructing.delete(tenant);
-      if (inProgress.get(tenant) === creating) inProgress.delete(tenant);
-    });
-    inProgress.set(tenant, creating);
-    return creating;
+  function checkOpen() {
+    if (closed) throw tenantError(503, 'tenant pool is shutting down');
+  }
+
+  function reserve(entry) {
+    checkOpen();
+    // Waiting entries own no runtime yet. Construction, ready services, and disposal
+    // all consume a slot, including failed disposals. Reserve without yielding.
+    const occupied = [...entries.values()].filter((e) => e.state !== 'waiting').length;
+    if (occupied < maxRuntimes) {
+      entry.state = 'constructing';
+      return null;
+    }
+    const candidate = [...entries.entries()].filter(([, e]) => idle(e))
+      .sort(([, a], [, b]) => a.lastUsed - b.lastUsed)[0];
+    if (!candidate) throw tenantError(503, 'too many active Veritas workspaces; try again later');
+    return disposeEntry(...candidate);
   }
 
   async function acquire(rawTenant) {
     const tenant = validTenant(rawTenant);
-    const existing = records.get(tenant);
-    if (existing) return lease(existing);
-    if (inProgress.has(tenant)) {
-      const record = await inProgress.get(tenant);
-      if (record?.service) return lease(record);
-      return acquire(tenant); // an eviction settled: build a fresh runtime instead of leasing the disposed one
+    checkOpen();
+    let entry = entries.get(tenant);
+    if (entry?.state === 'disposing') {
+      await entry.promise;
+      return acquire(tenant);
     }
-    const record = await construct(tenant);
-    return lease(record);
+    if (!entry) {
+      entry = { state: 'waiting', claims: 0, lastUsed: clock(), runtime: null, promise: null };
+      let eviction = reserve(entry);
+      entries.set(tenant, entry);
+      const creating = entry;
+      creating.promise = Promise.resolve().then(async () => {
+        while (eviction) {
+          await eviction;
+          eviction = reserve(creating); // capacity may have changed while disposal ran
+        }
+        checkOpen();
+        creating.runtime = await build(tenant);
+        creating.state = 'ready';
+      }).catch((error) => {
+        entries.delete(tenant);
+        throw error;
+      });
+    }
+    // Each caller claims synchronously, before construction can publish or any await.
+    entry.claims += 1;
+    entry.lastUsed = clock();
+    try {
+      await entry.promise;
+      checkOpen();
+      return lease(entry);
+    } catch (error) {
+      entry.claims -= 1;
+      throw error;
+    }
   }
 
   const timer = setInterval(() => { void evictIdle().catch(() => {}); }, deps.sweepMs ?? 60_000);
@@ -214,18 +238,27 @@ export function createTenantPool(deps) {
     acquire,
     async acquireExisting(rawTenant) {
       const tenant = validTenant(rawTenant);
-      const record = records.get(tenant);
-      if (!record) throw tenantError(404, 'unknown or inactive tenant');
-      return lease(record);
+      checkOpen();
+      const entry = entries.get(tenant);
+      if (entry?.state !== 'ready') throw tenantError(404, 'unknown or inactive tenant');
+      entry.claims += 1;
+      entry.lastUsed = clock();
+      return lease(entry);
     },
     evictIdle,
     /** Release all resources after in-flight construction settles. Caller drains active leases first. */
-    async dispose() {
+    dispose() {
+      if (shutdown) return shutdown;
+      closed = true;
       clearInterval(timer);
-      await Promise.allSettled([...inProgress.values()]);
-      await Promise.allSettled([...records.values()].map((record) => record.service.dispose()));
-      records.clear();
-      inProgress.clear();
+      shutdown = (async () => {
+        await Promise.allSettled([...entries.values()].map((entry) => entry.promise));
+        const results = await Promise.allSettled([...entries.entries()].map(([tenant, entry]) =>
+          entry.state === 'disposing' ? entry.promise : disposeEntry(tenant, entry)));
+        const errors = results.filter((result) => result.status === 'rejected').map((result) => result.reason);
+        if (errors.length) throw new AggregateError(errors, 'tenant runtime disposal failed');
+      })();
+      return shutdown;
     },
   };
 }

@@ -128,35 +128,69 @@ export async function* parseSse(body, options = {}) {
   const { maxBytes = Infinity, maxLineBytes = maxBytes } = options;
   const reader = body.getReader();
   const decoder = new TextDecoder();
-  const encoder = new TextEncoder();
-  let buffer = '';
+  // Pack unfinished lines into owned blocks: no retained network buffers or one object per tiny chunk.
+  const blockSize = 16 * 1024;
+  /** @type {Uint8Array[]} */
+  let fragments = [];
+  let fragmentBytes = 0;
+  let lineBytes = 0;
   let totalBytes = 0;
-  async function tooLarge() {
-    try { await reader.cancel(); } catch { /* already closed or aborted */ }
+  let exhausted = false;
+  function tooLarge() {
     throw Object.assign(new Error('ALCF completion stream limit exceeded'), { status: 413 });
   }
   try {
     for (;;) {
       const { value, done } = await reader.read();
-      if (done) break;
+      if (done) { exhausted = true; break; }
       totalBytes += value.byteLength;
-      if (totalBytes > maxBytes) await tooLarge();
-      buffer += decoder.decode(value, { stream: true });
-      let idx;
-      while ((idx = buffer.indexOf('\n')) >= 0) {
-        const rawLine = buffer.slice(0, idx);
-        if (encoder.encode(rawLine).byteLength > maxLineBytes) await tooLarge();
-        const line = rawLine.trim();
-        buffer = buffer.slice(idx + 1);
+      if (totalBytes > maxBytes) tooLarge();
+      let start = 0;
+      while (start < value.byteLength) {
+        const newline = value.indexOf(10, start);
+        const end = newline < 0 ? value.byteLength : newline;
+        lineBytes += end - start;
+        if (lineBytes > maxLineBytes) tooLarge();
+        let bytes;
+        if (newline >= 0 && fragments.length === 0) {
+          bytes = value.subarray(start, end);
+        } else {
+          while (start < end) {
+            if (fragments.length === 0 || fragmentBytes === blockSize) {
+              fragments.push(new Uint8Array(Math.min(blockSize, maxLineBytes - fragments.length * blockSize)));
+              fragmentBytes = 0;
+            }
+            const block = fragments[fragments.length - 1];
+            const length = Math.min(end - start, block.byteLength - fragmentBytes);
+            block.set(value.subarray(start, start + length), fragmentBytes);
+            fragmentBytes += length;
+            start += length;
+          }
+          if (newline < 0) break;
+          bytes = new Uint8Array(lineBytes);
+          let offset = 0;
+          for (const block of fragments) {
+            const length = Math.min(block.byteLength, lineBytes - offset);
+            bytes.set(block.subarray(0, length), offset);
+            offset += length;
+          }
+        }
+        const line = decoder.decode(bytes).trim();
+        fragments = [];
+        fragmentBytes = 0;
+        lineBytes = 0;
+        start = end + 1;
         if (!line.startsWith('data:')) continue;
         const data = line.slice(5).trim();
         if (data === '[DONE]') return;
         const chunk = tryParseJson(data);
         if (chunk) yield chunk;
       }
-      if (encoder.encode(buffer).byteLength > maxLineBytes) await tooLarge();
     }
   } finally {
+    if (!exhausted) {
+      try { await reader.cancel?.(); } catch { /* already closed or aborted */ }
+    }
     reader.releaseLock?.();
   }
 }
