@@ -3,7 +3,9 @@
 | Part | What it is |
 |---|---|
 | `server/` | Python server: reads the sources, keeps the index (SQLite, keyword search and 384-dimensional vectors from snowflake-arctic-embed-s), serves the HTTP API and the web app, and hosts the agent |
+| `server/globus_auth.py` + `user_store.py` | optional independent Globus identity, Veritas-owned sessions and private per-user ALCF credential storage |
 | `agent/` | Node agent (`agentd`): chat, reports, the reading radar, routines, the model providers and the MCP tool gateway |
+| `agent/src/node/tenant-runtime.mjs` + `providers/alcf.js` | optional per-Globus-tenant interactive runtimes, isolated stores/MCP handlers, and fixed-endpoint ALCF model/completion providers |
 | `ui/` | shared UI kit: chat, home, settings, panels, styles |
 | `web/` | the web app (browser and phone) |
 | `zotero/` | Zotero plugin |

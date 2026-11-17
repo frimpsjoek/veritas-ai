@@ -367,6 +367,9 @@ test('sessions.put/read: V1 -> V2 -> restore V3 round trip; each version stays r
   assert.equal(readV1.change, 'Found 1 paper'); // V1 still opens read-only, unchanged
   const readLatest = await ai.sessions.read(id, { id: 'R1' }); // no version: latest
   assert.equal(readLatest.ref.version, 2);
+  for (const version of [-1, 0.5, 1.5]) {
+    assert.equal(await ai.sessions.read(id, { id: 'R1', version }), null, `invalid V${version} reads as missing`);
+  }
 
   const v3 = await ai.sessions.restore(id, { id: 'R1', version: 1 });
   assert.equal(v3.ref.version, 3);

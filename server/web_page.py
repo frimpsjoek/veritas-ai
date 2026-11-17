@@ -20,6 +20,7 @@ import sqlite3
 import time
 import urllib.error
 import urllib.parse
+from contextlib import closing
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -120,26 +121,34 @@ def doi_of(url: str) -> str | None:
     return found.group(1).rstrip("/.").lower()
 
 
-def library_pdf(doi: str) -> tuple[str, str] | None:
-    """(attachment key, title) of a PDF in the Zotero library for this DOI, or None."""
+def library_pdf(doi: str, guard_attachment=None) -> tuple[str, str] | None:
+    """(attachment key, title), authorizing before opening a local file or reading its title."""
     if not zotero.root().is_dir():
         return None
     try:
-        rows = zotero.snapshot("reader", max_age=60).execute(
-            """SELECT a_items.key, (SELECT v2.value FROM itemData d2 JOIN itemDataValues v2 USING(valueID)
-                                    JOIN fields f2 USING(fieldID) WHERE d2.itemID=d.itemID AND f2.fieldName='title')
-               FROM itemData d JOIN itemDataValues v USING(valueID) JOIN fields f USING(fieldID)
-               JOIN itemAttachments a ON a.parentItemID = d.itemID JOIN items a_items ON a_items.itemID = a.itemID
-               WHERE f.fieldName='DOI' AND lower(v.value)=? AND a.contentType='application/pdf'
-                 AND a.itemID NOT IN (SELECT itemID FROM deletedItems)""", (doi.lower(),)).fetchall()
-    except (sqlite3.Error, OSError):
+        with closing(zotero.snapshot("reader", max_age=60)) as db:
+            rows = db.execute(
+                """SELECT a_items.key, d.itemID
+                   FROM itemData d JOIN itemDataValues v USING(valueID) JOIN fields f USING(fieldID)
+                   JOIN itemAttachments a ON a.parentItemID = d.itemID JOIN items a_items ON a_items.itemID = a.itemID
+                   WHERE f.fieldName='DOI' AND lower(v.value)=? AND a.contentType='application/pdf'
+                     AND a.itemID NOT IN (SELECT itemID FROM deletedItems)""", (doi.lower(),)).fetchall()
+    except (sqlite3.Error, OSError, RuntimeError):
+        if guard_attachment:
+            raise PermissionError("cannot verify PDF ownership") from None
         return None
-    for key, title in rows:
+    for key, parent in rows:
+        if guard_attachment:
+            guard_attachment(key)
         try:
             pdf_route.resolve(key)
         except pdf_route.Refused:
             continue
-        return key, title or doi
+        with closing(zotero.snapshot("reader", max_age=60)) as db:
+            title = db.execute(
+                """SELECT v.value FROM itemData d JOIN itemDataValues v USING(valueID)
+                   JOIN fields f USING(fieldID) WHERE d.itemID=? AND f.fieldName='title'""", (parent,)).fetchone()
+        return key, (title[0] if title else None) or doi
     return None
 
 
@@ -202,9 +211,9 @@ def oa_pdf(work: dict) -> dict | None:
     return None
 
 
-def _paper(url: str, doi: str, get) -> dict | None:
+def _paper(url: str, doi: str, get, guard_attachment=None) -> dict | None:
     """A paper link's answer from the library, OpenAlex's open-access copy or its abstract; None to try the page."""
-    found = library_pdf(doi)
+    found = library_pdf(doi, guard_attachment=guard_attachment)
     if found:
         # the panel asks /web/pdf for answer.url; for a DOI link that is the library's file again (pdf_file)
         return {"mode": "pdf", "url": f"https://doi.org/{doi}", "title": found[1], "source": "library"}
@@ -363,7 +372,7 @@ def _is_pdf(answer: Response) -> bool:
     return answer.kind == "application/pdf" or answer.body[:5] == b"%PDF-"
 
 
-def page(url: str, prefer: str | None = None, get=fetch) -> dict:
+def page(url: str, prefer: str | None = None, get=fetch, *, guard_attachment=None) -> dict:
     """The answer to GET /web/page (see the module docstring)."""
     try:
         _check(url)
@@ -372,7 +381,7 @@ def page(url: str, prefer: str | None = None, get=fetch) -> dict:
     host = urllib.parse.urlparse(url).hostname or url
     doi = doi_of(url)
     if doi:
-        found = _paper(url, doi, get)
+        found = _paper(url, doi, get, guard_attachment)
         if found:
             return found
     try:
@@ -409,12 +418,12 @@ def _prune(where: Path) -> None:
             old.unlink(missing_ok=True)
 
 
-def pdf_file(url: str, get=fetch) -> Path:
+def pdf_file(url: str, get=fetch, *, guard_attachment=None) -> Path:
     """A local PDF file for GET /web/pdf: the library's copy for a DOI link, else the URL fetched (kept an hour so
     PDF.js range requests do not fetch it again). Raises Refused (not public), ValueError (not a PDF, too large)."""
     doi = doi_of(url)
     if doi:
-        found = library_pdf(doi)
+        found = library_pdf(doi, guard_attachment=guard_attachment)
         if found:
             return pdf_route.resolve(found[0])
         work = openalex(doi, get)

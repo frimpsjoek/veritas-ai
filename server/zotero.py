@@ -68,6 +68,26 @@ def available() -> bool:
     return (root() / "zotero.sqlite").is_file()
 
 
+def attachment_parent(key: str) -> str:
+    """Resolve ownership in the current library, never infer it from a storage folder."""
+    try:
+        db = snapshot("reader", max_age=60)
+        try:
+            rows = db.execute(
+                """SELECT p.key FROM itemAttachments a JOIN items i ON i.itemID=a.itemID
+                   JOIN items p ON p.itemID=a.parentItemID AND p.libraryID=i.libraryID
+                   WHERE i.key=? AND i.libraryID=1
+                     AND i.itemID NOT IN (SELECT itemID FROM deletedItems)
+                     AND p.itemID NOT IN (SELECT itemID FROM deletedItems)""", (key,)).fetchall()
+        finally:
+            db.close()
+    except (sqlite3.Error, OSError, RuntimeError):
+        raise PermissionError("cannot verify PDF ownership") from None
+    if len(rows) != 1 or not rows[0][0]:
+        raise PermissionError("cannot verify PDF ownership")
+    return rows[0][0]
+
+
 def fingerprint() -> tuple[float, float]:
     """Cheap change check: the database's mtime (with its WAL) and the newest full-text cache."""
     db = max((root() / n).stat().st_mtime for n in ("zotero.sqlite", "zotero.sqlite-wal") if (root() / n).exists())

@@ -3,7 +3,7 @@
 // `.status`, `.text()`, `.json()` and `.body.getReader()`, so a scripted in-memory Response is enough and keeps
 // the tests fast and non-flaky (no port, no real sockets).
 
-function sseBody(chunks) {
+export function sseBody(chunks) {
   const encoder = new TextEncoder();
   const lines = [...chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`), 'data: [DONE]\n\n'];
   let i = 0;
