@@ -494,6 +494,47 @@ def test_paper_note_guards_resolved_vault_path(library_server, monkeypatch, rout
     assert status == 200 and b"Secret note body" in body
 
 
+@pytest.mark.parametrize("route,content_field", [("/paper-note", "my_notes"), ("/paper-note/body", "text")])
+def test_paper_note_scan_skips_private_candidate_before_public_match(library_server, monkeypatch, route, content_field):
+    port, root, _, _ = library_server
+    papers = root / "vault" / "Papers"
+    papers.mkdir()
+    private, public = papers / "a.md", papers / "b.md"
+    private.write_text("---\nzotero-key: PARENT01\n---\n## My notes\nPrivate sentinel\n")
+    public.write_text("---\nzotero-key: PUBLIC01\n---\n## My notes\nRequested public content\n")
+    db = http_api.kb.connect()
+    db.executemany("INSERT INTO notes(path,source,tags) VALUES (?, 'personal', ?)",
+                   [("Papers/a.md", "private"), ("Papers/b.md", "")])
+    db.commit()
+    db.close()
+
+    enumerated, reads = [], []
+    rglob, read_text = Path.rglob, Path.read_text
+
+    def ordered_candidates(path, pattern, *args, **kwargs):
+        if path == papers and pattern == "*.md":
+            for candidate in (private, public):
+                enumerated.append(candidate)
+                yield candidate
+        else:
+            yield from rglob(path, pattern, *args, **kwargs)
+
+    def checked_read(path, *args, **kwargs):
+        reads.append(path)
+        assert path != private, "private candidate must be skipped before reading"
+        return read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "rglob", ordered_candidates)
+    monkeypatch.setattr(Path, "read_text", checked_read)
+    status, _, result = json_call(port, "GET", route + "?key=PUBLIC01", cookie(SESSION_A))
+
+    assert enumerated == [private, public]
+    assert private not in reads and public in reads
+    assert status == 200 and result["path"] == "Papers/b.md"
+    assert result[content_field].strip() == "Requested public content"
+    assert "Private sentinel" not in json.dumps(result)
+
+
 def test_web_state_is_private_per_tenant(tenant_server):
     port, _, _, _ = tenant_server
     assert call(port, "POST", "/web/state", cookie(SESSION_A), {"files": {"private.txt": "A"}})[0] == 200
