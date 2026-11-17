@@ -108,6 +108,22 @@ test('issuance shows personal endpoint and password once, then hides it on refre
   assert.equal(env.status.issued, true);
 });
 
+test('hide removes the secret before a stalled status refresh resolves', async () => {
+  const env = environment();
+  const root = zoteroStorageWidget(env.doc, env.host);
+  await flush();
+  await byText(root, 'Create WebDAV credentials').listeners.click();
+  await flush();
+  assert.match(text(root), /only-once-secret/);
+  let resolveStatus;
+  env.host.json = () => new Promise((resolve) => { resolveStatus = resolve; });
+  byText(root, 'Hide credentials and refresh').listeners.click();
+  assert.doesNotMatch(text(root), /only-once-secret/);
+  resolveStatus(env.status);
+  await flush();
+  assert.equal(env.status.issued, true);
+});
+
 test('rotation and revocation require confirmation and safe errors are text-only', async (context) => {
   const env = environment({ status: { enabled: true, issued: true, user_used: 0,
     user_quota: 5 * 1024 ** 3, pool_quota: 50 * 1024 ** 3 } });

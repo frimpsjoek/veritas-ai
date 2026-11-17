@@ -82,6 +82,67 @@ raise RuntimeError("replacement was supposed to crash")
 '''
 
 
+def test_every_ledger_connection_uses_full_synchronous(store):
+    with store._connect() as db:
+        assert db.execute("PRAGMA synchronous").fetchone()[0] == 2
+
+
+def test_usage_counters_track_transitions_and_recovery(store, tmp_path):
+    def counters(db):
+        return dict(db.execute("SELECT scope,value FROM counters"))
+
+    with sqlite3.connect(store.ledger_path) as db:
+        assert counters(db)["pool"] == 0
+    reservation = store.reserve(TENANT_A, "PAPER001.prop", 5)
+    with sqlite3.connect(store.ledger_path) as db:
+        assert counters(db) == {"pool": 5, f"tenant:{TENANT_A}": 5}
+    digest = store.write_upload(reservation, io.BytesIO(b"12345"))
+    assert store.publish(reservation, digest) == "created"
+    write(store, TENANT_A, "PAPER001.prop", b"new")
+    write(store, TENANT_B, "OTHER001.prop", b"other")
+    with sqlite3.connect(store.ledger_path) as db:
+        assert counters(db) == {"pool": 8, f"tenant:{TENANT_A}": 3, f"tenant:{TENANT_B}": 5}
+    assert store.delete(TENANT_A, "PAPER001.prop") is True
+    with sqlite3.connect(store.ledger_path) as db:
+        assert counters(db) == {"pool": 5, f"tenant:{TENANT_A}": 0, f"tenant:{TENANT_B}": 5}
+    store.close()
+    with sqlite3.connect(tmp_path / "storage.sqlite") as db:
+        db.execute("UPDATE counters SET value=999 WHERE scope='pool'")
+    recovered = make_store(tmp_path)
+    assert recovered.pool_used() == 5
+    recovered.close()
+
+
+def test_failed_abort_cleanup_keeps_reservation_and_recovers_all_tenant_dirs(store, monkeypatch):
+    reservation = store.reserve(TENANT_A, "PAPER001.prop", 3)
+    store.write_upload(reservation, io.BytesIO(b"new"))
+    _, uploads_fd, objects_fd = store._tenant_dirs(TENANT_A)
+    os.rename(reservation.id + ".tmp", reservation.object_id,
+              src_dir_fd=uploads_fd, dst_dir_fd=objects_fd)  # a crash-shaped renamed-but-unpublished reservation
+    real_unlink = store._unlink_at
+    seen = 0
+
+    def fail_after_first(path, name):
+        nonlocal seen
+        seen += 1
+        real_unlink(path, name)
+        if seen == 1:
+            raise OSError("injected cleanup failure")
+
+    monkeypatch.setattr(store, "_unlink_at", fail_after_first)
+    with pytest.raises(OSError):
+        store.abort(reservation)
+    with sqlite3.connect(store.ledger_path) as db:
+        assert db.execute("SELECT count(*) FROM reservations WHERE id=?", (reservation.id,)).fetchone()[0] == 1
+    monkeypatch.undo()
+    store.close()
+    recovered = make_store(store.ledger_path.parent)
+    assert recovered.pool_used() == 0
+    _, _, objects_fd = recovered._tenant_dirs(TENANT_A)
+    assert os.listdir(objects_fd) == []
+    recovered.close()
+
+
 def test_credentials_are_hashed_rotated_revoked_and_tenant_scoped(store):
     issued = store.issue_credentials(TENANT_A)
     raw = issued["password"]
@@ -158,6 +219,11 @@ def test_concurrent_reservations_cannot_oversubscribe_pool(store):
     assert results.count("ok") <= 5
     assert store.pool_used() <= 20 and store.status(TENANT_A)["user_used"] <= 10
     assert store.status(TENANT_B)["user_used"] <= 10
+    with sqlite3.connect(store.ledger_path) as db:
+        physical = sum(row[0] for row in db.execute(
+            "SELECT size FROM files UNION ALL SELECT size FROM reservations UNION ALL SELECT size FROM garbage"))
+    # Counters may be temporarily stale only outside a transaction; at quiescence they must exactly match rows.
+    assert store.pool_used() == physical
 
 
 def test_second_instance_cannot_initialize_or_run_recovery(tmp_path):

@@ -34,6 +34,7 @@ export function zoteroStorageWidget(doc, host) {
 
   async function refresh() {
     secret = null;
+    render();
     try {
       state = await host.json('/zotero-storage');
     } catch (error) {

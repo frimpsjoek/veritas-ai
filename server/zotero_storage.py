@@ -239,6 +239,10 @@ class StorageService:
         db = sqlite3.connect(self.ledger_path, timeout=30, isolation_level=None)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA busy_timeout=30000")
+        db.execute("PRAGMA synchronous=FULL")
+        if db.execute("PRAGMA synchronous").fetchone()[0] != 2:
+            db.close()
+            raise StorageError("Zotero WebDAV ledger requires FULL synchronous commits")
         return db
 
     def _initialize_database(self) -> None:
@@ -260,7 +264,21 @@ class StorageService:
               size INTEGER NOT NULL, created INTEGER NOT NULL, state TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS garbage (
               object_id TEXT PRIMARY KEY, tenant TEXT NOT NULL, size INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS counters (
+              scope TEXT PRIMARY KEY, value INTEGER NOT NULL);
             """)
+            if db.execute("SELECT 1 FROM counters WHERE scope='pool'").fetchone() is None:
+                db.execute("BEGIN IMMEDIATE")
+                try:
+                    db.execute("INSERT INTO counters VALUES ('pool', ?)", (self._sum(db, None),))
+                    for row in db.execute("""SELECT tenant FROM files UNION SELECT tenant FROM reservations
+                                               UNION SELECT tenant FROM garbage"""):
+                        db.execute("INSERT INTO counters VALUES (?, ?)",
+                                   (f"tenant:{row[0]}", self._sum(db, row[0])))
+                    db.execute("COMMIT")
+                except BaseException:
+                    db.execute("ROLLBACK")
+                    raise
         for suffix in ("", "-wal", "-shm"):
             try:
                 os.chmod(str(self.ledger_path) + suffix, 0o600)
@@ -419,15 +437,49 @@ class StorageService:
                 total += value
         return total
 
+    @staticmethod
+    def _counter(db: sqlite3.Connection, scope: str) -> int:
+        row = db.execute("SELECT value FROM counters WHERE scope=?", (scope,)).fetchone()
+        value = 0 if row is None else row[0]
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= SQLITE_MAX:
+            raise StorageCorrupt("invalid Zotero attachment usage counter")
+        return value
+
+    @staticmethod
+    def _adjust_usage(db: sqlite3.Connection, tenant: str, amount: int) -> None:
+        self = StorageService
+        if isinstance(amount, bool) or not isinstance(amount, int):
+            raise ValueError("usage delta must be an integer")
+        for scope in ("pool", f"tenant:{tenant}"):
+            value = self._counter(db, scope) + amount
+            if not 0 <= value <= SQLITE_MAX:
+                raise StorageCorrupt("Zotero attachment usage counter would overflow or become negative")
+            db.execute("INSERT INTO counters VALUES (?, ?) ON CONFLICT(scope) DO UPDATE SET value=excluded.value",
+                       (scope, value))
+
+    def _reconcile_usage(self) -> None:
+        with closing(self._connect()) as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                tenants = {row[0] for row in db.execute("""SELECT tenant FROM files UNION SELECT tenant FROM reservations
+                                                             UNION SELECT tenant FROM garbage""")}
+                for scope, tenant in [("pool", None), *((f"tenant:{tenant}", tenant) for tenant in tenants)]:
+                    db.execute("INSERT INTO counters VALUES (?, ?) ON CONFLICT(scope) DO UPDATE SET value=excluded.value",
+                               (scope, self._sum(db, tenant)))
+                db.execute("COMMIT")
+            except BaseException:
+                db.execute("ROLLBACK")
+                raise
+
     def pool_used(self) -> int:
         with closing(self._connect()) as db:
-            return self._sum(db, None)
+            return self._counter(db, "pool")
 
     def status(self, tenant: str) -> dict:
         tenant = self._tenant(tenant)
         with closing(self._connect()) as db:
             issued = db.execute("SELECT 1 FROM credentials WHERE tenant=?", (tenant,)).fetchone() is not None
-            used = self._sum(db, tenant)
+            used = self._counter(db, f"tenant:{tenant}")
         return {"enabled": True, "issued": issued, "user_used": used,
                 "user_quota": self.config.user_bytes, "pool_quota": self.config.pool_bytes}
 
@@ -456,7 +508,8 @@ class StorageService:
                 if size > self.config.pool_bytes - pool:
                     raise QuotaExceeded("pool")
                 db.execute("INSERT INTO reservations VALUES (?,?,?,?,?,?,'streaming')",
-                           (reservation_id, tenant, name, object_id, size, int(time.time())))
+                           (reservation_id, tenant, name, object_id, size, int(time.time())),)
+                self._adjust_usage(db, tenant, size)
                 db.execute("COMMIT")
             except BaseException:
                 db.execute("ROLLBACK")
@@ -501,7 +554,7 @@ class StorageService:
             db.execute("BEGIN IMMEDIATE")
             try:
                 current = db.execute("SELECT state FROM reservations WHERE id=?", (reservation.id,)).fetchone()
-                if current is None:
+                if current is None or current["state"] == "aborted":
                     raise StorageError("upload reservation is no longer pending")
                 db.execute("UPDATE reservations SET state='renamed' WHERE id=?", (reservation.id,))
                 old = db.execute("SELECT object_id,size FROM files WHERE tenant=? AND name=?",
@@ -509,6 +562,10 @@ class StorageService:
                 if old is not None:
                     db.execute("INSERT INTO garbage VALUES (?,?,?)",
                                (old["object_id"], reservation.tenant, old["size"]))
+                self._adjust_usage(db, reservation.tenant, -reservation.size)
+                # Old active bytes move to garbage with no usage change. The new reservation
+                # becomes the new active file; old size is released only by garbage cleanup.
+                self._adjust_usage(db, reservation.tenant, reservation.size)
                 db.execute("""INSERT INTO files VALUES (?,?,?,?,?,?)
                     ON CONFLICT(tenant,name) DO UPDATE SET
                     object_id=excluded.object_id,size=excluded.size,sha256=excluded.sha256,modified=excluded.modified""",
@@ -535,14 +592,38 @@ class StorageService:
         return "replaced" if old is not None else "created"
 
     def abort(self, reservation: Reservation) -> None:
-        """Abort only a still-pending reservation; committed attachments are never removed."""
-        _, uploads_fd, objects_fd = self._tenant_dirs(reservation.tenant)
+        """Fence publication, durably unlink both locations, then remove the reservation."""
+        self._tenant(reservation.tenant)
         with closing(self._connect()) as db:
-            removed = db.execute("DELETE FROM reservations WHERE id=?", (reservation.id,)).rowcount
-        if not removed:
-            return
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                present = db.execute("SELECT 1 FROM reservations WHERE id=? AND state != 'aborted'",
+                                     (reservation.id,)).fetchone()
+                if present is None:
+                    db.execute("COMMIT")
+                    return
+                db.execute("UPDATE reservations SET state='aborted' WHERE id=?", (reservation.id,))
+                db.execute("COMMIT")
+            except BaseException:
+                db.execute("ROLLBACK")
+                raise
+        _, uploads_fd, objects_fd = self._tenant_dirs(reservation.tenant)
+        # The reservation remains if either unlink/fsync fails, for next-start recovery.
         self._unlink_at(uploads_fd, reservation.id + ".tmp")
+        os.fsync(uploads_fd)
         self._unlink_at(objects_fd, reservation.object_id)
+        os.fsync(objects_fd)
+        with closing(self._connect()) as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                removed = db.execute("DELETE FROM reservations WHERE id=? AND state='aborted'",
+                                     (reservation.id,)).rowcount
+                if removed:
+                    self._adjust_usage(db, reservation.tenant, -reservation.size)
+                db.execute("COMMIT")
+            except BaseException:
+                db.execute("ROLLBACK")
+                raise
 
     def _claim(self, object_id: str) -> bool:
         with self._claim_lock:
@@ -617,6 +698,10 @@ class StorageService:
         with closing(self._connect()) as db:
             db.execute("BEGIN IMMEDIATE")
             try:
+                row = db.execute("SELECT size FROM garbage WHERE object_id=? AND tenant=?",
+                                 (object_id, tenant)).fetchone()
+                if row is not None:
+                    self._adjust_usage(db, tenant, -row["size"])
                 db.execute("DELETE FROM garbage WHERE object_id=? AND tenant=?", (object_id, tenant))
                 db.execute("COMMIT")
             except BaseException:
@@ -666,19 +751,35 @@ class StorageService:
                 raise StorageCorrupt("upload reservation is both active and pending")
             _, uploads_fd, objects_fd = self._tenant_dirs(row["tenant"])
             self._unlink_at(uploads_fd, row["id"] + ".tmp")
+            os.fsync(uploads_fd)
             self._unlink_at(objects_fd, row["object_id"])
+            os.fsync(objects_fd)
             with closing(self._connect()) as db:
-                db.execute("DELETE FROM reservations WHERE id=?", (row["id"],))
+                db.execute("BEGIN IMMEDIATE")
+                try:
+                    removed = db.execute("DELETE FROM reservations WHERE id=?", (row["id"],)).rowcount
+                    if removed:
+                        self._adjust_usage(db, row["tenant"], -row["size"])
+                    db.execute("COMMIT")
+                except BaseException:
+                    db.execute("ROLLBACK")
+                    raise
         for row in garbage:
             self._safe_collect((row["object_id"], row["tenant"]))
-        for tenant in {row["tenant"] for row in (*active, *pending, *garbage)}:
+        tenants = {row["tenant"] for row in (*active, *pending, *garbage)}
+        # Rows alone do not cover legacy crash leftovers: find every existing tenant too.
+        tenants.update(name for name in os.listdir(self._users_fd) if TENANT.fullmatch(name))
+        for tenant in tenants:
             _, uploads_fd, objects_fd = self._tenant_dirs(tenant)
             for name in os.listdir(uploads_fd):
                 if not re.fullmatch(r"[0-9a-f]{32}\.tmp", name):
                     raise StorageCorrupt("unexpected Zotero attachment upload")
                 self._unlink_at(uploads_fd, name)
+            os.fsync(uploads_fd)
             for name in os.listdir(objects_fd):
                 if not IDENTIFIER.fullmatch(name):
                     raise StorageCorrupt("unexpected Zotero attachment object")
                 if name not in referenced:
                     self._unlink_at(objects_fd, name)
+            os.fsync(objects_fd)
+        self._reconcile_usage()
