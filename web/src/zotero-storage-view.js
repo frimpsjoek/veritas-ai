@@ -66,6 +66,7 @@ export function zoteroStorageWidget(doc, host) {
       'Revoke WebDAV credentials? Zotero file synchronization will stop. Stored attachments are not deleted.')) return;
     busy = true;
     secret = null;
+    render();
     try {
       await host.json('/zotero-storage/credentials', 'DELETE', {});
       await refresh();

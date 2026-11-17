@@ -63,7 +63,7 @@ def tenant_server(tmp_path, monkeypatch):
 
 def call(port, method, path, headers=None, body=None):
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-    data = json.dumps(body).encode() if body is not None else None
+    data = body.encode() if isinstance(body, str) else json.dumps(body).encode() if body is not None else None
     conn.request(method, path, data, headers={**PHONE, **(headers or {})})
     response = conn.getresponse()
     status, all_headers, payload = response.status, response.getheaders(), response.read()
@@ -135,6 +135,18 @@ def test_credentials_are_one_time_and_cross_site_mutations_are_denied(tenant_ser
     assert call(port, "DELETE", "/zotero-storage/credentials", evil)[0] == 403
     assert call(port, "DELETE", "/zotero-storage/credentials", authorized())[0] == 200
     assert store.authenticate(rotated["username"], rotated["password"]) is None
+
+
+def test_malformed_management_json_is_400_without_mutating_credentials(tenant_server):
+    port, store = tenant_server
+    for method in ("POST", "DELETE"):
+        status, _, body = call(port, method, "/zotero-storage/credentials", authorized(), "{")
+        assert status == 400 and body == {"error": "invalid JSON"}
+        assert store.status(TENANT_A)["issued"] is False
+    status, _, issued = call(port, "POST", "/zotero-storage/credentials", authorized(), {})
+    assert status == 201
+    status, _, body = call(port, "DELETE", "/zotero-storage/credentials", authorized(), "{")
+    assert status == 400 and store.authenticate(issued["username"], issued["password"]) == TENANT_A
 
 
 def test_plaintext_and_hostile_proxy_headers_cannot_issue_canonical_endpoint(tenant_server):

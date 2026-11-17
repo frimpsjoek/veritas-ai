@@ -124,6 +124,25 @@ test('hide removes the secret before a stalled status refresh resolves', async (
   assert.equal(env.status.issued, true);
 });
 
+test('revocation clears the secret before a stalled DELETE resolves', async () => {
+  const env = environment();
+  const root = zoteroStorageWidget(env.doc, env.host);
+  await flush();
+  await byText(root, 'Create WebDAV credentials').listeners.click();
+  await flush();
+  assert.match(text(root), /only-once-secret/);
+  let resolveDelete;
+  env.host.json = (path, method) => {
+    if (method === 'DELETE') return new Promise((resolve) => { resolveDelete = resolve; });
+    if (method === 'GET') return Promise.resolve(env.status);
+    throw new Error(`unexpected ${method} ${path}`);
+  };
+  byText(root, 'Revoke WebDAV credentials').listeners.click();
+  assert.doesNotMatch(text(root), /only-once-secret/);
+  resolveDelete({ ok: true });
+  await flush();
+});
+
 test('rotation and revocation require confirmation and safe errors are text-only', async (context) => {
   const env = environment({ status: { enabled: true, issued: true, user_used: 0,
     user_quota: 5 * 1024 ** 3, pool_quota: 50 * 1024 ** 3 } });

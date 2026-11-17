@@ -1034,7 +1034,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True}, {**AUTH_HEADERS, "Set-Cookie": cleared})
             if route == "/zotero-storage/credentials":
                 service, tenant = _storage_mutation(self, getattr(self, "_identity", None))
-                self._body(limit=4096)
+                try:
+                    self._body(limit=4096)
+                except json.JSONDecodeError:
+                    return self._send(400, {"error": "invalid JSON"})
                 previous = service.status(tenant)["issued"]
                 return self._send(200 if previous else 201, service.issue_credentials(tenant), AUTH_HEADERS)
             if route == "/a2a":
@@ -1227,7 +1230,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if route == "/zotero-storage/credentials":
                 service, tenant = _storage_mutation(self, getattr(self, "_identity", None))
-                self._body(limit=4096)
+                try:
+                    self._body(limit=4096)
+                except json.JSONDecodeError:
+                    return self._send(400, {"error": "invalid JSON"})
                 return self._send(200, {"ok": service.revoke_credentials(tenant)}, AUTH_HEADERS)
             if route.startswith("/sources/"):
                 try:
