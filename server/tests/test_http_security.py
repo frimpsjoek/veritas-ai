@@ -281,6 +281,21 @@ def test_globus_login_callback_me_and_logout(server, monkeypatch, capsys):
     assert "secret-code" not in captured.out + captured.err
     assert "globus-session-value" not in captured.out + captured.err
 
+    # A browser keeps the cross-site Fetch Metadata while following the callback's
+    # redirect. The public app landing page must not reject that completed login.
+    status, _, body = call_full(port, "GET", "/app/", secure_phone(**{
+        "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Dest": "document",
+        **globus_cookie(),
+    }))
+    assert status in (200, 404)  # this fixture has no web bundle; never reject the navigation
+    assert b"requests from other websites are refused" not in body
+
+    for mode, dest in (("no-cors", ""), ("navigate", "iframe")):
+        status, _, _ = call_full(port, "GET", "/app/", secure_phone(**{
+            "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": mode, "Sec-Fetch-Dest": dest,
+        }))
+        assert status == 403
+
     status, headers, body = call_full(port, "GET", "/auth/globus/me", secure_phone(**globus_cookie()))
     assert status == 200 and header(headers, "Cache-Control") == ["no-store"]
     assert json.loads(body) == {
