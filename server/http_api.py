@@ -597,7 +597,12 @@ class Handler(BaseHTTPRequestHandler):
         is_a2a = self.command == "POST" and path == "/a2a"
         callback = self.command == "GET" and path == globus_auth.CALLBACK_PATH
         callback_navigation = callback and self.headers.get("Sec-Fetch-Mode", "") in ("", "navigate")
-        if kind == "foreign" and not callback_navigation:
+        # The callback redirects here while the browser retains its cross-site
+        # navigation metadata. Only the public landing page gets this exception.
+        app_navigation = (self.command == "GET" and path in {"/app", "/app/"}
+                          and self.headers.get("Sec-Fetch-Mode", "") in ("", "navigate")
+                          and self.headers.get("Sec-Fetch-Dest", "") in ("", "document"))
+        if kind == "foreign" and not (callback_navigation or app_navigation):
             # Logged so a real client that gets wrongly classed as a website shows up in serve.log.
             print(f"403 foreign {self.command} {path} origin={self.headers.get('Origin')!r} "
                   f"sec-fetch-site={self.headers.get('Sec-Fetch-Site')!r}", file=sys.stderr, flush=True)
