@@ -579,6 +579,37 @@ def test_web_state_is_private_per_tenant(tenant_server):
     assert web_app.read_state()["files"] == {}
 
 
+@pytest.mark.parametrize("raw_length,status", [
+    ("-1", 400), ("nope", 400), ("1.0", 400), ("１２", 400), ("9" * 5000, 400), ("9", 413),
+])
+def test_body_rejects_invalid_or_oversized_lengths_before_reading(raw_length, status):
+    handler = object.__new__(http_api.Handler)
+    handler.headers = {"Content-Length": raw_length}
+    handler.close_connection = False
+    reads = []
+
+    class Stream:
+        def read(self, amount=-1):
+            reads.append(amount)
+            return b"{}"
+
+    handler.rfile = Stream()
+    with pytest.raises(http_api.BodyError) as error:
+        handler._body(limit=8)
+    assert error.value.status == status
+    assert reads == []
+    assert handler.close_connection is True
+
+
+def test_globus_web_state_rejects_negative_content_length(tenant_server):
+    port, _, _, _ = tenant_server
+    assert call(port, "POST", "/web/state", cookie(SESSION_A), {"files": {"private.txt": "kept"}})[0] == 200
+    status, _, data = call(port, "POST", "/web/state", {**cookie(SESSION_A), "Content-Length": "-1"}, {})
+    assert status == 400 and json.loads(data) == {"error": "invalid Content-Length"}
+    status, _, state = json_call(port, "GET", "/web/state", cookie(SESSION_A))
+    assert status == 200 and state["files"] == {"private.txt": "kept"}
+
+
 def test_agent_token_requires_current_sidecar_secret_and_valid_tenant(tenant_server, capsys):
     port, manager, sidecar, _ = tenant_server
     auth = {"Authorization": f"Bearer {SIDECAR_SECRET}", "X-Veritas-Tenant": TENANT_A}

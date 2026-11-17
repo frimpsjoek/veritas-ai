@@ -496,6 +496,12 @@ def audit(route: str, params: dict, result: object) -> None:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
+class BodyError(Exception):
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
+
+
 class Handler(BaseHTTPRequestHandler):
     def _needs_zotero(self, route: str) -> bool:
         """A setup without a Zotero library (spec 018): one item, its PDF, its note and every write to Zotero answer
@@ -629,13 +635,26 @@ class Handler(BaseHTTPRequestHandler):
         return {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
 
     def _body(self, limit: int = 1_000_000) -> dict:
-        length = int(self.headers.get("Content-Length") or 0)
-        return json.loads(self.rfile.read(min(length, limit)) or b"{}")
+        raw_length = self.headers.get("Content-Length")
+        try:
+            length = (int(raw_length) if raw_length is not None and raw_length.isascii() and raw_length.isdigit()
+                      else 0 if raw_length is None else -1)
+        except ValueError:  # absurd digit strings can exceed CPython's integer conversion limit
+            length = -1
+        if length < 0:
+            self.close_connection = True  # the invalid body was deliberately not consumed
+            raise BodyError(400, "invalid Content-Length")
+        if length > limit:
+            self.close_connection = True  # the oversized body was deliberately not consumed
+            raise BodyError(413, "too large")
+        return json.loads(self.rfile.read(length) or b"{}")
 
     def _run(self, handler) -> None:
         try:
             with kb.request_scope():
                 handler()
+        except BodyError as error:
+            self._send(error.status, {"error": str(error)})
         except globus_auth.AuthError as error:
             self._send(error.status, {"error": str(error)}, AUTH_HEADERS)
         except FileNotFoundError as error:
@@ -1040,12 +1059,10 @@ class Handler(BaseHTTPRequestHandler):
             elif route == "/index/stop":
                 self._send(200, {"stopping": stop_indexing()})
             elif route == "/web/state":
-                if int(self.headers.get("Content-Length") or 0) > web_app.MAX_BODY:
-                    return self._send(413, {"error": "too large"})
                 try:
-                     self._send(200, web_app.update_state(self._body(limit=web_app.MAX_BODY),
-                                                             _web_state_path(getattr(self, "_identity", None))),
-                                  {"Cache-Control": "no-store", "Pragma": "no-cache"})
+                    self._send(200, web_app.update_state(self._body(limit=web_app.MAX_BODY),
+                                                         _web_state_path(getattr(self, "_identity", None))),
+                               {"Cache-Control": "no-store", "Pragma": "no-cache"})
                 except web_app.Refused as refused:
                     self._send(refused.status, {"error": refused.message})
                 except json.JSONDecodeError:
