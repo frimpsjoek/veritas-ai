@@ -488,3 +488,7 @@ def test_upload_admission_is_bounded_per_tenant_and_globally(store):
         with pytest.raises(zotero_storage.UploadBusy):
             with store.upload_slot(third):
                 pass
+    with store.upload_slot(TENANT_A):
+        with store.upload_slot(TENANT_B):
+            pass
+    assert store._upload_tenants == {}

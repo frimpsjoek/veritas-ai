@@ -199,7 +199,7 @@ class StorageService:
         self._opening_claims: dict[str, int] = {}
         self._retiring_ids: set[str] = set()
         self._upload_global = threading.BoundedSemaphore(8)
-        self._upload_tenants: dict[str, threading.BoundedSemaphore] = {}
+        self._upload_tenants: dict[str, tuple[threading.BoundedSemaphore, int]] = {}
         self._closed = False
         self._lock_fd = None
         self._users_fd = None
@@ -357,21 +357,34 @@ class StorageService:
                 pass
             self._lock_fd = None
 
+    def _drop_upload_reference(self, tenant: str) -> None:
+        with self._dir_lock:
+            tenant_slot, users = self._upload_tenants[tenant]
+            if users <= 1:
+                self._upload_tenants.pop(tenant, None)
+            else:
+                self._upload_tenants[tenant] = (tenant_slot, users - 1)
+
     @contextmanager
     def upload_slot(self, tenant: str):
         """Bound admitted streams without queuing unbounded ThreadingHTTPServer readers."""
         tenant = self._tenant(tenant)
-        with self._dir_lock:
-            tenant_slot = self._upload_tenants.setdefault(tenant, threading.BoundedSemaphore(4))
         if not self._upload_global.acquire(blocking=False):
             raise UploadBusy("global upload capacity is busy")
         try:
-            if not tenant_slot.acquire(blocking=False):
-                raise UploadBusy("tenant upload capacity is busy")
+            with self._dir_lock:
+                tenant_slot, users = self._upload_tenants.get(
+                    tenant, (threading.BoundedSemaphore(4), 0))
+                self._upload_tenants[tenant] = (tenant_slot, users + 1)
             try:
-                yield
+                if not tenant_slot.acquire(blocking=False):
+                    raise UploadBusy("tenant upload capacity is busy")
+                try:
+                    yield
+                finally:
+                    tenant_slot.release()
             finally:
-                tenant_slot.release()
+                self._drop_upload_reference(tenant)
         finally:
             self._upload_global.release()
 
