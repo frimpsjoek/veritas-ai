@@ -115,6 +115,15 @@ def test_zip_stream_replace_head_and_depth_one_listing(dav_server):
     assert call(port, "GET", url, basic(issued))[2] == replacement
 
 
+def test_file_propfind_does_not_list_the_whole_collection(dav_server, monkeypatch):
+    port, store, issued = dav_server
+    url = f"/webdav/{issued['username']}/zotero/PAPER001.prop"
+    assert call(port, "PUT", url, basic(issued), b"one")[0] == 201
+    monkeypatch.setattr(store, "list", lambda _tenant: pytest.fail("file PROPFIND called full collection list"))
+    status, _, document = call(port, "PROPFIND", url, {**basic(issued), "Depth": "0"}, PROBE_XML)
+    assert status == 207 and b"<D:getcontentlength>3</D:getcontentlength>" in document
+
+
 def test_basic_auth_is_route_scoped_and_bound_to_url_username(dav_server):
     port, store, issued = dav_server
     root = f"/webdav/{issued['username']}/zotero/"

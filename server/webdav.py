@@ -184,9 +184,10 @@ def _propfind(handler, route: Route, store: zotero_storage.StorageService, tenan
     if not base.endswith("/"):
         base += "/"
     if route.collection == "file":
-        row = next((item for item in store.list(tenant) if item["name"] == route.name), None)
-        if row is None:
-            raise DavError(404, "not found")
+        try:
+            row = store.get(tenant, route.name)
+        except FileNotFoundError:
+            raise DavError(404, "not found") from None
         _response_xml(root, base.removesuffix("/"), metadata=row)
     else:
         _response_xml(root, base)

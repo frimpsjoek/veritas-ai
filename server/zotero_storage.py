@@ -501,10 +501,10 @@ class StorageService:
                                      (tenant, name, tenant, name)).fetchone()
                 if present is None and names >= MAX_FILES:
                     raise QuotaExceeded("attachment object count")
-                usage = self._sum(db, tenant)
+                usage = self._counter(db, f"tenant:{tenant}")
                 if size > self.config.user_bytes - usage:
                     raise QuotaExceeded("user")
-                pool = self._sum(db, None)
+                pool = self._counter(db, "pool")
                 if size > self.config.pool_bytes - pool:
                     raise QuotaExceeded("pool")
                 db.execute("INSERT INTO reservations VALUES (?,?,?,?,?,?,'streaming')",
@@ -669,6 +669,15 @@ class StorageService:
             finally:
                 self._finish_open(tenant, object_id)
         raise FileNotFoundError(name)
+
+    def get(self, tenant: str, name: str) -> dict:
+        tenant, name = self._tenant(tenant), self._name(name)
+        with closing(self._connect()) as db:
+            row = db.execute("SELECT name,size,sha256,modified FROM files WHERE tenant=? AND name=?",
+                             (tenant, name)).fetchone()
+        if row is None:
+            raise FileNotFoundError(name)
+        return dict(row)
 
     def list(self, tenant: str) -> list[dict]:
         tenant = self._tenant(tenant)

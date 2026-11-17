@@ -113,6 +113,26 @@ def test_usage_counters_track_transitions_and_recovery(store, tmp_path):
     recovered.close()
 
 
+def test_reservation_hot_path_never_scans_usage_rows(store, monkeypatch):
+    def fail(*_args):
+        raise AssertionError("reservation called the full-table usage scan")
+    monkeypatch.setattr(store, "_sum", fail)
+    reservation = store.reserve(TENANT_A, "PAPER001.prop", 3)
+    digest = store.write_upload(reservation, io.BytesIO(b"new"))
+    assert store.publish(reservation, digest) == "created"
+    assert store.status(TENANT_A)["user_used"] == 3
+    assert store.pool_used() == 3
+
+
+def test_single_attachment_lookup_does_not_call_collection_list(store, monkeypatch):
+    write(store, TENANT_A, "PAPER001.prop", b"one")
+    write(store, TENANT_A, "OTHER001.prop", b"two")
+    monkeypatch.setattr(store, "list", lambda _tenant: pytest.fail("single lookup called full list"))
+    row = store.get(TENANT_A, "PAPER001.prop")
+    assert row["name"] == "PAPER001.prop" and row["size"] == 3
+    assert row["sha256"] == hashlib.sha256(b"one").hexdigest()
+
+
 def test_failed_abort_cleanup_keeps_reservation_and_recovers_all_tenant_dirs(store, monkeypatch):
     reservation = store.reserve(TENANT_A, "PAPER001.prop", 3)
     store.write_upload(reservation, io.BytesIO(b"new"))
