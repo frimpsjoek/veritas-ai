@@ -518,7 +518,11 @@ export async function createLocalRuntime(deps) {
   /** @param {string} id @param {{ id: string, version?: number }} ref */
   async function readResultVersion(id, ref) {
     const wait = /^review:([A-Za-z0-9_-]{1,64})$/.exec(id);
-    if (wait) return ref.id === SCREENING_RESULT_ID ? screeningResultOf(wait[1]) : null;
+    if (wait) {
+      const version = ref.version ?? 1; // the virtual screening result has exactly one version
+      if (ref.id !== SCREENING_RESULT_ID || !Number.isSafeInteger(version) || version !== 1) return null;
+      return screeningResultOf(wait[1]);
+    }
     const view = await sessionView(id);
     const summary = view.results.find((r) => r.ref.id === ref.id);
     if (!summary) return null;
