@@ -10,6 +10,8 @@ import subprocess
 import sys
 import threading
 from contextlib import ExitStack
+from stat import S_IFDIR
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -263,6 +265,18 @@ def test_tenant_directory_descriptors_are_bounded_across_operations_and_recovery
         assert attachment.read() == b"x"
     assert count_fds() == baseline
     recovered.close()
+
+
+def test_chmod_failure_closes_new_directory_descriptor(store, monkeypatch):
+    monkeypatch.setattr(zotero_storage.os, "mkdir", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(zotero_storage.os, "open", lambda *_args, **_kwargs: 42)
+    monkeypatch.setattr(zotero_storage.os, "fstat", lambda _fd: SimpleNamespace(st_mode=S_IFDIR))
+    closed = []
+    monkeypatch.setattr(zotero_storage.os, "close", closed.append)
+    monkeypatch.setattr(zotero_storage.os, "fchmod", lambda *_args: (_ for _ in ()).throw(PermissionError("denied")))
+    with pytest.raises(PermissionError):
+        store._mkdir_open(1, "tenant")
+    assert closed == [42]
 
 
 def test_second_instance_cannot_initialize_or_run_recovery(tmp_path):

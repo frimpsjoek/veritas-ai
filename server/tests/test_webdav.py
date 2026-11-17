@@ -224,6 +224,33 @@ def test_idle_authenticated_upload_times_out_and_releases(tmp_path, monkeypatch)
         store.close()
 
 
+def test_idle_propfind_body_read_times_out(tmp_path, monkeypatch):
+    config = zotero_storage.PublicConfig(PUBLIC, pool_bytes=1_000, user_bytes=500,
+                                        read_timeout_seconds=0.05, pbkdf2_iterations=100)
+    store = zotero_storage.StorageService(tmp_path / "users", tmp_path / "storage.sqlite", config)
+    monkeypatch.setattr(http_api, "ZOTERO_STORAGE", store, raising=False)
+    monkeypatch.setattr(http_api, "ZOTERO_STORAGE_CONFIG", config, raising=False)
+    issued = store.issue_credentials(TENANT_A)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), http_api.Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        path = f"/webdav/{issued['username']}/zotero/"
+        headers = {**PHONE, **basic(issued), "Depth": "0", "Content-Length": str(64 * 1024),
+                   "Content-Type": "text/xml; charset=utf-8"}
+        request = f"PROPFIND {path} HTTP/1.1\r\n".encode()
+        request += b"".join(name.encode() + b": " + value.encode() + b"\r\n"
+                             for name, value in headers.items()) + b"\r\n"
+        with socket.create_connection(("127.0.0.1", server.server_address[1]), timeout=5) as connection:
+            connection.settimeout(0.5)
+            connection.sendall(request)
+            response = connection.recv(4096)
+        assert b" 408 " in response
+    finally:
+        server.shutdown()
+        server.server_close()
+        store.close()
+
+
 def test_verifier_admission_rejects_excess_work_promptly(dav_server, monkeypatch):
     port, store, issued = dav_server
     condition = threading.Condition()

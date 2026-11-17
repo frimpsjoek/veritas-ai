@@ -303,11 +303,17 @@ class StorageService:
         except FileExistsError:
             pass
         fd = os.open(name, DIRECTORY_FLAGS, dir_fd=parent)
-        if not stat.S_ISDIR(os.fstat(fd).st_mode):
-            os.close(fd)
-            raise StorageCorrupt("invalid Zotero attachment directory")
-        os.fchmod(fd, 0o700)
-        return fd
+        try:
+            if not stat.S_ISDIR(os.fstat(fd).st_mode):
+                raise StorageCorrupt("invalid Zotero attachment directory")
+            os.fchmod(fd, 0o700)
+            return fd
+        except BaseException:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            raise
 
     @contextmanager
     def _tenant_dirs(self, tenant: str):

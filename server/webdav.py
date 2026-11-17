@@ -55,7 +55,10 @@ def _answer(handler, status: int, body: bytes = b"", headers: dict | None = None
     handler.send_header("Content-Length", str(len(body) if content_length is None else content_length))
     handler.end_headers()
     if handler.command != "HEAD" and status not in (204, 304) and body:
-        handler.wfile.write(body)
+        try:
+            handler.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            handler.close_connection = True
 
 
 def _route(raw_path: str) -> Route:
@@ -136,7 +139,7 @@ def _length(handler, *, required: bool, limit: int | None = None) -> int:
     return length
 
 
-def _xml(handler) -> int:
+def _xml(handler, timeout_seconds: float) -> int:
     value = handler.headers.get("Depth", "0")
     if value.lower() == "infinity":
         raise DavError(403, "Depth: infinity is refused", close=True)
@@ -144,7 +147,12 @@ def _xml(handler) -> int:
     if depth is None:
         raise DavError(400, "Depth must be 0 or 1", close=True)
     length = _length(handler, required=False, limit=XML_LIMIT)
-    raw = handler.rfile.read(length)
+    previous_timeout = handler.connection.gettimeout()
+    handler.connection.settimeout(timeout_seconds)
+    try:
+        raw = handler.rfile.read(length)
+    finally:
+        handler.connection.settimeout(previous_timeout)
     if len(raw) != length:
         raise DavError(400, "short XML body", close=True)
     if raw:
@@ -181,7 +189,7 @@ def _response_xml(root, href: str, *, metadata: dict | None = None) -> None:
 
 
 def _propfind(handler, route: Route, store: zotero_storage.StorageService, tenant: str) -> None:
-    depth = _xml(handler)
+    depth = _xml(handler, store.config.read_timeout_seconds)
     root = ET.Element(f"{{{DAV_NS}}}multistatus")
     base = urlsplit(handler.path).path
     if not base.endswith("/"):
