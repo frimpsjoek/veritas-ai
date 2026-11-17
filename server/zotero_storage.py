@@ -196,7 +196,6 @@ class StorageService:
         self.ledger_path = Path(ledger_path)
         self._dir_lock = threading.Lock()
         self._claim_lock = threading.Lock()
-        self._directory_fds: dict[str, tuple[int, int, int]] = {}
         self._opening_claims: dict[str, int] = {}
         self._retiring_ids: set[str] = set()
         self._upload_global = threading.BoundedSemaphore(8)
@@ -310,13 +309,12 @@ class StorageService:
         os.fchmod(fd, 0o700)
         return fd
 
-    def _tenant_dirs(self, tenant: str) -> tuple[int, int, int]:
+    @contextmanager
+    def _tenant_dirs(self, tenant: str):
+        """Hold a tenant's directory descriptors only for one filesystem operation."""
         self._tenant(tenant)
-        with self._dir_lock:
-            found = self._directory_fds.get(tenant)
-            if found is not None:
-                return found
-            opened = []
+        opened = []
+        try:
             try:
                 tenant_fd = self._mkdir_open(self._users_fd, tenant)
                 opened.append(tenant_fd)
@@ -326,32 +324,20 @@ class StorageService:
                 opened.append(uploads_fd)
                 objects_fd = self._mkdir_open(storage_fd, "objects")
                 opened.append(objects_fd)
-                os.close(storage_fd)
-                opened.remove(storage_fd)
             except OSError as error:
-                for fd in opened:
-                    try:
-                        os.close(fd)
-                    except OSError:
-                        pass
                 raise StorageCorrupt("cannot open Zotero attachment directories") from error
-            found = (tenant_fd, uploads_fd, objects_fd)
-            self._directory_fds[tenant] = found
-            return found
+            yield tenant_fd, uploads_fd, objects_fd
+        finally:
+            for fd in reversed(opened):
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
 
     def close(self) -> None:
         if self._closed:
             return
         self._closed = True
-        with self._dir_lock:
-            groups = list(self._directory_fds.values())
-            self._directory_fds.clear()
-        for group in groups:
-            for fd in group:
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
         if self._users_fd is not None:
             try:
                 os.close(self._users_fd)
@@ -488,7 +474,8 @@ class StorageService:
         if isinstance(size, bool) or not isinstance(size, int) or not 0 <= size <= SQLITE_MAX:
             raise InvalidResource("invalid attachment length")
         reservation_id, object_id = uuid.uuid4().hex, uuid.uuid4().hex
-        self._tenant_dirs(tenant)  # fail before creating a durable reservation on an unsafe directory
+        with self._tenant_dirs(tenant):
+            pass  # fail before creating a durable reservation on an unsafe directory
         with closing(self._connect()) as db:
             db.execute("BEGIN IMMEDIATE")
             try:
@@ -517,29 +504,29 @@ class StorageService:
         return Reservation(reservation_id, tenant, name, object_id, size)
 
     def write_upload(self, reservation: Reservation, stream: BinaryIO) -> str:
-        _, uploads_fd, _ = self._tenant_dirs(reservation.tenant)
-        temporary = reservation.id + ".tmp"
-        digest = hashlib.sha256()
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
-        fd = os.open(temporary, flags, 0o600, dir_fd=uploads_fd)
-        try:
-            remaining = reservation.size
-            while remaining:
-                block = stream.read(min(CHUNK, remaining))
-                if not block:
-                    raise ShortBody("attachment body ended before Content-Length")
-                view = memoryview(block)
-                while view:
-                    written = os.write(fd, view)
-                    if written <= 0:
-                        raise OSError("attachment write made no progress")
-                    view = view[written:]
-                digest.update(block)
-                remaining -= len(block)
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-        return digest.hexdigest()
+        with self._tenant_dirs(reservation.tenant) as (_, uploads_fd, _):
+            temporary = reservation.id + ".tmp"
+            digest = hashlib.sha256()
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+            fd = os.open(temporary, flags, 0o600, dir_fd=uploads_fd)
+            try:
+                remaining = reservation.size
+                while remaining:
+                    block = stream.read(min(CHUNK, remaining))
+                    if not block:
+                        raise ShortBody("attachment body ended before Content-Length")
+                    view = memoryview(block)
+                    while view:
+                        written = os.write(fd, view)
+                        if written <= 0:
+                            raise OSError("attachment write made no progress")
+                        view = view[written:]
+                    digest.update(block)
+                    remaining -= len(block)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            return digest.hexdigest()
 
     @staticmethod
     def _unlink_at(directory: int, name: str) -> None:
@@ -581,10 +568,10 @@ class StorageService:
     def publish(self, reservation: Reservation, sha256: str) -> str:
         if not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", sha256):
             raise ValueError("invalid upload digest")
-        _, uploads_fd, objects_fd = self._tenant_dirs(reservation.tenant)
-        os.rename(reservation.id + ".tmp", reservation.object_id,
-                  src_dir_fd=uploads_fd, dst_dir_fd=objects_fd)
-        os.fsync(objects_fd)
+        with self._tenant_dirs(reservation.tenant) as (_, uploads_fd, objects_fd):
+            os.rename(reservation.id + ".tmp", reservation.object_id,
+                      src_dir_fd=uploads_fd, dst_dir_fd=objects_fd)
+            os.fsync(objects_fd)
         old = self._publish_rows(reservation, sha256)
         # After the visible-version commit, cleanup failure cannot fail the upload.
         if old is not None:
@@ -607,12 +594,12 @@ class StorageService:
             except BaseException:
                 db.execute("ROLLBACK")
                 raise
-        _, uploads_fd, objects_fd = self._tenant_dirs(reservation.tenant)
-        # The reservation remains if either unlink/fsync fails, for next-start recovery.
-        self._unlink_at(uploads_fd, reservation.id + ".tmp")
-        os.fsync(uploads_fd)
-        self._unlink_at(objects_fd, reservation.object_id)
-        os.fsync(objects_fd)
+        with self._tenant_dirs(reservation.tenant) as (_, uploads_fd, objects_fd):
+            # The reservation remains if either unlink/fsync fails, for next-start recovery.
+            self._unlink_at(uploads_fd, reservation.id + ".tmp")
+            os.fsync(uploads_fd)
+            self._unlink_at(objects_fd, reservation.object_id)
+            os.fsync(objects_fd)
         with closing(self._connect()) as db:
             db.execute("BEGIN IMMEDIATE")
             try:
@@ -656,8 +643,8 @@ class StorageService:
             if not self._claim(object_id):
                 continue
             try:
-                _, _, objects_fd = self._tenant_dirs(tenant)
-                fd = os.open(object_id, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=objects_fd)
+                with self._tenant_dirs(tenant) as (_, _, objects_fd):
+                    fd = os.open(object_id, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=objects_fd)
                 details = os.fstat(fd)
                 if not stat.S_ISREG(details.st_mode) or details.st_size != row["size"]:
                     os.close(fd)
@@ -724,9 +711,9 @@ class StorageService:
             if self._opening_claims.get(object_id, 0):
                 return False
         try:
-            _, _, objects_fd = self._tenant_dirs(tenant)
-            self._unlink_at(objects_fd, object_id)
-            os.fsync(objects_fd)
+            with self._tenant_dirs(tenant) as (_, _, objects_fd):
+                self._unlink_at(objects_fd, object_id)
+                os.fsync(objects_fd)
             self._remove_garbage_row(object_id, tenant)
         finally:
             with self._claim_lock:
@@ -747,22 +734,22 @@ class StorageService:
             garbage = [dict(row) for row in db.execute("SELECT * FROM garbage")]
         referenced = {row["object_id"] for row in (*active, *pending, *garbage)}
         for row in active:
-            _, _, objects_fd = self._tenant_dirs(row["tenant"])
-            try:
-                info = os.stat(row["object_id"], dir_fd=objects_fd, follow_symlinks=False)
-            except OSError:
-                raise StorageCorrupt("active Zotero attachment is missing") from None
+            with self._tenant_dirs(row["tenant"]) as (_, _, objects_fd):
+                try:
+                    info = os.stat(row["object_id"], dir_fd=objects_fd, follow_symlinks=False)
+                except OSError:
+                    raise StorageCorrupt("active Zotero attachment is missing") from None
             if not stat.S_ISREG(info.st_mode) or info.st_size != row["size"]:
                 raise StorageCorrupt("active Zotero attachment is inconsistent")
         active_ids = {row["object_id"] for row in active}
         for row in pending:
             if row["object_id"] in active_ids:
                 raise StorageCorrupt("upload reservation is both active and pending")
-            _, uploads_fd, objects_fd = self._tenant_dirs(row["tenant"])
-            self._unlink_at(uploads_fd, row["id"] + ".tmp")
-            os.fsync(uploads_fd)
-            self._unlink_at(objects_fd, row["object_id"])
-            os.fsync(objects_fd)
+            with self._tenant_dirs(row["tenant"]) as (_, uploads_fd, objects_fd):
+                self._unlink_at(uploads_fd, row["id"] + ".tmp")
+                os.fsync(uploads_fd)
+                self._unlink_at(objects_fd, row["object_id"])
+                os.fsync(objects_fd)
             with closing(self._connect()) as db:
                 db.execute("BEGIN IMMEDIATE")
                 try:
@@ -779,16 +766,16 @@ class StorageService:
         # Rows alone do not cover legacy crash leftovers: find every existing tenant too.
         tenants.update(name for name in os.listdir(self._users_fd) if TENANT.fullmatch(name))
         for tenant in tenants:
-            _, uploads_fd, objects_fd = self._tenant_dirs(tenant)
-            for name in os.listdir(uploads_fd):
-                if not re.fullmatch(r"[0-9a-f]{32}\.tmp", name):
-                    raise StorageCorrupt("unexpected Zotero attachment upload")
-                self._unlink_at(uploads_fd, name)
-            os.fsync(uploads_fd)
-            for name in os.listdir(objects_fd):
-                if not IDENTIFIER.fullmatch(name):
-                    raise StorageCorrupt("unexpected Zotero attachment object")
-                if name not in referenced:
-                    self._unlink_at(objects_fd, name)
-            os.fsync(objects_fd)
+            with self._tenant_dirs(tenant) as (_, uploads_fd, objects_fd):
+                for name in os.listdir(uploads_fd):
+                    if not re.fullmatch(r"[0-9a-f]{32}\.tmp", name):
+                        raise StorageCorrupt("unexpected Zotero attachment upload")
+                    self._unlink_at(uploads_fd, name)
+                os.fsync(uploads_fd)
+                for name in os.listdir(objects_fd):
+                    if not IDENTIFIER.fullmatch(name):
+                        raise StorageCorrupt("unexpected Zotero attachment object")
+                    if name not in referenced:
+                        self._unlink_at(objects_fd, name)
+                os.fsync(objects_fd)
         self._reconcile_usage()

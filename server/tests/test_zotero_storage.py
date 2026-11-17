@@ -136,9 +136,9 @@ def test_single_attachment_lookup_does_not_call_collection_list(store, monkeypat
 def test_failed_abort_cleanup_keeps_reservation_and_recovers_all_tenant_dirs(store, monkeypatch):
     reservation = store.reserve(TENANT_A, "PAPER001.prop", 3)
     store.write_upload(reservation, io.BytesIO(b"new"))
-    _, uploads_fd, objects_fd = store._tenant_dirs(TENANT_A)
-    os.rename(reservation.id + ".tmp", reservation.object_id,
-              src_dir_fd=uploads_fd, dst_dir_fd=objects_fd)  # a crash-shaped renamed-but-unpublished reservation
+    with store._tenant_dirs(TENANT_A) as (_, uploads_fd, objects_fd):
+        os.rename(reservation.id + ".tmp", reservation.object_id,
+                  src_dir_fd=uploads_fd, dst_dir_fd=objects_fd)  # crash-shaped renamed/unpublished reservation
     real_unlink = store._unlink_at
     seen = 0
 
@@ -158,8 +158,8 @@ def test_failed_abort_cleanup_keeps_reservation_and_recovers_all_tenant_dirs(sto
     store.close()
     recovered = make_store(store.ledger_path.parent)
     assert recovered.pool_used() == 0
-    _, _, objects_fd = recovered._tenant_dirs(TENANT_A)
-    assert os.listdir(objects_fd) == []
+    with recovered._tenant_dirs(TENANT_A) as (_, _, objects_fd):
+        assert os.listdir(objects_fd) == []
     recovered.close()
 
 
@@ -244,6 +244,25 @@ def test_concurrent_reservations_cannot_oversubscribe_pool(store):
             "SELECT size FROM files UNION ALL SELECT size FROM reservations UNION ALL SELECT size FROM garbage"))
     # Counters may be temporarily stale only outside a transaction; at quiescence they must exactly match rows.
     assert store.pool_used() == physical
+
+
+@pytest.mark.skipif(not Path("/proc/self/fd").is_dir(), reason="descriptor counts require procfs")
+def test_tenant_directory_descriptors_are_bounded_across_operations_and_recovery(store, tmp_path):
+    def count_fds():
+        return len(os.listdir("/proc/self/fd"))
+
+    baseline = count_fds()
+    for index in range(8):
+        tenant = f"{index + 1:064x}"
+        write(store, tenant, "PAPER001.prop", b"x")
+    assert count_fds() == baseline
+    store.close()
+    recovered = make_store(tmp_path)
+    assert count_fds() == baseline
+    with recovered.open_read(f"{8:064x}", "PAPER001.prop") as attachment:
+        assert attachment.read() == b"x"
+    assert count_fds() == baseline
+    recovered.close()
 
 
 def test_second_instance_cannot_initialize_or_run_recovery(tmp_path):

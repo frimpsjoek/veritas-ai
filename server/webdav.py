@@ -63,6 +63,9 @@ def _route(raw_path: str) -> Route:
         parsed = urlsplit(raw_path)
         if parsed.query or parsed.fragment:
             raise ValueError
+        lowered = parsed.path.lower()
+        if "%2f" in lowered or "%5c" in lowered:
+            raise ValueError("encoded path separators are not allowed")
         decoded = unquote(parsed.path, errors="strict")
         if "\x00" in decoded or "\\" in decoded:
             raise ValueError

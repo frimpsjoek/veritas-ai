@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 import http_api
+import webdav
 import zotero_storage
 
 TENANT_A = "a" * 64
@@ -168,6 +169,13 @@ def test_resource_paths_cannot_escape_or_create_markers(dav_server, name):
     port, _, issued = dav_server
     path = f"/webdav/{issued['username']}/zotero/{name}"
     assert call(port, "PUT", path, basic(issued), b"bad")[0] == 404
+
+
+def test_encoded_separator_in_namespace_is_not_a_file_route(dav_server):
+    _, _, issued = dav_server
+    for separator in ("%2F", "%2f", "%5C", "%5c"):
+        with pytest.raises(webdav.DavError):
+            webdav._route(f"/webdav/{issued['username']}/zotero{separator}PAPER001.prop")
 
 
 def test_quota_and_xml_limits(dav_server):
