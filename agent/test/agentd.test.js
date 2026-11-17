@@ -48,6 +48,127 @@ async function withServer(service, run) {
   }
 }
 
+async function withTenantServer(services, run) {
+  const releases = [];
+  const agentd = createAgentd(services.legacy, {
+    secret: 's3cret',
+    mcpHandler: async () => ({ status: 200, body: 'legacy' }),
+    async resolveService(tenant) {
+      if (!services[tenant]) throw Object.assign(new Error('unknown tenant'), { status: 503 });
+      return {
+        service: services[tenant],
+        mcpHandler: async () => ({ status: 200, body: tenant }),
+        release: () => { releases.push(tenant); },
+      };
+    },
+    async resolveMcpService(tenant) {
+      if (!services[tenant]) throw Object.assign(new Error('unknown tenant'), { status: 404 });
+      return {
+        service: services[tenant],
+        mcpHandler: async ({ headers: reqHeaders }) => reqHeaders.authorization === `Bearer ${tenant}-token`
+          ? { status: 200, body: tenant } : { status: 401, body: 'unauthorized' },
+        release: () => { releases.push(tenant); },
+      };
+    },
+  });
+  const port = await agentd.listen(0);
+  const base = `http://127.0.0.1:${port}`;
+  try { await run(base, releases); } finally { await agentd.close(); }
+}
+
+function labeledService(label) {
+  return { conversations: { async list() { return [label]; } } };
+}
+
+test('tenant routes select isolated services, split MCP handlers, and deny background ownership', async () => {
+  const A = 'a'.repeat(64);
+  const B = 'b'.repeat(64);
+  const services = { legacy: labeledService('legacy'), [A]: labeledService(A), [B]: labeledService(B) };
+  await withTenantServer(services, async (base, releases) => {
+    const get = (path, tenant) => fetch(`${base}${path}`, {
+      headers: { authorization: 'Bearer s3cret', ...(tenant ? { 'x-veritas-tenant': tenant } : {}) },
+    });
+    assert.deepEqual(await (await get('/conversations')).json(), ['legacy']);
+    assert.deepEqual(await (await get('/conversations', A)).json(), [A]);
+    assert.deepEqual(await (await get('/conversations', B)).json(), [B]);
+    assert.equal((await get('/conversations', 'not-a-tenant')).status, 400);
+    assert.equal((await get('/reviews', A)).status, 403);
+    assert.equal((await get('/routines', A)).status, 403);
+    assert.equal((await get('/conversations', 'f'.repeat(64))).status, 503);
+
+    assert.equal(await (await fetch(`${base}/mcp`, { method: 'POST', body: '{}' })).text(), 'legacy');
+    assert.equal(await (await fetch(`${base}/mcp/${A}`, { method: 'POST', headers: { authorization: `Bearer ${A}-token` }, body: '{}' })).text(), A);
+    assert.equal(await (await fetch(`${base}/mcp/${B}`, { method: 'POST', headers: { authorization: `Bearer ${B}-token` }, body: '{}' })).text(), B);
+    assert.equal((await fetch(`${base}/mcp/${A}`, { method: 'POST', headers: { authorization: `Bearer ${B}-token` }, body: '{}' })).status, 401);
+    assert.deepEqual(releases.filter((tenant) => tenant === A).length, 3);
+  });
+});
+
+test('unknown MCP tenants are 404 and cannot trigger runtime construction or adoption', async () => {
+  let constructed = 0;
+  let legacyCalls = 0;
+  const legacy = labeledService('legacy');
+  const agentd = createAgentd(legacy, {
+    secret: 's3cret', mcpHandler: async () => { legacyCalls += 1; return { status: 200, body: 'legacy' }; },
+    async resolveService() { constructed += 1; throw new Error('must not construct for denylisted storage'); },
+    async resolveMcpService() { throw Object.assign(new Error('unknown tenant'), { status: 404 }); },
+  });
+  const port = await agentd.listen(0);
+  const base = `http://127.0.0.1:${port}`;
+  try {
+    const empty = await fetch(`${base}/mcp/`, { method: 'POST', body: '{}' });
+    assert.equal(empty.status, 400);
+    assert.equal(legacyCalls, 0, 'an empty tenant segment is not an alias for the legacy MCP handler');
+    const unknown = await fetch(`${base}/mcp/${'f'.repeat(64)}`, { method: 'POST', body: '{}' });
+    assert.equal(unknown.status, 404);
+    for (const path of ['/conversations/adopt', '/projects/adopt']) {
+      const response = await fetch(`${base}${path}`, {
+        method: 'POST', headers: { authorization: 'Bearer s3cret', 'x-veritas-tenant': 'a'.repeat(64) }, body: '{}',
+      });
+      assert.equal(response.status, 403);
+    }
+    for (const body of [
+      { mcp: [{ name: 'evil', transport: 'stdio', command: '/bin/sh', args: ['-c', 'id'] }] },
+      { endpoints: [{ name: 'alcf-metis', baseUrl: 'http://127.0.0.1:27182', key: null }] },
+    ]) {
+      const response = await fetch(`${base}/settings`, {
+        method: 'POST', headers: { authorization: 'Bearer s3cret', 'x-veritas-tenant': 'a'.repeat(64), 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      assert.equal(response.status, 403);
+    }
+    const custom = await fetch(`${base}/mcp-servers`, {
+      method: 'POST', headers: { authorization: 'Bearer s3cret', 'x-veritas-tenant': 'a'.repeat(64) }, body: '{}',
+    });
+    assert.equal(custom.status, 403);
+    const nested = await fetch(`${base}/sessions/restore`, {
+      method: 'POST', headers: { authorization: 'Bearer s3cret', 'x-veritas-tenant': 'a'.repeat(64), 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'safe', ref: { id: 'R', version: 'x/../../../../../../../../globus-auth' } }),
+    });
+    assert.equal(nested.status, 403);
+    const radar = await fetch(`${base}/radar/check`, {
+      method: 'POST', headers: { authorization: 'Bearer s3cret', 'x-veritas-tenant': 'a'.repeat(64), 'content-type': 'application/json' },
+      body: JSON.stringify({ input: { url: 'http://127.0.0.1:27182/status' } }),
+    });
+    assert.equal(radar.status, 403);
+    const traversal = await fetch(`${base}/conversations/load?id=..%2Flegacy`, {
+      headers: { authorization: 'Bearer s3cret', 'x-veritas-tenant': 'a'.repeat(64) },
+    });
+    assert.equal(traversal.status, 403);
+    assert.equal(constructed, 0);
+  } finally { await agentd.close(); }
+});
+
+test('a static agentd cannot be tricked into treating a tenant header as the legacy service', async () => {
+  const service = await makeService([]);
+  await withServer(service, async (base) => {
+    const res = await fetch(`${base}/conversations`, {
+      headers: { authorization: 'Bearer s3cret', 'x-veritas-tenant': 'a'.repeat(64) },
+    });
+    assert.equal(res.status, 400);
+  });
+});
+
 test('GET /ping answers ok, for a caller (agent-host.js) checking the server is reachable at all', async () => {
   const service = await makeService([]);
   await withServer(service, async (base) => {
@@ -68,6 +189,28 @@ test('the route table dispatches GET /conversations to conversations.list, with 
     assert.equal(res.status, 200);
     const list = await res.json();
     assert.ok(list.some((c) => c.id === id));
+  });
+});
+
+test('GET /sessions/read treats invalid versions as missing instead of surfacing storage errors', async () => {
+  const service = await makeService([]);
+  const id = await service.conversations.create('chat');
+  await service.sessions.put(id, { kind: 'find', query: 'widgets' }, {
+    ref: { id: '', version: 0 }, kind: 'papers', title: 'Widgets', rows: [], columns: [],
+  });
+  await withServer(service, async (base) => {
+    for (const version of [-1, 0.5, 1.5]) {
+      const res = await fetch(`${base}/sessions/read?id=${id}&result=R1&version=${version}`, {
+        headers: { authorization: 'Bearer s3cret' },
+      });
+      assert.equal(res.status, 200, `invalid V${version} is not a server error`);
+      assert.equal(await res.json(), null);
+    }
+    const valid = await fetch(`${base}/sessions/read?id=${id}&result=R1&version=1`, {
+      headers: { authorization: 'Bearer s3cret' },
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).ref.version, 1);
   });
 });
 

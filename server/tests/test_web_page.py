@@ -31,7 +31,7 @@ def web(tmp_path, monkeypatch):
     """A fake web: {url: Response}; every other URL raises like an unreachable site. Records the URLs asked."""
     monkeypatch.setattr(kb, "HOME", tmp_path)
     monkeypatch.setattr(site_icons, "public_host", lambda host: None)
-    monkeypatch.setattr(web_page, "library_pdf", lambda doi: None)
+    monkeypatch.setattr(web_page, "library_pdf", lambda doi, **kwargs: None)
     pages: dict[str, Response] = {}
     calls: list[str] = []
 
@@ -164,7 +164,7 @@ def test_an_open_access_copy_comes_before_the_publisher(web):
 
 def test_the_library_copy_comes_first(web, monkeypatch):
     pages, calls, get = web
-    monkeypatch.setattr(web_page, "library_pdf", lambda doi: ("ATTA1234", "My copy") if doi == DOI else None)
+    monkeypatch.setattr(web_page, "library_pdf", lambda doi, **kwargs: ("ATTA1234", "My copy") if doi == DOI else None)
     answer = web_page.page(f"https://pubs.acs.org/doi/{DOI}", get=get)
     assert answer == {"mode": "pdf", "url": f"https://doi.org/{DOI}", "title": "My copy", "source": "library"}
     assert not calls
@@ -207,10 +207,15 @@ def test_library_pdf_query(tmp_path, monkeypatch):
     zdir = tmp_path / "Zotero"
     zdir.mkdir()
     monkeypatch.setattr(web_page.zotero, "ZOTERO", zdir)
-    monkeypatch.setattr(web_page.zotero, "snapshot", lambda *a, **k: db)
+    def snapshot(*args, **kwargs):
+        copy = sqlite3.connect(":memory:")
+        db.backup(copy)
+        return copy
+    monkeypatch.setattr(web_page.zotero, "snapshot", snapshot)
     monkeypatch.setattr(pdf_route, "resolve", lambda key: tmp_path / f"{key}.pdf")
     assert web_page.library_pdf(DOI) == ("ATTA1234", "A paper")
     assert web_page.library_pdf("10.1/none") is None
+    db.close()
 
 
 # --- G3 /web/pdf ---------------------------------------------------------------------------------------------------
@@ -238,6 +243,6 @@ def test_pdf_file_for_a_doi_in_the_library_is_the_library_file(web, monkeypatch,
     _, calls, get = web
     mine = tmp_path / "mine.pdf"
     mine.write_bytes(b"%PDF-1.4 mine")
-    monkeypatch.setattr(web_page, "library_pdf", lambda doi: ("ATTA1234", "t"))
+    monkeypatch.setattr(web_page, "library_pdf", lambda doi, **kwargs: ("ATTA1234", "t"))
     monkeypatch.setattr(pdf_route, "resolve", lambda key: mine)
     assert web_page.pdf_file(f"https://doi.org/{DOI}", get=get) == mine and not calls

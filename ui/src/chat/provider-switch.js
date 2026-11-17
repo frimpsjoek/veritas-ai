@@ -26,6 +26,19 @@ export function switchOptions(statuses) {
     .map((s) => ({ label: `Use ${nameOf(s.provider)} instead`, choice: /** @type {any} */ ({ provider: s.provider, model: null }) }));
 }
 
+/** Fill in the concrete model that an OpenAI-compatible fallback needs; never offer a null-model OSS turn.
+ *  @param {any} ai @param {{provider: string, state: string}[] | null | undefined} statuses */
+export async function concreteSwitchOptions(ai, statuses) {
+  const options = switchOptions(statuses);
+  const concrete = await Promise.all(options.map(async (option) => {
+    if (!option.choice.provider.startsWith('oss:')) return option;
+    const models = await ai.providers.models(option.choice.provider).catch(() => []);
+    const selected = models.find((/** @type {any} */ model) => model.isDefault) ?? models[0];
+    return selected ? { ...option, choice: { ...option.choice, model: selected.id } } : null;
+  }));
+  return concrete.filter((option) => option !== null);
+}
+
 /**
  * Adds the switch buttons (or the "nothing is set up" line) under a not-installed error. `retry` asks the same question
  * again; without one the buttons only switch.
@@ -40,7 +53,7 @@ export async function offerSwitch(view, box, retry) {
   } catch {
     return; // the plain error stays
   }
-  const options = switchOptions(statuses);
+  const options = await concreteSwitchOptions(ai, statuses);
   const row = h(view.doc, 'div', 'sb-ai-error-switch');
   if (!options.length) {
     row.append(h(view.doc, 'div', 'sb-ai-error-none', NONE_READY));
