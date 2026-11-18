@@ -84,6 +84,37 @@ raise RuntimeError("replacement was supposed to crash")
 '''
 
 
+@pytest.mark.parametrize("change", ["rotate", "revoke"])
+def test_credential_change_during_pbkdf_does_not_authenticate(store, monkeypatch, change):
+    old = store.issue_credentials(TENANT_A)
+    started = threading.Event()
+    resume = threading.Event()
+    original = zotero_storage.hashlib.pbkdf2_hmac
+    result = {}
+
+    def paused(*args, **kwargs):
+        started.set()
+        assert resume.wait(5)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(zotero_storage.hashlib, "pbkdf2_hmac", paused)
+    thread = threading.Thread(target=lambda: result.update(
+        tenant=store.authenticate(old["username"], old["password"])))
+    thread.start()
+    assert started.wait(5)
+    if change == "revoke":
+        store.revoke_credentials(TENANT_A)
+    else:
+        monkeypatch.setattr(zotero_storage.hashlib, "pbkdf2_hmac", original)
+        replacement = store.issue_credentials(TENANT_A)
+        monkeypatch.setattr(zotero_storage.hashlib, "pbkdf2_hmac", paused)
+    resume.set()
+    thread.join(5)
+    assert result["tenant"] is None
+    if change == "rotate":
+        assert store.authenticate(replacement["username"], replacement["password"]) == TENANT_A
+
+
 def test_every_ledger_connection_uses_full_synchronous(store):
     with store._connect() as db:
         assert db.execute("PRAGMA synchronous").fetchone()[0] == 2

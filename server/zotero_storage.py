@@ -422,6 +422,14 @@ class StorageService:
         candidate = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, iterations)
         if not hmac.compare_digest(candidate, expected) or row is None:
             return None
+        # Rotation/revocation may finish while this deliberately expensive hash is running.
+        # Authenticate only against the same credential version that was actually verified.
+        with closing(self._connect()) as db:
+            current = db.execute("SELECT salt,verifier,iterations FROM credentials WHERE username=?",
+                                 (username,)).fetchone()
+        if (current is None or current["salt"] != salt or current["verifier"] != expected
+                or current["iterations"] != iterations):
+            return None
         return row["tenant"]
 
     def revoke_credentials(self, tenant: str) -> bool:
