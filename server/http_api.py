@@ -340,9 +340,13 @@ def _storage_mutation(handler: Handler, identity: dict | None) -> tuple[zotero_s
 def _storage_status(identity: dict | None) -> dict:
     tenant = _storage_tenant(identity)
     if ZOTERO_STORAGE is None:
-        return {"enabled": False, "issued": False, "user_used": 0,
-                "user_quota": ZOTERO_STORAGE_CONFIG.user_bytes,
-                "pool_quota": ZOTERO_STORAGE_CONFIG.pool_bytes}
+        status = {"enabled": False, "issued": False, "user_used": 0,
+                  "user_quota": ZOTERO_STORAGE_CONFIG.user_bytes,
+                  "pool_quota": ZOTERO_STORAGE_CONFIG.pool_bytes}
+        if ZOTERO_STORAGE_CONFIG.enabled:
+            # Configured, but serve() could not open the store (e.g. an unreadable ledger).
+            status["error"] = "Zotero file storage is unavailable"
+        return status
     return ZOTERO_STORAGE.status(tenant)
 
 

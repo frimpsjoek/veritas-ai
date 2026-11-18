@@ -17,7 +17,8 @@ metadata write-back, and personal PDF reading are also outside this PR.
 - The feature is default-disabled. An operator must configure `VERITAS_WEBDAV_PUBLIC_URL` as an absolute canonical
   HTTPS parent URL ending in `/webdav`, with no user information, query, or fragment. A missing or invalid setting
   makes authenticated management GET return `{enabled:false}`, issuance/revocation return 503, and native DAV paths
-  return 404 without opening or exposing stored data.
+  return 404 without opening or exposing stored data. A valid setting whose store cannot be opened at startup
+  disables only WebDAV with the same responses, and management GET adds `error: "Zotero file storage is unavailable"`.
 - The canonical endpoint never comes from `Host`, `Forwarded`, `X-Forwarded-*`, or request-body input. Native HTTP is
   accepted only when the immediate peer is loopback, as the existing server binds solely to `127.0.0.1`. Direct local
   development may use the loopback development exception. Any proxied request must carry exactly

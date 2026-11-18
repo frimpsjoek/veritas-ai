@@ -172,7 +172,10 @@ VERITAS_ZOTERO_USER_QUOTA_BYTES=5368709120
 
 The URL must be absolute HTTPS and end in `/webdav`, with no credentials, query, or fragment. Invalid/absent
 configuration makes management GET return `{enabled:false}`, issuance/revocation return 503, and native DAV paths
-return 404. Quota zero, negative, malformed, or overflow values do not enable unlimited storage.
+return 404. If the URL is valid but the store cannot be opened at startup (for example, an unreadable ledger),
+only WebDAV is disabled: the server logs `Zotero WebDAV disabled: ...`, management GET returns `{enabled:false}` with
+`error: "Zotero file storage is unavailable"`, and the same 503/404 responses apply. Quota zero, negative,
+malformed, or overflow values do not enable unlimited storage.
 
 In **Settings → Folders → Zotero file sync**, a verified Globus user can issue a random Basic username/password once,
 rotate it, or revoke it. The parent address has the form `https://veritas.trinityscience.org/webdav/<username>`.

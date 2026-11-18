@@ -87,6 +87,17 @@ test('disabled configuration is read-only and makes no issuance request', async 
   assert.equal(byText(root, 'Create WebDAV credentials'), undefined);
 });
 
+test('configured but unavailable storage is reported as unavailable, not unconfigured', async () => {
+  const env = environment({ status: { enabled: false, issued: false, user_used: 0,
+    user_quota: 5 * 1024 ** 3, pool_quota: 50 * 1024 ** 3,
+    error: 'Zotero file storage is unavailable' } });
+  const root = zoteroStorageWidget(env.doc, env.host);
+  await flush();
+  assert.match(text(root), /status is unavailable/);
+  assert.doesNotMatch(text(root), /not configured/);
+  assert.equal(byText(root, 'Create WebDAV credentials'), undefined);
+});
+
 test('pending first status is neutral, not reported as unconfigured', async () => {
   const env = environment();
   let resolveStatus;

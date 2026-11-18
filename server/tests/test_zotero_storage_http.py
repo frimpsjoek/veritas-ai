@@ -106,6 +106,17 @@ def test_disabled_management_status_and_mutations(tenant_server, monkeypatch):
     assert status == 404
 
 
+def test_configured_but_unavailable_storage_is_not_reported_as_unconfigured(tenant_server, monkeypatch):
+    # serve() leaves the service unset with a valid endpoint when the ledger is unreadable.
+    port, store = tenant_server
+    monkeypatch.setattr(http_api, "ZOTERO_STORAGE", None)
+    status, _, body = call(port, "GET", "/zotero-storage", authorized())
+    assert status == 200 and body["enabled"] is False and body["issued"] is False
+    assert body["error"] == "Zotero file storage is unavailable"
+    for method in ("POST", "DELETE"):
+        assert call(port, method, "/zotero-storage/credentials", authorized(), {})[0] == 503
+
+
 def test_globus_identity_is_required_and_tenant_header_cannot_spoof(tenant_server):
     port, _ = tenant_server
     for auth, expected in (({}, 401), ({"Authorization": "Bearer admin-token"}, 403),
