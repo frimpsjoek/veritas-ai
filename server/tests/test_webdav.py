@@ -63,7 +63,7 @@ def call(port, method, path, headers=None, body=None):
 def raw_status(port, method, path, headers, body=b""):
     """Send bytes without http.client repairing or constraining malformed framing."""
     lines = [f"{method} {path} HTTP/1.1\r\n".encode()]
-    for name, value in headers.items():
+    for name, value in (headers.items() if isinstance(headers, dict) else headers):
         lines.append(name.encode() + b": " + (value.encode("utf-8") if isinstance(value, str) else value) + b"\r\n")
     request = b"".join(lines) + b"\r\n" + body
     with socket.create_connection(("127.0.0.1", port), timeout=5) as connection:
@@ -162,6 +162,23 @@ def test_invalid_upload_body_framing_is_refused(dav_server, headers, expected):
     path = f"/webdav/{issued['username']}/zotero/PAPER001.prop"
     body = b"" if not headers or "Transfer-Encoding" in headers else b"x"
     assert raw_status(port, "PUT", path, {**PHONE, **basic(issued), **headers}, body) == expected
+
+
+def test_conflicting_content_length_headers_are_rejected_without_reading_body(dav_server):
+    port, store, issued = dav_server
+    path = f"/webdav/{issued['username']}/zotero/PAPER001.prop"
+    headers = [("Host", PHONE["Host"]), ("X-Forwarded-Proto", "https"),
+               *basic(issued).items(), ("Content-Length", "4"), ("Content-Length", "5")]
+    assert raw_status(port, "PUT", path, headers, b"abcd") == 400
+    assert store.pool_used() == 0
+
+
+def test_internal_empty_segments_are_not_resource_aliases(dav_server):
+    _, _, issued = dav_server
+    for path in (f"/webdav/{issued['username']}//zotero/PAPER001.prop",
+                 f"/webdav/{issued['username']}/zotero//PAPER001.prop"):
+        with pytest.raises(webdav.DavError):
+            webdav._route(path)
 
 
 @pytest.mark.parametrize("name", ["../a.prop", "a/b.prop", ".hidden.prop", "a.txt", "a%2fb.prop",

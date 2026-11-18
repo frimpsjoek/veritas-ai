@@ -79,7 +79,9 @@ def _route(raw_path: str) -> Route:
         username = parts[2]
         if not re.fullmatch(r"[A-Za-z0-9_-]{4,128}", username):
             raise ValueError
-        rest = [part for part in parts[3:] if part]
+        rest = parts[3:]
+        if rest and rest[-1] == "":
+            rest.pop()  # one intended trailing slash on the parent or zotero collection
         if not rest:
             return Route(username, "parent", None)
         if rest == ["zotero"]:
@@ -120,11 +122,18 @@ def _basic(handler, store: zotero_storage.StorageService, expected_username: str
 def _length(handler, *, required: bool, limit: int | None = None) -> int:
     if handler.headers.get("Transfer-Encoding"):
         raise DavError(501, "chunked transfer is not supported", close=True)
-    raw = handler.headers.get("Content-Length")
-    if raw is None:
+    if hasattr(handler.headers, "get_all"):
+        values = handler.headers.get_all("Content-Length", [])
+    else:
+        supplied = handler.headers.get("Content-Length")
+        values = [supplied] if supplied is not None else []
+    if not values:
         if required:
             raise DavError(411, "Content-Length is required", close=True)
         return 0
+    if len(values) != 1:
+        raise DavError(400, "exactly one Content-Length is required", close=True)
+    raw = values[0]
     if not raw.isascii() or not raw.isdigit():
         raise DavError(400, "invalid Content-Length", close=True)
     if len(raw) > 19:
