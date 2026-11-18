@@ -87,6 +87,20 @@ test('disabled configuration is read-only and makes no issuance request', async 
   assert.equal(byText(root, 'Create WebDAV credentials'), undefined);
 });
 
+test('pending first status is neutral, not reported as unconfigured', async () => {
+  const env = environment();
+  let resolveStatus;
+  env.host.json = () => new Promise((resolve) => { resolveStatus = resolve; });
+  const root = zoteroStorageWidget(env.doc, env.host);
+  assert.match(text(root), /Checking Zotero file sync status/);
+  assert.doesNotMatch(text(root), /not configured/);
+  assert.equal(byText(root, 'Create WebDAV credentials'), undefined);
+  resolveStatus(env.status);
+  await flush();
+  assert.doesNotMatch(text(root), /Checking Zotero file sync status/);
+  assert.ok(byText(root, 'Create WebDAV credentials'));
+});
+
 test('issuance shows personal endpoint and password once, then hides it on refresh', async () => {
   const env = environment();
   const root = zoteroStorageWidget(env.doc, env.host);

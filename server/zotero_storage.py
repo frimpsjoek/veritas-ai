@@ -208,6 +208,10 @@ class StorageService:
             self._initialize_database()
             if recover:
                 self._recover()
+        except sqlite3.Error as error:
+            # A StorageError lets serve() disable only WebDAV; a raw sqlite3.Error would abort startup.
+            self.close()
+            raise StorageCorrupt("Zotero WebDAV ledger is unreadable") from error
         except BaseException:
             self.close()
             raise

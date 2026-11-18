@@ -319,6 +319,58 @@ def test_second_instance_cannot_initialize_or_run_recovery(tmp_path):
         first.close()
 
 
+def test_corrupt_ledger_is_a_storage_error_and_releases_the_lock(tmp_path):
+    ledger = tmp_path / "storage.sqlite"
+    ledger.write_bytes(b"this is not a sqlite database" * 200)
+    with pytest.raises(zotero_storage.StorageCorrupt) as caught:
+        make_store(tmp_path)
+    assert isinstance(caught.value.__cause__, sqlite3.Error)
+    # serve() degrades only WebDAV for these classes; a raw sqlite3.Error would abort server startup.
+    assert isinstance(caught.value, (OSError, ValueError, zotero_storage.StorageError))
+    ledger.unlink()
+    make_store(tmp_path).close()  # the failed instance released its process lock and descriptors
+
+
+def test_ledger_error_during_recovery_is_a_storage_error(tmp_path, monkeypatch):
+    def broken(self):
+        raise sqlite3.OperationalError("disk I/O error")
+    monkeypatch.setattr(zotero_storage.StorageService, "_recover", broken)
+    with pytest.raises(zotero_storage.StorageCorrupt):
+        make_store(tmp_path)
+    monkeypatch.undo()
+    make_store(tmp_path).close()
+
+
+def test_serve_disables_only_webdav_when_the_ledger_is_corrupt(tmp_path, monkeypatch, capsys):
+    import http_api
+
+    class Started(Exception):
+        pass
+
+    def stop_before_listening(*_args, **_kwargs):
+        raise Started
+
+    (tmp_path / "zotero-storage.sqlite").write_bytes(b"this is not a sqlite database" * 200)
+    monkeypatch.setattr(http_api.kb, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(http_api.zotero_storage, "public_config_from_environment",
+                        lambda: zotero_storage.PublicConfig(PUBLIC))
+    monkeypatch.setattr(http_api, "token", lambda: "t")
+    monkeypatch.setattr(http_api.a2a_api, "ensure_token", lambda: None)
+    monkeypatch.setattr(http_api.globus_auth, "default", lambda: None)
+    monkeypatch.setattr(http_api.agent_api, "supervise", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(http_api.signal, "signal", lambda *_args: None)
+    monkeypatch.setattr(http_api, "restart_when_code_changes", lambda: None)
+    monkeypatch.setattr(http_api, "ThreadingHTTPServer", stop_before_listening)
+    monkeypatch.setattr(http_api, "ZOTERO_STORAGE", None)
+    monkeypatch.setattr(http_api, "ZOTERO_STORAGE_CONFIG", None)
+    monkeypatch.setattr(http_api, "GLOBUS_AUTH", None)
+    monkeypatch.setattr(http_api, "AGENT_SIDECAR", None)
+    with pytest.raises(Started):  # startup reached the listener instead of aborting on the ledger
+        http_api.serve(0)
+    assert http_api.ZOTERO_STORAGE is None
+    assert "Zotero WebDAV disabled: StorageCorrupt" in capsys.readouterr().err
+
+
 def test_invalid_resource_and_tenant_are_refused(store):
     for tenant in (None, "", "../../etc", "A" * 64):
         with pytest.raises(ValueError):

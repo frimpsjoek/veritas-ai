@@ -84,7 +84,9 @@ export function zoteroStorageWidget(doc, host) {
       'For your personal Zotero library attachments only. Metadata continues to sync through zotero.org.');
     const error = state?.error ? h(doc, 'p', 'sbw-hint', state.error) : null;
     const buttons = h(doc, 'div', 'sbw-row');
-    if (!state || !state.enabled) {
+    if (state === null) {
+      summary.textContent = 'Checking Zotero file sync status…';
+    } else if (!state.enabled) {
       summary.textContent = state?.error ? 'Zotero file sync status is unavailable.' :
         'Zotero file sync is not configured. The Veritas operator must configure a canonical HTTPS endpoint.';
     } else {
