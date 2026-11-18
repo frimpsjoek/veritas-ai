@@ -23,6 +23,8 @@ DAV_NS = "DAV:"
 ET.register_namespace("D", DAV_NS)
 VERIFY_SLOTS = threading.BoundedSemaphore(4)
 XML_LIMIT = 64 * 1024
+# The maximum encoded form of the input bounds enforced by authenticate().
+MAX_BASIC_HEADER_BYTES = 4 * ((128 + 256 + 1 + 2) // 3)
 
 
 @dataclass(frozen=True)
@@ -53,7 +55,8 @@ def _answer(handler, status: int, body: bytes = b"", headers: dict | None = None
         handler.send_header(name, value)
     if status not in (204, 304):
         handler.send_header("Content-Type", content_type)
-    handler.send_header("Content-Length", str(len(body) if content_length is None else content_length))
+    if status not in (204, 304):
+        handler.send_header("Content-Length", str(len(body) if content_length is None else content_length))
     handler.end_headers()
     if handler.command != "HEAD" and status not in (204, 304) and body:
         try:
@@ -96,7 +99,7 @@ def _route(raw_path: str) -> Route:
 def _basic(handler, store: zotero_storage.StorageService, expected_username: str) -> str:
     supplied = handler.headers.get("Authorization") or ""
     scheme, _, encoded = supplied.partition(" ")
-    if scheme.lower() != "basic" or not encoded or len(encoded) > 512:
+    if scheme.lower() != "basic" or not encoded or len(encoded) > MAX_BASIC_HEADER_BYTES:
         raise DavError(401, "valid Zotero WebDAV credentials are required",
                        {"WWW-Authenticate": 'Basic realm="Veritas Zotero"'}, close=True)
     try:

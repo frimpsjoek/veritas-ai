@@ -126,6 +126,27 @@ def test_file_propfind_does_not_list_the_whole_collection(dav_server, monkeypatc
     assert status == 207 and b"<D:getcontentlength>3</D:getcontentlength>" in document
 
 
+def test_basic_header_bound_covers_existing_username_and_password_bounds(dav_server, monkeypatch):
+    _, store, _ = dav_server
+    username = "u" * 128
+    password = "p" * 256
+    encoded = base64.b64encode(f"{username}:{password}".encode()).decode()
+    assert len(encoded) == 516
+    handler = SimpleNamespace(headers={"Authorization": f"Basic {encoded}"})
+    monkeypatch.setattr(store, "authenticate", lambda user, secret: (
+        TENANT_A if user == username and secret == password else None))
+    assert webdav._basic(handler, store, username) == TENANT_A
+
+
+def test_no_content_length_header_on_204_response():
+    handler = SimpleNamespace(command="DELETE", headers=[], status=[])
+    handler.send_response = handler.status.append
+    handler.send_header = lambda name, value: handler.headers.append((name, value))
+    handler.end_headers = lambda: None
+    webdav._answer(handler, 204)
+    assert not any(name.lower() == "content-length" for name, _ in handler.headers)
+
+
 def test_basic_auth_is_route_scoped_and_bound_to_url_username(dav_server):
     port, store, issued = dav_server
     root = f"/webdav/{issued['username']}/zotero/"
