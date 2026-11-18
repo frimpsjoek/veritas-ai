@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import binascii
 import email.utils
+import re
 import socket
 import sys
 import threading
@@ -76,7 +77,7 @@ def _route(raw_path: str) -> Route:
         if len(parts) < 3 or parts[0] or parts[1] != "webdav":
             raise ValueError
         username = parts[2]
-        if not zotero_storage.re.fullmatch(r"[A-Za-z0-9_-]{4,128}", username):
+        if not re.fullmatch(r"[A-Za-z0-9_-]{4,128}", username):
             raise ValueError
         rest = [part for part in parts[3:] if part]
         if not rest:
@@ -247,6 +248,7 @@ def _put(handler, route: Route, store: zotero_storage.StorageService, tenant: st
     reservation = None
     published = False
     timeout = store.config.read_timeout_seconds
+    previous_timeout = handler.connection.gettimeout()
     try:
         with store.upload_slot(tenant):
             handler.connection.settimeout(timeout)
@@ -256,7 +258,7 @@ def _put(handler, route: Route, store: zotero_storage.StorageService, tenant: st
                 outcome = store.publish(reservation, digest)
                 published = True
             finally:
-                handler.connection.settimeout(None)
+                handler.connection.settimeout(previous_timeout)
             _answer(handler, 201 if outcome == "created" else 204)
     finally:
         if reservation is not None and not published:

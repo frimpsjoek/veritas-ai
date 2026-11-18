@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import http.client
+import io
 import json
 import socket
 import threading
@@ -249,6 +250,23 @@ def test_idle_propfind_body_read_times_out(tmp_path, monkeypatch):
         server.shutdown()
         server.server_close()
         store.close()
+
+
+def test_put_restores_the_preexisting_socket_timeout(dav_server, monkeypatch):
+    _, store, issued = dav_server
+    history = []
+    connection = SimpleNamespace(history=history, current=17)
+    connection.gettimeout = lambda: connection.current
+    def settimeout(value):
+        history.append(value)
+        connection.current = value
+    connection.settimeout = settimeout
+    handler = SimpleNamespace(headers={"Content-Length": "1"}, rfile=io.BytesIO(b"x"),
+                              connection=connection, command="PUT")
+    monkeypatch.setattr(webdav, "_answer", lambda *_args, **_kwargs: None)
+    route = webdav.Route(issued["username"], "file", "PAPER001.prop")
+    webdav._put(handler, route, store, TENANT_A)
+    assert history == [store.config.read_timeout_seconds, 17]
 
 
 def test_verifier_admission_rejects_excess_work_promptly(dav_server, monkeypatch):
