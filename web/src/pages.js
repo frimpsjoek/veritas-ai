@@ -11,6 +11,7 @@ import { paintSetup } from './setup-view.js';
 import { paintHome } from '../../ui/src/home/home.js';
 import { SettingsView } from '../../ui/src/settings/settings-view.js';
 import { foldersWidget } from './folders-view.js';
+import { zoteroStorageWidget } from './zotero-storage-view.js';
 import { progressPanel } from './progress-view.js';
 import { mountSources } from '../../ui/src/sources/sources-view.js';
 
@@ -117,6 +118,7 @@ export async function paintSettings(into, { host, doc, section, links }) {
       servers: (_row, ctx) => serversRow(ctx.doc),
       indexStatus: (_row, ctx) => indexStatus(ctx.doc, ctx.host),
       folders: (_row, ctx) => foldersWidget(ctx.doc, ctx.host),
+      zoteroStorage: (_row, ctx) => zoteroStorageWidget(ctx.doc, ctx.host),
       radarLink: (_row, ctx) => {
         const link = /** @type {HTMLAnchorElement} */ (h(ctx.doc, 'a', 'sb-button', 'Open Reading radar'));
         link.href = formatRoute({ view: 'settings', section: 'radar' });

@@ -4,6 +4,7 @@
     GET  /app/login          the sign-in page (login.html); the phone posts its token to POST /app/login
     GET  /web/state          {"prefs": {...}, "files": {name: text}}
     POST /web/state          {"prefs"?: {...}, "files"?: {...}} merged in; a null value removes that key
+                             http_api passes a tenant-private path for Globus users; legacy calls keep this shared file
 
 The state file and the files the server itself keeps next to the bundle are never served as static files.
 """
@@ -91,9 +92,10 @@ def _empty() -> dict:
     return {"prefs": {}, "files": {}}
 
 
-def read_state() -> dict:
+def read_state(state_path: Path | None = None) -> dict:
+    path = state_path or WEB_DIR / STATE_NAME
     try:
-        state = json.loads((WEB_DIR / STATE_NAME).read_text())
+        state = json.loads(path.read_text())
     except (OSError, ValueError):
         return _empty()
     if not isinstance(state, dict) or not isinstance(state.get("prefs"), dict) or not isinstance(state.get("files"), dict):
@@ -105,7 +107,7 @@ def _size(text: str) -> int:
     return len(text.encode())
 
 
-def update_state(body: object) -> dict:
+def update_state(body: object, state_path: Path | None = None) -> dict:
     """Merges a POST /web/state body into the saved state and returns the result. Raises Refused(400 or 413)."""
     if not isinstance(body, dict):
         raise Refused(400, "expected a JSON object")
@@ -117,8 +119,9 @@ def update_state(body: object) -> dict:
             raise Refused(400, f"file {name!r} must be a string")
         if isinstance(text, str) and _size(text) > MAX_FILE_BYTES:
             raise Refused(413, f"file {name!r} is over {MAX_FILE_BYTES // 1024} KB")
+    path = state_path or WEB_DIR / STATE_NAME
     with _state_lock:
-        state = read_state()
+        state = read_state(state_path)
         for key, value in prefs.items():
             if value is None:
                 state["prefs"].pop(key, None)
@@ -133,12 +136,14 @@ def update_state(body: object) -> dict:
             raise Refused(413, f"files are over {MAX_FILES_BYTES // (1024 * 1024)} MB in total")
         if _size(json.dumps(state["prefs"])) > MAX_PREFS_BYTES:
             raise Refused(413, f"prefs are over {MAX_PREFS_BYTES // 1024} KB")
-        WEB_DIR.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=WEB_DIR, prefix=".state-", suffix=".tmp")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if state_path is not None:
+            os.chmod(path.parent, 0o700)
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".state-", suffix=".tmp")
         try:
             with os.fdopen(fd, "w") as f:
                 json.dump(state, f, ensure_ascii=False)
-            os.replace(tmp, WEB_DIR / STATE_NAME)
+            os.replace(tmp, path)
         except BaseException:
             Path(tmp).unlink(missing_ok=True)
             raise

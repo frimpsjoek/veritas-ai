@@ -142,3 +142,16 @@ test('adopt carries project records across unchanged', async () => {
   assert.equal((await store.list())[0].project, 'P2');
   assert.equal((await store.load(id)).filter((r) => r.type === 'project').length, 1);
 });
+
+test('conversation and result paths reject traversal at the storage boundary', async () => {
+  const fs = memoryFs();
+  const store = conversationStore(fs, '/data/chats');
+  await fs.writeAtomic('/data/globus-auth.json', '{"client_secret":"must-not-read"}');
+  await assert.rejects(store.load('../globus-auth'), /invalid/);
+  await assert.rejects(store.readResult('safe', 'R', 'x/../../../../../../../../globus-auth'), /invalid/);
+  await assert.rejects(store.readResult('../globus-auth', 'R', 1), /invalid/);
+  await assert.rejects(store.writeResult('safe', 'R', 0, {}), /invalid/);
+  await assert.rejects(store.adopt([{ id: '../escape', jsonl: '', files: [{ path: '../escape', text: 'bad' }] }]), /invalid/);
+  assert.equal(await fs.read('/data/escape'), null);
+  assert.equal(await fs.read('/data/chats/escape'), null);
+});

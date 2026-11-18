@@ -7,6 +7,26 @@ import { summaryExtras, newsOf, coverOf, resultPath as resultPathFor } from './s
 import { chatMarkdown, mirrorSuffix } from './chat-markdown.js';
 
 const ENCODING = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'; // Crockford base32, no I/O/L/U, matches the ULID spec
+const STORE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+
+function storeId(value) {
+  if (typeof value !== 'string' || !STORE_ID.test(value)) throw new Error('invalid conversation or result id');
+  return value;
+}
+
+function storeVersion(value) {
+  if (!Number.isSafeInteger(value) || value < 1) throw new Error('invalid result version');
+  return value;
+}
+
+function adoptedPath(value) {
+  const parts = typeof value === 'string' ? value.split('/') : [];
+  if (!parts.length || parts.some((part) => !part || part === '.' || part === '..' || part.includes('\\'))
+      || parts.some((part) => !/^[A-Za-z0-9._-]+$/.test(part))) {
+    throw new Error('invalid adopted file path');
+  }
+  return value;
+}
 
 function encodeTime(ms) {
   let out = '';
@@ -34,7 +54,9 @@ export function ulid(now = Date.now()) {
  * @param {{ mirrorDir?: string }} [opts] mirrorDir: where each chat is also written as one Markdown file (design goal 10)
  */
 export function conversationStore(fs, dir, opts = {}) {
-  const pathFor = (id) => `${dir}/${id}.jsonl`;
+  const pathFor = (id) => `${dir}/${storeId(id)}.jsonl`;
+  const resultFor = (id, resultId, version) =>
+    `${dir}/${resultPathFor(storeId(id), storeId(resultId), storeVersion(version))}`;
   const mirrorDir = opts.mirrorDir;
   /** id -> the mirror write in flight, so two appends to one chat rewrite its file in order. @type {Map<string, Promise<void>>} */
   const mirrorQueue = new Map();
@@ -142,10 +164,12 @@ export function conversationStore(fs, dir, opts = {}) {
     async adopt(incoming) {
       const adopted = [];
       for (const file of incoming) {
-        const existing = await fs.read(pathFor(file.id));
+        const target = pathFor(file.id);
+        const nested = (file.files ?? []).map((f) => ({ ...f, path: adoptedPath(f.path) }));
+        const existing = await fs.read(target);
         if (existing === null) {
-          await fs.writeAtomic(pathFor(file.id), file.jsonl);
-          for (const f of file.files ?? []) await fs.writeAtomic(`${dir}/${f.path}`, f.text);
+          await fs.writeAtomic(target, file.jsonl);
+          for (const f of nested) await fs.writeAtomic(`${dir}/${f.path}`, f.text);
         }
         adopted.push(file.id);
       }
@@ -160,12 +184,12 @@ export function conversationStore(fs, dir, opts = {}) {
      * @param {string} id @param {string} resultId @param {number} version @param {import("./domain").Result} body
      */
     async writeResult(id, resultId, version, body) {
-      await fs.writeAtomic(`${dir}/${resultPathFor(id, resultId, version)}`, JSON.stringify(body));
+      await fs.writeAtomic(resultFor(id, resultId, version), JSON.stringify(body));
     },
 
     /** @param {string} id @param {string} resultId @param {number} version @returns {Promise<import("./domain").Result | null>} */
     async readResult(id, resultId, version) {
-      const text = await fs.read(`${dir}/${resultPathFor(id, resultId, version)}`);
+      const text = await fs.read(resultFor(id, resultId, version));
       return text === null ? null : JSON.parse(text);
     },
   };

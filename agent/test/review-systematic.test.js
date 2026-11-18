@@ -235,6 +235,11 @@ test('runtime: the screened papers open as a virtual result while the review wai
   assert.equal(waiting.gate.review, id);
   assert.match(waiting.gate.unclear[0].because[0], /Adult learners/);
   assert.equal(waiting.screening['p:k2'].ai, 'exclude');
+  assert.deepEqual((await ai.sessions.read(`review:${id}`, { id: 'screening', version: 1 })).ref, { id: 'screening', version: 1 });
+  for (const version of [-1, 0, 0.5, 1.5, 2]) {
+    assert.equal(await ai.sessions.read(`review:${id}`, { id: 'screening', version }), null,
+      `invalid virtual V${version} reads as missing`);
+  }
   assert.equal(await ai.sessions.read(`review:${id}`, { id: 'R1' }), null, 'only the screening result exists');
   assert.equal(await ai.sessions.read('review:nosuchreview', { id: 'screening' }), null);
   assert.deepEqual((await fs.list('/data')).filter((n) => n.includes('review:')), [], 'nothing is stored for it');

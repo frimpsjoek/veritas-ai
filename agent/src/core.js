@@ -419,7 +419,7 @@ export const ASK_INSTRUCTIONS = [
  *           getTurnLimits?: (role: import("./domain").Role) => Promise<{ wallClockMs: number, toolCallBudget: number }>,
  *           limits?: { total: number, perRole?: object },
  *           clock?: () => number, routines?: { isOwner?: () => boolean | Promise<boolean>, tickMs?: number, startupGraceMs?: number } }} deps
- * @returns {Promise<import("./service").AgentService & { dispose(): Promise<void> }>}
+ * @returns {Promise<import("./service").AgentService & { hasActiveWork(): boolean, dispose(): Promise<void> }>}
  */
 export async function createLocalRuntime(deps) {
   // T6.2: the one persisted settings record this runtime owns (settings.d.ts), keyed to the same dataDir every
@@ -518,11 +518,16 @@ export async function createLocalRuntime(deps) {
   /** @param {string} id @param {{ id: string, version?: number }} ref */
   async function readResultVersion(id, ref) {
     const wait = /^review:([A-Za-z0-9_-]{1,64})$/.exec(id);
-    if (wait) return ref.id === SCREENING_RESULT_ID ? screeningResultOf(wait[1]) : null;
+    if (wait) {
+      const version = ref.version ?? 1; // the virtual screening result has exactly one version
+      if (ref.id !== SCREENING_RESULT_ID || !Number.isSafeInteger(version) || version !== 1) return null;
+      return screeningResultOf(wait[1]);
+    }
     const view = await sessionView(id);
     const summary = view.results.find((r) => r.ref.id === ref.id);
-    const version = ref.version ?? summary?.ref.version;
-    if (!version) return null;
+    if (!summary) return null;
+    const version = ref.version ?? summary.ref.version;
+    if (!Number.isSafeInteger(version) || version < 1 || version > summary.ref.version) return null;
     return store.readResult(id, ref.id, version);
   }
 
@@ -532,6 +537,8 @@ export async function createLocalRuntime(deps) {
   const stepLog = eventLog();
   /** @type {Map<string, { controller: AbortController, reason: "cancelled" | "stopped", done: Promise<void> }>} */
   const stepRuns = new Map();
+  // Count lifetimes, not map keys: overlapping launches can choose the same persisted step ID.
+  let activeSteps = 0;
   const stepKey = (id, step) => `${id}/${step}`;
   const partialPath = (id, step) => `${deps.dataDir}/chats/${partialStepPath(id, step)}`;
   const POOL_TOTAL = deps.limits?.total ?? 6;
@@ -756,9 +763,10 @@ export async function createLocalRuntime(deps) {
       const controller = new AbortController();
       const run = { controller, reason: /** @type {"cancelled" | "stopped"} */ ('cancelled'), done: Promise.resolve() };
       stepRuns.set(key, run);
+      activeSteps += 1;
       run.done = executeColumns(id, stepId, input, base, targets, research, controller, run)
         .catch(() => {})
-        .finally(() => { stepRuns.delete(key); });
+        .finally(() => { stepRuns.delete(key); activeSteps -= 1; });
       return { step: stepId };
     },
 
@@ -1364,7 +1372,7 @@ export async function createLocalRuntime(deps) {
     adopt: (/** @type {import("./domain").Project[]} */ records) => projectStore.adopt(records),
   };
 
-  /** @type {import("./service").AgentService & { dispose(): Promise<void> }} */
+  /** @type {import("./service").AgentService & { hasActiveWork(): boolean, dispose(): Promise<void> }} */
   const service = {
     where: 'local',
 
@@ -1821,6 +1829,9 @@ export async function createLocalRuntime(deps) {
       get: async () => { const s = viewSettings(await settingsStore.get()); const until = net.limitUntil(); return { ...s, openalex: { ...s.openalex, limitUntil: until ? new Date(until).toISOString() : null } }; },
       update: async (patch) => { const s = viewSettings(await settingsStore.update(patch)); await syncEndpoints(); return { ...s, openalex: { ...s.openalex, limitUntil: null } }; },
     },
+
+    // Request leases cover foreground work; detached steps stay claimed through final persistence.
+    hasActiveWork: () => activeSteps > 0,
 
     async dispose() {
       await routineScheduler.dispose(); // first: a running routine ends as "stopped" before the things it uses go away

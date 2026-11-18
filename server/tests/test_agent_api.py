@@ -25,6 +25,7 @@ class FakeHandler:
         self.rfile = io.BytesIO(body)
         self.sent = None       # (status, body) from _send
         self.response = None   # (status, headers dict, body bytes) from the raw send_response path
+        self.close_connection = False
 
     def _send(self, status, body):
         self.sent = (status, body)
@@ -104,6 +105,67 @@ def test_forward_when_the_sidecar_is_unreachable_is_503_not_a_crash():
     assert handler.sent[0] == 503
 
 
+def test_forward_rejects_an_oversized_sidecar_response_without_forwarding_it(monkeypatch):
+    monkeypatch.setattr(agent_api, "MAX_AGENT_RESPONSE_BYTES", 8, raising=False)
+    reads = []
+    closed = []
+
+    class Response:
+        status = 200
+
+        def read(self, amount=-1):
+            reads.append(amount)
+            return b"private-data"[:9 if amount < 0 else amount]
+
+        def getheader(self, _name, _default=None):
+            return "application/json"
+
+    class Connection:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def request(self, *_args, **_kwargs):
+            pass
+
+        def getresponse(self):
+            return Response()
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(agent_api.http.client, "HTTPConnection", Connection)
+    sidecar = agent_api.Sidecar(node=Path("node"), secret="s", port=1234)
+    handler = FakeHandler()
+    agent_api.forward(handler, sidecar, "GET", "/events")
+    assert handler.sent == (502, {"error": "agent sidecar response is too large"})
+    assert handler.response is None, "no prefix of an oversized private response reaches the browser"
+    assert reads == [9], "read only cap+1 rather than buffering the entire sidecar stream"
+    assert closed == [True]
+
+
+@pytest.mark.parametrize("raw_length", ["-1", "nope", "1.0", "１２", "9" * 5000])
+def test_forward_rejects_invalid_content_lengths_without_reading(raw_length):
+    handler = FakeHandler(b"unread-private-body")
+    handler.headers["Content-Length"] = raw_length
+    sidecar = agent_api.Sidecar(node=Path("node"), secret="s", port=1234)
+    agent_api.forward(handler, sidecar, "POST", "/chat")
+    assert handler.sent == (400, {"error": "invalid agent request Content-Length"})
+    assert handler.rfile.tell() == 0
+    assert handler.close_connection is True
+    assert handler.response is None
+
+
+def test_forward_rejects_oversized_content_length_without_reading(monkeypatch):
+    monkeypatch.setattr(agent_api, "MAX_AGENT_BODY_BYTES", 8)
+    handler = FakeHandler(b"123456789")
+    sidecar = agent_api.Sidecar(node=Path("node"), secret="s", port=1234)
+    agent_api.forward(handler, sidecar, "POST", "/chat")
+    assert handler.sent == (413, {"error": "agent request is too large"})
+    assert handler.rfile.tell() == 0
+    assert handler.close_connection is True
+    assert handler.response is None
+
+
 # ---------- /ai-note ----------
 
 @pytest.fixture()
@@ -169,6 +231,7 @@ def test_sidecar_is_told_the_port_the_server_runs_on(monkeypatch):
     seen = {}
     monkeypatch.setattr(http_api.agent_api, "supervise", lambda data, kb_url: seen.setdefault("kb_url", kb_url) and None)
     monkeypatch.setattr(http_api, "token", lambda: "t")
+    monkeypatch.setattr(http_api.a2a_api, "ensure_token", lambda: "a2a-test-token")
     class Stop(Exception):
         pass
     def no_server(*a, **k):
@@ -193,3 +256,84 @@ def test_spawn_passes_notes_dir(tmp_path, monkeypatch):
     agent_api._spawn(sidecar, tmp_path / "data", "http://127.0.0.1:1")
     cmd = seen["cmd"]
     assert cmd[cmd.index("--notes") + 1] == str(tmp_path / "out")
+
+
+def test_ask_sends_question_to_the_sidecar():
+    class AskHandler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            assert self.path == "/ask"
+            assert self.headers.get("Authorization") == "Bearer topsecret"
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            assert body == {"question": "What is in my library?"}
+            data = json.dumps([{"type": "done", "answer": {"structured": {"markdown": "An answer"}}}]).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *args):
+            pass
+
+    server = socketserver.TCPServer(("127.0.0.1", 0), AskHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        sidecar = agent_api.Sidecar(node=Path("/usr/bin/node"), secret="topsecret", port=server.server_address[1])
+        events = agent_api.ask(sidecar, "What is in my library?")
+        assert events[0]["answer"]["structured"]["markdown"] == "An answer"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_ask_rejects_oversized_sidecar_response_before_json_parsing(monkeypatch):
+    monkeypatch.setattr(agent_api, "MAX_AGENT_RESPONSE_BYTES", 8)
+    reads, closed = [], []
+
+    class Response:
+        status = 200
+
+        def read(self, amount=-1):
+            reads.append(amount)
+            return b"private-unbounded-response"[:9 if amount < 0 else amount]
+
+    class Connection:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def request(self, *_args, **_kwargs):
+            pass
+
+        def getresponse(self):
+            return Response()
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(agent_api.http.client, "HTTPConnection", Connection)
+    sidecar = agent_api.Sidecar(node=Path("node"), secret="s", port=1234)
+    with pytest.raises(agent_api.SidecarError, match="^the agent sidecar response is too large$"):
+        agent_api.ask(sidecar, "ping")
+    assert reads == [9]
+    assert closed == [True]
+
+
+def test_ask_when_the_sidecar_is_unreachable_is_a_sidecar_error():
+    sidecar = agent_api.Sidecar(node=Path("node"), secret="s", port=1)
+    with pytest.raises(agent_api.SidecarError):
+        agent_api.ask(sidecar, "ping")
+
+
+def test_start_indexing_does_not_require_macos_taskpolicy_on_linux(tmp_path, monkeypatch):
+    import subprocess
+    import sys
+
+    import http_api
+
+    seen = {}
+    monkeypatch.setattr(http_api.kb, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(subprocess, "Popen", lambda cmd, **kwargs: seen.setdefault("cmd", cmd))
+    monkeypatch.setattr(sys, "platform", "linux")
+    http_api.start_indexing(None)
+    assert seen["cmd"][:2] == [sys.executable, str(http_api.kb.HOME / "kb.py")]
+    assert seen["cmd"][2:] == ["index"]

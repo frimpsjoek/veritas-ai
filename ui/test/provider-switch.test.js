@@ -1,7 +1,7 @@
 // The not-installed error card: one button per AI that is ready; a click moves the Chat and Ask roles and asks again.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { switchOptions, offerSwitch, NONE_READY, NOT_INSTALLED } from '../src/chat/provider-switch.js';
+import { switchOptions, concreteSwitchOptions, offerSwitch, NONE_READY, NOT_INSTALLED } from '../src/chat/provider-switch.js';
 
 class El {
   constructor(tag) { this.tag = tag; this.children = []; this.attrs = {}; this.listeners = {}; this.style = {}; this.className = ''; this._text = ''; }
@@ -34,6 +34,20 @@ test('only ready AIs become buttons, Codex and Claude before On this Mac', () =>
   assert.deepEqual(options.map((o) => o.label), ['Use Claude instead', 'Use On this Mac (local) instead']);
   assert.deepEqual(options.map((o) => o.choice), [{ provider: 'claude', model: null }, { provider: 'local', model: null }]);
   assert.deepEqual(switchOptions(null), []);
+});
+
+test('ALCF fallback chooses a default/first raw model instead of a null model', async () => {
+  const options = await concreteSwitchOptions({ providers: { models: async (provider) => {
+    if (provider === 'oss:alcf-metis') return [
+      { id: 'other-model', isDefault: false }, { id: 'gpt-oss-120b', isDefault: true },
+    ];
+    if (provider === 'oss:alcf-empty') return [];
+    return [{ id: 'openai/gpt-oss-120b', isDefault: false }];
+  } } }, [ready('oss:alcf-metis'), ready('oss:alcf-empty'), ready('oss:alcf-sophia')]);
+  assert.deepEqual(options.map((option) => option.choice), [
+    { provider: 'oss:alcf-metis', model: 'gpt-oss-120b' },
+    { provider: 'oss:alcf-sophia', model: 'openai/gpt-oss-120b' },
+  ]);
 });
 
 test('buttons render in the error card; a click sets chat and ask, then asks the same question again', async () => {

@@ -7,6 +7,7 @@
 import { errorMessage } from '../errors.js';
 
 const MAX_STEPS = 8;
+const MAX_ALCF_STREAM_BYTES = 64 * 1024 * 1024;
 
 /** @typedef {{ id: string, name: string, arguments: string }} ToolCall */
 /** @typedef {{ prompt_tokens?: number, completion_tokens?: number }} WireUsage */
@@ -119,25 +120,78 @@ export function createStreamState() {
   return { text: '', toolCalls: [], finishReason: null, usage: null };
 }
 
-/** Parses an OpenAI-compatible `text/event-stream` body into JSON chunks, stopping at `data: [DONE]`. */
-export async function* parseSse(body) {
+/** Parses an OpenAI-compatible `text/event-stream` body into JSON chunks, stopping at `data: [DONE]`.
+ * Optional bounds cover both total stream bytes and any single unfinished or complete SSE line.
+ * @param {{ maxBytes?: number, maxLineBytes?: number }} [options]
+ */
+export async function* parseSse(body, options = {}) {
+  const { maxBytes = Infinity, maxLineBytes = maxBytes } = options;
   const reader = body.getReader();
   const decoder = new TextDecoder();
-  let buffer = '';
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let idx;
-    while ((idx = buffer.indexOf('\n')) >= 0) {
-      const line = buffer.slice(0, idx).trim();
-      buffer = buffer.slice(idx + 1);
-      if (!line.startsWith('data:')) continue;
-      const data = line.slice(5).trim();
-      if (data === '[DONE]') return;
-      const chunk = tryParseJson(data);
-      if (chunk) yield chunk;
+  // Pack unfinished lines into owned blocks: no retained network buffers or one object per tiny chunk.
+  const blockSize = 16 * 1024;
+  /** @type {Uint8Array[]} */
+  let fragments = [];
+  let fragmentBytes = 0;
+  let lineBytes = 0;
+  let totalBytes = 0;
+  let exhausted = false;
+  function tooLarge() {
+    throw Object.assign(new Error('ALCF completion stream limit exceeded'), { status: 413 });
+  }
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) { exhausted = true; break; }
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) tooLarge();
+      let start = 0;
+      while (start < value.byteLength) {
+        const newline = value.indexOf(10, start);
+        const end = newline < 0 ? value.byteLength : newline;
+        lineBytes += end - start;
+        if (lineBytes > maxLineBytes) tooLarge();
+        let bytes;
+        if (newline >= 0 && fragments.length === 0) {
+          bytes = value.subarray(start, end);
+        } else {
+          while (start < end) {
+            if (fragments.length === 0 || fragmentBytes === blockSize) {
+              fragments.push(new Uint8Array(Math.min(blockSize, maxLineBytes - fragments.length * blockSize)));
+              fragmentBytes = 0;
+            }
+            const block = fragments[fragments.length - 1];
+            const length = Math.min(end - start, block.byteLength - fragmentBytes);
+            block.set(value.subarray(start, start + length), fragmentBytes);
+            fragmentBytes += length;
+            start += length;
+          }
+          if (newline < 0) break;
+          bytes = new Uint8Array(lineBytes);
+          let offset = 0;
+          for (const block of fragments) {
+            const length = Math.min(block.byteLength, lineBytes - offset);
+            bytes.set(block.subarray(0, length), offset);
+            offset += length;
+          }
+        }
+        const line = decoder.decode(bytes).trim();
+        fragments = [];
+        fragmentBytes = 0;
+        lineBytes = 0;
+        start = end + 1;
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        if (data === '[DONE]') return;
+        const chunk = tryParseJson(data);
+        if (chunk) yield chunk;
+      }
     }
+  } finally {
+    if (!exhausted) {
+      try { await reader.cancel?.(); } catch { /* already closed or aborted */ }
+    }
+    reader.releaseLock?.();
   }
 }
 
@@ -155,17 +209,48 @@ export function buildMessages(req) {
 
 /**
  * @param {import("../platform").Platform} platform
- * @param {{ id?: import("../domain").ProviderId, baseUrl: string, apiKey: string | null, webBackend?: { kind: "exa" | "tavily" | "searxng", url: string, key: string | null } | null }} settings
+ * @param {{ id?: import("../domain").ProviderId, baseUrl: string, apiKey: string | null | ((force?: boolean) => Promise<string>), redirectError?: boolean, maxStreamBytes?: number, webBackend?: { kind: "exa" | "tavily" | "searxng", url: string, key: string | null } | null }} settings
  * @returns {import("../provider").Provider}
  */
 export function openaiProvider(platform, settings) {
   const id = /** @type {import("../domain").ProviderId} */ (settings.id ?? 'oss:default');
-  const headers = { 'content-type': 'application/json', ...(settings.apiKey ? { authorization: `Bearer ${settings.apiKey}` } : {}) };
+  const dynamicKey = /** @type {null | ((force?: boolean) => Promise<string>)} */ (
+    typeof settings.apiKey === 'function' ? settings.apiKey : null
+  );
+  const staticKey = typeof settings.apiKey === 'string' ? settings.apiKey : null;
+  const streamBytes = settings.maxStreamBytes ?? MAX_ALCF_STREAM_BYTES;
+  const streamOptions = dynamicKey ? { maxBytes: streamBytes, maxLineBytes: streamBytes } : undefined;
 
-  async function post(body, signal) {
+  /** @param {any} error */
+  function completionStreamLimit(error) {
+    return error?.status === 413;
+  }
+
+  async function headers(force = false) {
+    const value = dynamicKey ? await dynamicKey(force) : staticKey;
+    return { 'content-type': 'application/json', ...(value ? { authorization: `Bearer ${value}` } : {}) };
+  }
+
+  async function post(body, signal, force = false) {
     return platform.fetch(`${settings.baseUrl.replace(/\/$/, '')}/chat/completions`, {
-      method: 'POST', headers, body: JSON.stringify(body), signal,
+      method: 'POST', headers: await headers(force), body: JSON.stringify(body), signal,
+      ...(settings.redirectError ? { redirect: 'error' } : {}),
     });
+  }
+
+  async function postWithRefresh(body, signal) {
+    let res = await post(body, signal);
+    if (dynamicKey && credentialStatus(res)) {
+      try { await res.body?.cancel?.(); } catch { /* the original rejection response is already settled */ }
+      res = await post(body, signal, true);
+    }
+    return res;
+  }
+
+  /** @param {any} error */
+  function credentialStatus(error) {
+    const status = /** @type {any} */ (error)?.status;
+    return status === 401 || status === 403;
   }
 
   return {
@@ -175,7 +260,7 @@ export function openaiProvider(platform, settings) {
     /** @returns {Promise<import("../domain").ProviderStatus>} */
     async status() {
       try {
-        const res = await platform.fetch(`${settings.baseUrl.replace(/\/$/, '')}/models`, { headers });
+        const res = await platform.fetch(`${settings.baseUrl.replace(/\/$/, '')}/models`, { headers: await headers() });
         if (!res.ok) return { provider: id, state: 'unreachable', version: null, account: { kind: 'none', label: null, plan: null }, usage: null, installHelp: 'The endpoint is not reachable. Check the base URL and that the server is running.' };
         return { provider: id, state: 'ready', version: null, account: { kind: 'none', label: settings.baseUrl, plan: null }, usage: null, installHelp: null };
       } catch {
@@ -185,7 +270,7 @@ export function openaiProvider(platform, settings) {
 
     async models() {
       try {
-        const res = await platform.fetch(`${settings.baseUrl.replace(/\/$/, '')}/models`, { headers });
+        const res = await platform.fetch(`${settings.baseUrl.replace(/\/$/, '')}/models`, { headers: await headers() });
         if (!res.ok) return [];
         const body = await res.json();
         return (body.data ?? []).map((m) => ({ id: m.id, label: m.id, hint: null, efforts: [], source: /** @type {const} */ ('provider'), isDefault: false }));
@@ -206,10 +291,16 @@ export function openaiProvider(platform, settings) {
        *  the step cap is reached and when the JSON-shape repair turn below still doesn't produce valid JSON. */
       async function forceFinalAnswer(nudge) {
         messages.push({ role: 'user', content: nudge });
-        const res = await post(buildChatRequest({ model: req.model?.model, messages, tools: [], outputSchema: null, withResponseFormat: false }), signal);
-        if (!res.ok) return null;
+        const res = await postWithRefresh(buildChatRequest({ model: req.model?.model, messages, tools: [], outputSchema: null, withResponseFormat: false }), signal);
+        if (!res.ok) {
+          try { await res.body?.cancel?.(); } catch { /* the terminal error response is already settled */ }
+          if (dynamicKey && credentialStatus(res)) {
+            throw Object.assign(new Error('ALCF authorization was rejected'), { status: res.status });
+          }
+          return null;
+        }
         const state = createStreamState();
-        for await (const chunk of parseSse(res.body)) applyChunk(state, chunk);
+        for await (const chunk of parseSse(res.body, streamOptions)) applyChunk(state, chunk);
         return state.text;
       }
 
@@ -223,7 +314,15 @@ export function openaiProvider(platform, settings) {
           let repaired;
           try {
             repaired = await forceFinalAnswer(`Return only JSON matching this schema, no other text: ${JSON.stringify(req.outputSchema)}`);
-          } catch {
+          } catch (error) {
+            if (dynamicKey && credentialStatus(error)) {
+              yield { type: 'failed', error: { kind: 'signed_out', message: 'Sign in with Globus again.' } };
+              return;
+            }
+            if (completionStreamLimit(error)) {
+              yield { type: 'failed', error: { kind: 'provider_crashed', message: 'ALCF completion stream is too large.' } };
+              return;
+            }
             // Handled below the same as a repair turn that ran but still didn't produce valid JSON.
           }
           if (repaired != null && tryParseJson(repaired.trim()) !== undefined) {
@@ -244,25 +343,47 @@ export function openaiProvider(platform, settings) {
       for (let step = 0; step < MAX_STEPS; step += 1) {
         let res;
         try {
-          res = await post(buildChatRequest({ model: req.model?.model, messages, tools, outputSchema: req.outputSchema, withResponseFormat: !!req.outputSchema }), signal);
+          res = await postWithRefresh(buildChatRequest({ model: req.model?.model, messages, tools, outputSchema: req.outputSchema, withResponseFormat: !!req.outputSchema }), signal);
           if (!res.ok && req.outputSchema && res.status === 400) {
             // Many OpenAI-compatible servers 400 on an unrecognized response_format; retry once without it.
-            res = await post(buildChatRequest({ model: req.model?.model, messages, tools, outputSchema: req.outputSchema, withResponseFormat: false }), signal);
+            try { await res.body?.cancel?.(); } catch { /* the rejected format response is already settled */ }
+            res = await postWithRefresh(buildChatRequest({ model: req.model?.model, messages, tools, outputSchema: req.outputSchema, withResponseFormat: false }), signal);
           }
         } catch (error) {
-          yield { type: 'failed', error: { kind: signal.aborted ? 'cancelled' : 'provider_crashed', message: signal.aborted ? 'Interrupted.' : errorMessage(error) } };
+          const signedOut = dynamicKey && credentialStatus(error);
+          yield { type: 'failed', error: {
+            kind: signal.aborted ? 'cancelled' : signedOut ? 'signed_out' : 'provider_crashed',
+            message: signal.aborted ? 'Interrupted.' : signedOut ? 'Sign in with Globus again.' : errorMessage(error),
+          } };
           return;
         }
         if (!res.ok) {
+          const signedOut = dynamicKey && credentialStatus(res);
+          if (signedOut) {
+            try { await res.body?.cancel?.(); } catch { /* the terminal rejection response is already settled */ }
+            yield { type: 'failed', error: { kind: 'signed_out', message: 'Sign in with Globus again.' } };
+            return;
+          }
+          if (dynamicKey) {
+            try { await res.body?.cancel?.(); } catch { /* the terminal error response is already settled */ }
+            yield { type: 'failed', error: { kind: 'provider_crashed', message: `ALCF request returned HTTP ${res.status}.` } };
+            return;
+          }
           const text = await res.text().catch(() => '');
           yield { type: 'failed', error: { kind: res.status === 401 ? 'signed_out' : 'provider_crashed', message: text || `The endpoint returned ${res.status}.` } };
           return;
         }
 
         const state = createStreamState();
-        for await (const chunk of parseSse(res.body)) {
-          for (const ev of applyChunk(state, chunk)) yield ev;
-          if (signal.aborted) break;
+        try {
+          for await (const chunk of parseSse(res.body, streamOptions)) {
+            for (const ev of applyChunk(state, chunk)) yield ev;
+            if (signal.aborted) break;
+          }
+        } catch (error) {
+          if (!completionStreamLimit(error)) throw error;
+          yield { type: 'failed', error: { kind: 'provider_crashed', message: 'ALCF completion stream is too large.' } };
+          return;
         }
         if (signal.aborted) {
           yield { type: 'failed', error: { kind: 'cancelled', message: 'Interrupted.' } };
@@ -274,8 +395,17 @@ export function openaiProvider(platform, settings) {
             // Out of allowed tool-call steps. Rather than fail the turn (a loop-design gap, not just a model
             // limit: the model may already have everything it needs), force one tools-off answer from what
             // was already found, so the turn always ends in a final answer.
-            const forced = await forceFinalAnswer('You have used all your tool calls. Stop calling tools and answer now, in the required format, using only what you already found.');
-            yield* finalize(forced ?? state.text, { inputTokens: state.usage?.prompt_tokens, outputTokens: state.usage?.completion_tokens });
+            try {
+              const forced = await forceFinalAnswer('You have used all your tool calls. Stop calling tools and answer now, in the required format, using only what you already found.');
+              yield* finalize(forced ?? state.text, { inputTokens: state.usage?.prompt_tokens, outputTokens: state.usage?.completion_tokens });
+            } catch (error) {
+              if (completionStreamLimit(error)) {
+                yield { type: 'failed', error: { kind: 'provider_crashed', message: 'ALCF completion stream is too large.' } };
+                return;
+              }
+              if (!dynamicKey || !credentialStatus(error)) throw error;
+              yield { type: 'failed', error: { kind: 'signed_out', message: 'Sign in with Globus again.' } };
+            }
             return;
           }
           messages.push({ role: 'assistant', content: state.text || null, tool_calls: state.toolCalls.map((tc) => ({ id: tc.id, type: 'function', function: { name: tc.name, arguments: tc.arguments } })) });
