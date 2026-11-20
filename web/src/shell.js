@@ -9,12 +9,18 @@ import { VIEW_MODES } from '../../ui/src/chat/steps-data.js';
 import { parseRoute, formatRoute, webLinks } from '../../ui/src/sources/route.js';
 import { applyTheme, paintWebHome, paintProjects, paintSettings } from './pages.js';
 import { createLibraryView } from './library-view.js';
+import { LIBRARY_CHANGED } from './library-data.js';
 import { paintNotes } from './notes-view.js';
 import { paintPaper } from './paper-view.js';
 import { paintNote } from './note-view.js';
 import { createBrowserPanel } from './browser-panel.js';
 import { documentUrl, isDocumentPath } from '../../ui/src/sources/view-kit.js';
 import { headerProgress } from './progress-view.js';
+import { serverLight } from './server-light.js';
+import { desktopBridge } from './desktop.js';
+import { createBrowseView } from './browse-view.js';
+import { followNews, newsBadge } from './news-badge.js';
+import { laterBadge, paintLater } from './later-view.js';
 
 /** @typedef {import("../../ui/src/sources/route.js").WebRoute} WebRoute */
 
@@ -23,10 +29,11 @@ const RAIL = [
   { view: 'home', label: 'Home', icon: 'home' },
   { view: 'chat', label: 'Chat', icon: 'chat' },
   { view: 'library', label: 'Library', icon: 'paper' },
+  { view: 'later', label: 'Read later', icon: 'bookmark', wide: true }, // spec 028 R11; on the phone, in More
   { view: 'notes', label: 'Notes', icon: 'note' },
   { view: 'projects', label: 'Projects', icon: 'folder', wide: true },
 ];
-const TITLES = { home: 'Home', chat: 'Chat', library: 'Library', notes: 'Notes', paper: 'Paper', note: 'Note', routines: 'Routines', projects: 'Projects', sources: 'Sources', settings: 'Settings' };
+const TITLES = { browse: 'Browse', home: 'Home', chat: 'Chat', library: 'Library', later: 'Read later', notes: 'Notes', paper: 'Paper', note: 'Note', routines: 'Routines', projects: 'Projects', sources: 'Sources', settings: 'Settings' };
 const SYNC_MS = 800;
 
 /** @param {{ host: ReturnType<typeof import("./host.js").createWebHost>, doc?: Document, win?: Window }} options */
@@ -42,7 +49,8 @@ export function createShell({ host, doc = document, win = /** @type {Window} */ 
   const nav = h(doc, 'div', 'sbw-nav');
   /** @type {Map<string, HTMLAnchorElement>} */
   const links = new Map();
-  for (const item of RAIL) {
+  /** @param {{ view: string, label: string, icon: string, wide?: boolean }} item */
+  const railLink = (item) => {
     const link = /** @type {HTMLAnchorElement} */ (h(doc, 'a', 'sbw-nav-item'));
     link.href = formatRoute(/** @type {WebRoute} */ ({ view: item.view }));
     link.dataset.view = item.view;
@@ -51,8 +59,11 @@ export function createShell({ host, doc = document, win = /** @type {Window} */ 
     link.setAttribute('aria-label', item.label);
     if (item.wide) link.classList.add('is-wide-only');
     links.set(item.view, link);
-    nav.append(link);
-  }
+    return link;
+  };
+  for (const item of RAIL) nav.append(railLink(item));
+  const laterLink = links.get('later');
+  const later = laterLink ? laterBadge(doc, win, host, laterLink) : null;
   const more = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sbw-nav-item sbw-more'));
   more.setAttribute('type', 'button');
   more.setAttribute('aria-haspopup', 'menu');
@@ -64,7 +75,7 @@ export function createShell({ host, doc = document, win = /** @type {Window} */ 
   menu.setAttribute('role', 'menu');
   menu.hidden = true;
   for (const [label, route, phoneOnly] of /** @type {[string, WebRoute, boolean][]} */ ([
-    ['Projects', { view: 'projects' }, true],
+    ['Read later', { view: 'later' }, true], ['Projects', { view: 'projects' }, true],
     ['Settings', { view: 'settings' }, false], ['Search index', { view: 'settings', section: 'index' }, false],
     ['Server', { view: 'settings', section: 'server' }, false],
   ])) {
@@ -115,10 +126,45 @@ export function createShell({ host, doc = document, win = /** @type {Window} */ 
   const page = h(doc, 'div', 'sbw-view sbw-view-page');
   // spec 019 G2: a thin bar under the header while the index builds; it opens Settings > Search index
   main.append(headerProgress(doc, host, formatRoute({ view: 'settings', section: 'index' })), chatHost, page);
-  root.append(rail, main);
+  const light = serverLight(doc, host);
+  root.append(rail, main, light.root);
   // Spec 015: web links open in a panel over the content area (the host decides inside or outside).
   const browser = createBrowserPanel({ host, doc, win, into: main });
-  host.setBrowser((url) => browser.open(url));
+  host.setBrowser((url, radar) => browser.open(url, radar));
+  // Spec 028 R7: the Home badge reads again on every view, on focus and after a paper stopped being news anywhere.
+  const news = followNews(win, host, newsBadge(doc, host));
+
+  // Every add to Zotero in this app goes through the host (Browse's reader bar, the radar, a report, Find): each one
+  // tells the Library, which asks the server again instead of showing its rows from before until a reload.
+  const libraryChanged = () => win.dispatchEvent(new (/** @type {any} */ (win).CustomEvent)(LIBRARY_CHANGED));
+  const addToLibrary = host.addToLibrary;
+  if (addToLibrary) {
+    host.addToLibrary = async (/** @type {Parameters<typeof addToLibrary>} */ ...args) => {
+      try { return await addToLibrary.apply(host, args); } finally { libraryChanged(); }
+    };
+  }
+
+  // Spec 027: in the desktop app (macOS 14+, Windows, Linux) a Browse view for publishers' pages, after Notes.
+  const bridge = desktopBridge(win);
+  /** @type {ReturnType<typeof createBrowseView> | null} */ let browse = null;
+  if (bridge) {
+    void bridge.available.then((ok) => {
+      if (!ok) return;
+      const view = createBrowseView(doc, bridge, host);
+      browse = view;
+      // Browse's own Save to Zotero is the app's, not the host's: its answer says when a paper went in
+      bridge.on('browse://saved', (/** @type {any} */ p) => { if (p?.status === 'added') libraryChanged(); });
+      links.get('notes')?.after(railLink({ view: 'browse', label: 'Browse', icon: 'web', wide: true }));
+      host.setBrowse({
+        open(url) { void view.open(url); if (route.view !== 'browse') go({ view: 'browse' }); },
+        async signOut() { await bridge.invoke('browse_sign_out'); view.reset(); },
+        // spec 033 R3: the desktop app's "Install updates automatically"
+        autoUpdate: (on) => bridge.invoke('app_auto_update', on === undefined ? {} : { on }),
+      });
+      paintRail();
+      if (route.view === 'browse') void render();
+    });
+  }
 
   /** @type {ReturnType<typeof createLibraryView> | null} */ let library = null;
   /** @type {ChatView | null} */ let chat = null;
@@ -153,12 +199,20 @@ export function createShell({ host, doc = document, win = /** @type {Window} */ 
     return chat;
   }
 
-  /** @param {ChatView} view @param {string} id */
+  /** A chat link opens at once: it does not wait for the history (four list calls). Only the list knows which sessions
+   *  are saved Find searches, so one not listed yet opens as a thread, and turns into its search table if the fresh list
+   *  says it is one and nothing else was opened meanwhile.
+   *  @param {ChatView} view @param {string} id */
   async function openSession(view, id) {
     if (view.conversationID === id || view.reviewID === id || view.findID === id) return;
-    await view.refreshList(); // knows which sessions are saved Find searches
+    const listed = view.recent.find((c) => c.id === id);
+    const refreshed = view.refreshList().catch((/** @type {unknown} */ error) => host.logError(error));
+    if (listed) { await view.openSession(listed); return; }
+    const opening = view.openConversation(id);
+    await refreshed;
     const known = view.recent.find((c) => c.id === id);
-    if (known) await view.openSession(known); else await view.openConversation(id);
+    if (known?.search && view.conversationID === id) await view.openSession(known);
+    await opening;
   }
 
   /** @param {WebRoute} next @param {number} token */
@@ -216,14 +270,23 @@ export function createShell({ host, doc = document, win = /** @type {Window} */ 
     host.assets.revokeAll(); // the blob URLs of the view being left (note images from another origin)
     route = parseRoute(win.location.hash);
     paintRail();
+    news.route();
     root.classList.toggle('is-reading', route.view === 'paper' || route.view === 'note');
     const inChat = route.view === 'chat' || route.view === 'routines';
+    if (inChat) browse?.hide();
     chatHost.hidden = !inChat;
     page.hidden = inChat;
     if (inChat) { await showChat(route, token); return; }
+    if (route.view !== 'browse') browse?.hide();
     const ctx = { host, doc, win, go, links: webLinks(host) };
-    // Library, Notes, the readers and Settings scroll inside themselves; the other pages scroll as a whole.
-    page.classList.toggle('is-fill', ['library', 'paper', 'note', 'settings'].includes(route.view));
+    // Library, Notes, the readers, Settings and Browse scroll inside themselves; the other pages scroll as a whole.
+    page.classList.toggle('is-fill', ['library', 'paper', 'note', 'settings', 'browse'].includes(route.view));
+    if (route.view === 'browse') {
+      if (!browse) { page.replaceChildren(h(doc, 'p', 'sbw-browse-none', 'Browse opens publishers\u2019 pages in the Veritas desktop app (macOS 14 or later).')); return; }
+      if (browse.el.parentElement !== page) page.replaceChildren(browse.el);
+      browse.show();
+      return;
+    }
     if (route.view === 'library') {
       library ??= createLibraryView(ctx);
       if (library.root.parentElement !== page) page.replaceChildren(library.root);
@@ -238,6 +301,7 @@ export function createShell({ host, doc = document, win = /** @type {Window} */ 
     else if (route.view === 'note') await paintNote(slot, ctx, route);
     else if (route.view === 'home') await paintWebHome(slot, ctx, route);
     else if (route.view === 'projects') await paintProjects(slot, ctx);
+    else if (route.view === 'later') await paintLater(slot, ctx);
     else if (route.view === 'settings') await paintSettings(slot, { ...ctx, section: route.section });
   }
 
@@ -252,13 +316,18 @@ export function createShell({ host, doc = document, win = /** @type {Window} */ 
     start() {
       host.mount(root);
       win.addEventListener('hashchange', onHash);
+      news.start();
       timer = setInterval(syncHash, SYNC_MS);
       return render();
     },
     destroy() {
       win.removeEventListener('hashchange', onHash);
+      news.stop();
+      later?.dispose();
       host.setBrowser(null);
+      host.setBrowse(null);
       clearInterval(timer);
+      light.stop();
       chat?.destroy();
       root.remove();
     },

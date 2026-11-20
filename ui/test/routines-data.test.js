@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  TABS, groupByStatus, scheduleText, nextRunText, lastRunLine, cardActions, TEMPLATES, draftFromTemplate, draftForArtifact, emptyText, LIMIT_LINE, splitBroken, brokenLine, newsLabel, newsTitle, newsSession, projectLine, projectChoices,
+  TABS, groupByStatus, scheduleText, nextRunText, lastRunLine, cardActions, TEMPLATES, draftFromTemplate, draftForArtifact, emptyText, LIMIT_LINE, splitBroken, brokenLine, newsLabel, newsTitle, newsSession, projectLine, projectChoices, runStatus, plainRunReason,
 } from '../src/chat/routines-data.js';
 
 process.env.TZ = 'America/New_York';
@@ -230,4 +230,44 @@ test('projectChoices: hidden without projects; None first; open project preselec
   assert.equal(projectChoices(projects, 'P1', 'P2', false).selected, 'P1');
   assert.equal(projectChoices(projects, 'gone', 'P2', false).selected, '', 'a deleted project reads as none');
   assert.equal(projectChoices(projects, null, 'gone', true).selected, '');
+});
+
+test('plainRunReason says what happened in words; an unknown reason passes through, first line only', () => {
+  assert.equal(plainRunReason('stopped'), 'The server stopped during the run.');
+  assert.equal(plainRunReason('fetch failed'), 'A source did not answer.');
+  assert.equal(plainRunReason('HTTP 429 Too Many Requests'), 'A request limit was reached.');
+  assert.equal(plainRunReason('Error: the seeds are empty\n    at run (x.js:1:1)'), 'the seeds are empty');
+  assert.equal(plainRunReason(undefined), '');
+});
+
+test('runStatus while running: when it started, never a guess; no answer does not mean stopped', () => {
+  const now = local(2026, 11, 4, 10, 0);
+  const on = { status: 'active', running: true, lastRun: null, nextRun: null };
+  assert.deepEqual(runStatus(on, { now, startedAt: now - 4 * 60000 }), { kind: 'running', lead: 'Running', detail: 'started 4 minutes ago', action: null });
+  assert.equal(runStatus(on, { now, seenAt: local(2026, 11, 4, 9, 41) }).detail, 'seen running since 09:41');
+  const silent = runStatus(on, { now, startedAt: now - 60000, unanswered: true });
+  assert.equal(silent.kind, 'running');
+  assert.match(silent.detail, /server is not answering/);
+});
+
+test('runStatus after a failed or skipped run: the reason in plain words, and Run again', () => {
+  const now = local(2026, 11, 4, 10, 0);
+  const failed = (at, over = {}) => ({ status: 'active', running: false, nextRun: null, lastRun: { at: new Date(at).toISOString(), slot: null, status: 'failed', reason: 'stopped', ...over } });
+  assert.deepEqual(runStatus(failed(local(2026, 11, 4, 6, 0)), { now }), { kind: 'failed', lead: "Today's run did not finish", detail: 'The server stopped during the run.', action: 'again' });
+  assert.equal(runStatus(failed(local(2026, 11, 2, 6, 0)), { now }).lead, 'The last run did not finish (2 days ago)');
+  assert.equal(runStatus(failed(local(2026, 11, 4, 6, 0), { status: 'skipped', reason: 'provider limit' }), { now }).lead, "Today's run was skipped");
+  assert.equal(runStatus(failed(local(2026, 11, 4, 6, 0), { reason: undefined }), { now }).detail, '');
+});
+
+test('runStatus when quiet: when the issue was built, when the next comes, Redo today only for an issue', () => {
+  const now = local(2026, 11, 4, 10, 0);
+  const next = new Date(local(2026, 11, 5, 6, 0)).toISOString();
+  const done = (at, over = {}) => ({ status: 'active', running: false, nextRun: next, lastRun: { at: new Date(at).toISOString(), slot: null, status: 'done', added: 4, session: 'S1', ...over } });
+  assert.deepEqual(runStatus(done(local(2026, 11, 4, 6, 2)), { now }), { kind: 'quiet', lead: '', detail: 'Issue built at 06:02 · next tomorrow at 06:00', action: 'redo' });
+  assert.match(runStatus(done(local(2026, 11, 3, 6, 2)), { now }).detail, /^Last issue built yesterday · next/);
+  const nothing = runStatus(done(local(2026, 11, 4, 6, 2), { added: 0, session: undefined }), { now });
+  assert.equal(nothing.detail, 'Last run at 06:02 found nothing new · next tomorrow at 06:00');
+  assert.equal(nothing.action, null);
+  assert.deepEqual(runStatus({ status: 'active', running: false, nextRun: next, lastRun: null }, { now }), { kind: 'quiet', lead: '', detail: 'No issue yet · next tomorrow at 06:00', action: null });
+  assert.equal(runStatus({ status: 'paused', running: false, nextRun: next, lastRun: null }, { now }).detail, 'No issue yet · paused');
 });

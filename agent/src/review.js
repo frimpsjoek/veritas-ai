@@ -38,6 +38,10 @@ import { reportWebMode, clarifyStage, plan2Stage, approve2Stage, searchStage, sc
  *   pipeline 2's search stage checks researcher-returned candidates against it; absent = nothing is checked or marked
  * @property {(dois: string[]) => Promise<Map<string, string>>} [abstractsByDoi]
  *   looks outside papers' abstracts up by DOI in the scholarly index; absent = researchers' own copies stand
+ * @property {(papers: { id: string, doi: string | null, arxiv: string | null }[]) => Promise<Map<string, string>>} [fillAbstracts]
+ *   spec 031 R1: abstracts for outside papers that have none (OpenAlex, then Crossref, Semantic Scholar, arXiv); absent = left empty
+ * @property {(rows: import("./domain").PaperRow[]) => Promise<import("./open-access").Access[]>} [openAccess]
+ *   spec 031 R2: a free copy for each row, parallel to `rows`; absent = no lookup
  * @property {AbortSignal} signal
  * @property {() => void} [onProgress]  called after a stage finishes and after each researcher's findings file is
  *   written, so a watcher can be pushed a fresh snapshot without polling. Optional: tests may omit it.
@@ -304,6 +308,7 @@ export async function reviewProgress(io, id, files, inFlight, { withReport = fal
     outside: candidates ? candidates.rows.filter((r) => !r.inLibrary).map((r) => ({ citekey: null, doi: r.doi, url: r.url, title: r.title, year: r.year, inLibrary: false })) : (screened?.outside ?? []),
     question: request?.question ?? null, started: startedAt(id),
     ...(request?.project ? { project: request.project } : {}),
+    ...(request?.session ? { session: request.session } : {}), // spec 030 R6: a review that is a step of a session
     ...(request?.skills?.length ? { skills: request.skills.map((k) => ({ name: k.name, hash: k.hash, ...(k.notice ? { notice: k.notice } : {}) })) } : {}),
   };
   if (files.includes('usage.json')) {

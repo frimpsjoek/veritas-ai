@@ -7,6 +7,7 @@ import { CLARIFY_SCHEMA, PLAN_SCHEMA_2, PLAN_SCHEMA_SYSTEMATIC, CANDIDATES_SCHEM
 import { skillSection } from './skills.js';
 import { extractBatches, selectTargets, slugColumn, cellKey } from './extract.js';
 import { rowIdFor } from './sessions.js';
+import { arxivIdOf } from './open-access.js';
 import { renderReport, skillReport } from './report.js';
 
 /** @typedef {import("./review").StageCtx} StageCtx */
@@ -110,7 +111,7 @@ export function normalizePlan(out, request) {
   if (request.systematic) {
     plan.protocol = cleanProtocol(out?.protocol);
     plan.criteria = withStrictCriterion(plan.criteria, request.question);
-  }
+  } else if (request.on) plan.criteria = withTopicCriterion(plan.criteria, request.question);
   return plan;
 }
 
@@ -127,6 +128,16 @@ export function withStrictCriterion(criteria, question) {
   if (criteria.some((c) => c.strict)) return criteria;
   if (criteria.length) return criteria.map((c, i) => (i === 0 ? { ...c, strict: true } : c));
   return [{ id: /** @type {any} */ ('criterion_1'), text: `Addresses the question: ${question}`, strict: true }];
+}
+
+/** Spec 030 R9: a Research report started on a paper set (a Find search in the thread, "Report on these") did not
+ *  search for its papers, so the set may hold papers on other topics; with only "prefer" criteria every one was kept
+ *  (54 of 54 in the live check, warm dense matter among them). One strict criterion, the question itself, is added:
+ *  a paper whose text says it is not about the question is left out, one the text does not settle stays (unclear).
+ *  The lead's own criteria are kept as they are. @param {import("./domain").Criterion[]} criteria @param {string} question */
+export function withTopicCriterion(criteria, question) {
+  if (criteria.some((c) => c.strict)) return criteria;
+  return [...criteria, { id: /** @type {any} */ (`criterion_${criteria.length + 1}`), text: `Is about the question: ${question}`, strict: true }];
 }
 
 /** @param {StageCtx} ctx */
@@ -176,6 +187,15 @@ export function mergeCandidates(lists, cap) {
       fullText: Boolean(c.citekey), pdfUrl: null, studyType: null, foundBy: [...b.foundBy],
     });
   });
+}
+
+/** Spec 030 R9: the rows of a paper set a report starts from ("Report on these", or a report asked in a thread after a
+ *  Find search). A library paper is read the way the report's own search reads it (mergeCandidates above): its text
+ *  when the library has one, the abstract otherwise. A Find search marks every row `fullText: false`, which left
+ *  even library papers read from the abstract alone. Outside papers are left as they are.
+ *  @param {PaperRow[]} rows @returns {PaperRow[]} */
+export function seededRows(rows) {
+  return rows.map((row) => (row.inLibrary && row.ref?.kind === 'paper' ? { ...row, fullText: true } : row));
 }
 
 /** How much of a library paper's start stands in for its abstract once checked against the library. */
@@ -426,10 +446,61 @@ function cellsOf(produced, rows, columns) {
   return cells;
 }
 
+/** Spec 031 R1: an outside paper with no abstract is screened on its title alone, and read from nothing. Before
+ *  screening, each such row with a DOI or an arXiv id is looked up (`lookup`, scholarly.js fillAbstracts) and gets
+ *  the abstract found, marked "source". Returns `rows` itself when nothing changed. Never throws.
+ *  @param {PaperRow[]} rows @param {StageCtx["fillAbstracts"]} lookup @returns {Promise<PaperRow[]>} */
+export async function withFilledAbstracts(rows, lookup) {
+  const empty = rows.filter((r) => !r.inLibrary && !(r.abstract ?? '').trim() && (r.doi || arxivIdOf(r)));
+  if (!lookup || !empty.length) return rows;
+  const found = await lookup(empty.map((r) => ({ id: r.id, doi: r.doi, arxiv: arxivIdOf(r) }))).catch(() => new Map());
+  if (!found.size) return rows;
+  return rows.map((r) => (found.has(r.id) ? { ...r, abstract: /** @type {string} */ (found.get(r.id)), abstractStatus: /** @type {const} */ ('source') } : r));
+}
+
+/** Spec 031 R2: each kept outside paper with where it can be read (`access`, and `pdfUrl` for a free copy). Library
+ *  papers are read from the library and are not looked up. Never throws.
+ *  @param {PaperRow[]} rows @param {StageCtx["openAccess"]} lookup @returns {Promise<PaperRow[]>} */
+export async function withOpenAccess(rows, lookup) {
+  const outside = rows.filter((r) => !r.inLibrary);
+  if (!lookup || !outside.length) return rows;
+  const found = await lookup(outside).catch(() => /** @type {import("./open-access").Access[]} */ ([]));
+  const byId = new Map(outside.map((r, i) => [r.id, found[i]]));
+  return rows.map((r) => {
+    const a = byId.get(r.id);
+    if (!a) return r;
+    return a.access === 'open' ? { ...r, access: a.access, pdfUrl: a.pdfUrl, ...(a.alternates?.length ? { pdfAlternates: a.alternates } : {}) } : { ...r, access: a.access };
+  });
+}
+
+/** Spec 031 R4: how the kept papers were read, for "How this was done". @param {PaperRow[]} rows */
+export function readCounts(rows) {
+  const counts = { library: 0, open_access: 0, abstract: 0, none: 0 };
+  for (const r of rows) counts[r.readFrom ?? (r.inLibrary ? 'library' : (r.abstract ?? '').trim() ? 'abstract' : 'none')] += 1;
+  return counts;
+}
+
+/** Spec 031 R4: one sentence on what the extracted papers were read from, so a thin report says why; the papers with
+ *  no text are named (at most 8). '' for an empty table. @param {PaperRow[]} rows */
+export function readSentence(rows) {
+  if (!rows.length) return '';
+  const c = readCounts(rows);
+  const n = (/** @type {number} */ k, /** @type {string} */ one, /** @type {string} */ many) => `${k} ${k === 1 ? one : many}`;
+  const full = c.library + c.open_access;
+  const parts = [`${full} ${full === 1 ? 'was' : 'were'} read in full (${c.library} from your library, ${c.open_access} from free copies found online)`];
+  if (c.abstract) parts.push(`${c.abstract} from the abstract only`);
+  if (c.none) parts.push(`${c.none} had no text to read`);
+  const list = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts[0];
+  const none = rows.filter((r) => r.readFrom === 'none').slice(0, 8).map((r) => `"${r.title}"`);
+  return `Of the ${n(rows.length, 'paper', 'papers')} with data extracted, ${list}.${none.length ? ` No text: ${none.join('; ')}${c.none > none.length ? ' and more' : ''}.` : ''}`;
+}
+
 /** @param {StageCtx} ctx */
 export async function screen2Stage(ctx) {
   const plan = /** @type {Plan} */ (await ctx.read('approved-plan.json'));
-  const { rows } = /** @type {import("./domain").Candidates} */ (await ctx.read('candidates.json'));
+  const candidates = /** @type {import("./domain").Candidates} */ (await ctx.read('candidates.json'));
+  const rows = await withFilledAbstracts(candidates.rows, ctx.fillAbstracts);
+  if (rows !== candidates.rows) await ctx.write('candidates.json', { ...candidates, rows });
   const criteria = plan.criteria ?? [];
   /** @type {Record<string, import("./domain").ScreenDecision>} */
   const decisions = {};
@@ -495,12 +566,31 @@ export async function extract2Stage(ctx) {
   const screening = /** @type {import("./domain").Screening} */ (await ctx.read('screening.json'));
   const caps = plan.caps ?? capsFor(ctx.request);
   const fastest = ctx.request.depth === 'fastest';
-  const rows = includedRows(fastest ? rankCandidates(all) : all, screening, caps.extract);
+  const kept = includedRows(fastest ? rankCandidates(all) : all, screening, caps.extract);
   const columns = plan.columns?.length ? plan.columns : defaultColumns(plan);
-  if (!rows.length) return { columns, rows: [], cells: {} };
+  if (!kept.length) return { columns, rows: [], cells: {} };
+  // spec 031 D1: only the kept papers (at most caps.extract) are looked up and downloaded; Fastest reads abstracts only
+  const rows = fastest ? kept : await withOpenAccess(kept, ctx.openAccess);
   const targets = selectTargets(/** @type {any} */ ({ columns: [], rows, cells: {} }), { add: columns, rows: 'all' }, { maxRows: rows.length });
-  const produced = await runExtraction(ctx, { targets, text: fastest ? 'abstract' : (ctx.request.text ?? 'head'), suffix: 'extract' });
-  const table = { columns, rows, cells: cellsOf(produced, rows, columns) };
+  /** @type {Map<string, "library" | "open_access" | "abstract">} */
+  const readFrom = new Map();
+  const reading = ctx.extract ? {
+    ...ctx,
+    extract: {
+      ...ctx.extract,
+      readText: async (/** @type {PaperRow} */ row, /** @type {any} */ mode) => {
+        const got = await /** @type {NonNullable<StageCtx["extract"]>} */ (ctx.extract).readText(row, mode);
+        if (got) readFrom.set(row.id, got.from === 'abstract' ? 'abstract' : row.inLibrary ? 'library' : 'open_access');
+        return got;
+      },
+    },
+  } : ctx;
+  const produced = await runExtraction(reading, { targets, text: fastest ? 'abstract' : (ctx.request.text ?? 'head'), suffix: 'extract' });
+  // a row read before a restart (its cells came from extract-partial.json) was not read again: say what it had
+  /** @param {PaperRow} r @returns {NonNullable<PaperRow["readFrom"]>} */
+  const had = (r) => (r.inLibrary ? 'library' : (r.abstract ?? '').trim() ? 'abstract' : 'none');
+  const read = rows.map((r) => /** @type {PaperRow} */ ({ ...r, readFrom: readFrom.get(r.id) ?? had(r) }));
+  const table = { columns, rows: read, cells: cellsOf(produced, read, columns) };
   await ctx.remove('extract-partial.json');
   return table;
 }
@@ -560,16 +650,28 @@ function tableForWriter(table) {
 
 /**
  * The writer's report with its evidence checked against the table: a cell that is not there (or has no value) is
- * dropped, and a source that is not an included paper's citekey is dropped, so a link the UI follows always lands.
+ * dropped, and a source that is not an included paper is dropped, so a link the UI follows always lands. A source is a
+ * table row id or a citekey (spec 030 R9): a library paper becomes its citekey, a paper outside the library its link
+ * (DOI or URL) in `links`. Before, only citekeys counted, so a report on outside papers had no evidence at all.
  * @param {any} out @param {import("./domain").ReviewTable} table
  */
 export function checkEvidence(out, table) {
-  const keys = new Set(table.rows.flatMap((r) => (r.ref.kind === 'paper' ? [r.ref.citekey] : [])));
-  const evidence = (Array.isArray(out?.evidence) ? out.evidence : []).map((e) => ({
-    claim: e.claim, strength: e.strength,
-    sources: (e.sources ?? []).filter((k) => keys.has(k)),
-    cells: (e.cells ?? []).filter((c) => table.cells[c.row]?.[c.column]?.state === 'filled'),
-  })).map((e) => {
+  /** @type {Map<string, import("./domain").PaperRow>} */
+  const byKey = new Map();
+  for (const r of table.rows) {
+    byKey.set(r.id, r);
+    if (r.ref.kind === 'paper') byKey.set(r.ref.citekey, r);
+  }
+  const linkOf = (/** @type {import("./domain").PaperRow} */ r) => (r.doi ? `https://doi.org/${r.doi}` : r.url || (r.ref.kind === 'web' ? r.ref.url : '')) || null;
+  const evidence = (Array.isArray(out?.evidence) ? out.evidence : []).map((e) => {
+    const rows = [...new Set((e.sources ?? []).map((k) => byKey.get(String(k))).filter(Boolean))];
+    const sources = rows.flatMap((r) => (r.ref.kind === 'paper' ? [r.ref.citekey] : []));
+    const links = rows.flatMap((r) => (r.ref.kind === 'paper' || !linkOf(r) ? [] : [{ url: /** @type {string} */ (linkOf(r)), title: r.title, year: r.year ?? null }]));
+    return {
+      claim: e.claim, strength: e.strength, sources, ...(links.length ? { links } : {}),
+      cells: (e.cells ?? []).filter((c) => table.cells[c.row]?.[c.column]?.state === 'filled'),
+    };
+  }).map((e) => {
     // A claim resting on a cell read from an unchecked abstract says so (the model cannot add or drop this flag).
     const unverified = e.cells.some((c) => /** @type {any} */ (table.cells[c.row][c.column]).unverified);
     return unverified ? { ...e, unverified: true } : e;
@@ -591,7 +693,9 @@ export async function synthesize2Stage(ctx) {
   }
   const out = await ctx.turns.structured('writer', prompt, REPORT_SCHEMA_2, noTools(ctx, 'writer'), ctx.signal);
   const checked = checkEvidence(out, table);
-  return { ...checked, references };
+  // spec 031 R4: what the papers were read from, written by our code, not the model
+  const read = readSentence(table.rows);
+  return { ...checked, ...(read ? { method: [checked.method, read].filter(Boolean).join(' ') } : {}), references };
 }
 
 /** @param {StageCtx} ctx */

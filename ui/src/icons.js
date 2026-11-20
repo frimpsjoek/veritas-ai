@@ -17,6 +17,7 @@ export const ICONS = {
 
   // ---------- source pills and panels (spec 005 §3: "paper, note, scholarly, web, related, duplicate, status") ----------
   paper: 'M4.25 1.75h5.5L12.25 4.5v9.75h-8z M9.75 1.75V4.5H12.25',
+  bookmark: 'M4.25 1.75h7.5v12.5L8 11.5l-3.75 2.75z', // spec 028 R11: the rail's Read later
   note: 'M3.25 2.75h9.5v10.5h-9.5z M5.5 5.75h5.5 M5.5 8h5.5 M5.5 10.25h3.5',
   scholarly: 'M8 2.25 2.5 5l5.5 2.75L13.5 5z M4.75 6.5v3.75c0 1 1.5 1.75 3.25 1.75s3.25-.75 3.25-1.75V6.5',
   web: 'M8 1.75a6.25 6.25 0 1 0 0 12.5 6.25 6.25 0 0 0 0-12.5z M1.9 8h12.2 M8 1.75c1.5 1.7 2.35 3.9 2.35 6.25S9.5 12.55 8 14.25c-1.5-1.7-2.35-3.9-2.35-6.25S6.5 3.45 8 1.75z',
@@ -30,6 +31,7 @@ export const ICONS = {
   open: 'M9.25 2.75h4v4 M13.25 2.75 7.5 8.5 M11.5 9.25v3a.75.75 0 0 1-.75.75h-6.5a.75.75 0 0 1-.75-.75v-6.5a.75.75 0 0 1 .75-.75h3',
   close: 'M4 4l8 8 M12 4 4 12',
   back: 'M13 8H3.5 M7.5 4 3.5 8l4 4',
+  forward: 'M3 8h9.5 M8.5 4l4 4-4 4',
   sort: 'M4.5 3v10 M2.5 11l2 2 2-2 M11.5 13V3 M9.5 5l2-2 2 2',
   expand: 'M9.5 2.75h3.75v3.75 M13.25 2.75 9 7 M6.5 13.25H2.75V9.5 M2.75 13.25 7 9',
   chevron: 'M4 6l4 4 4-4',
@@ -50,9 +52,16 @@ export const ICONS = {
   book: 'M2.75 3.25h4.25a1 1 0 0 1 1 1v8.5a1 1 0 0 0-1-1H2.75z M13.25 3.25H9a1 1 0 0 0-1 1v8.5a1 1 0 0 1 1-1h4.25z',
   pen: 'M10.5 3l2.5 2.5-6.75 6.75-3 .5.5-3z',
   clock: 'M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2z M8 4.75V8l2.25 1.5',
+  calendar: 'M3 3.75h10v9.5H3z M3 6.75h10 M5.75 2.25v2.5 M10.25 2.25v2.5', // spec 029 R15: a daily note
+  play: 'M3.25 3.75h9.5v8.5h-9.5z M7 6.25v3.5L10 8z', // spec 029 R15: a saved video transcript
   home: 'M2.75 7.5 8 2.75l5.25 4.75 M4.25 6.5v6.75h7.5V6.5 M6.75 13.25v-3.5h2.5v3.5',
   folder: 'M2.75 4.25h3.75l1.25 1.5h5.5v6.5H2.75z',
   grip: 'M6 4v.01 M6 8v.01 M6 12v.01 M10 4v.01 M10 8v.01 M10 12v.01',
+  // ---------- Lucide's panel-left / panel-right, circle-alert and loader-circle, scaled to the 16 px box and this stroke ----------
+  panelLeft: 'M3.25 2.75h9.5a1 1 0 0 1 1 1v8.5a1 1 0 0 1-1 1h-9.5a1 1 0 0 1-1-1v-8.5a1 1 0 0 1 1-1z M6 2.75v10.5',
+  panelRight: 'M3.25 2.75h9.5a1 1 0 0 1 1 1v8.5a1 1 0 0 1-1 1h-9.5a1 1 0 0 1-1-1v-8.5a1 1 0 0 1 1-1z M10 2.75v10.5',
+  alert: 'M8 1.75a6.25 6.25 0 1 0 0 12.5 6.25 6.25 0 0 0 0-12.5z M8 5v3.5 M8 11v.01',
+  loader: 'M14 8a6 6 0 1 1-4.15-5.7',
 
   // ---------- Settings sections (spec 016 U2): same 1.5 stroke; the sidebar draws them at 20 px ----------
   settingsGeneral: 'M2.75 5h5.25 M11 5h2.25 M9.5 3.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z M2.75 11h2.25 M8 11h5.25 M6.5 9.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z',
@@ -92,6 +101,20 @@ export const LUCIDE = {
   thumbsUp: 'M7 10v12 M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z',
   thumbsDown: 'M17 14V2 M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z',
   bookmark: 'm19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z',
+  // Home's judging and the reader (2026-11-04): the open row, the collection menu, the run line, the server light
+  chevronDown: 'm6 9 6 6 6-6',
+  chevronUp: 'm18 15-6-6-6 6',
+  check: 'M20 6 9 17l-5-5',
+  x: 'M18 6 6 18 M6 6l12 12',
+  refreshCw: 'M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8 M21 3v5h-5 M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16 M8 16H3v5',
+  bookOpen: 'M12 7v14 M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z',
+  fileText: 'M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z M14 2v4a2 2 0 0 0 2 2h4 M10 9H8 M16 13H8 M16 17H8',
+  text: 'M17 6.1H3 M21 12.1H3 M15.1 18H3',
+  externalLink: 'M15 3h6v6 M10 14 21 3 M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6',
+  folder: 'M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z',
+  circleAlert: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z M12 8v4 M12 16h.01',
+  search: 'm21 21-4.34-4.34 M11 3a8 8 0 1 0 0 16 8 8 0 0 0 0-16z',
+  square: 'M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z',
 };
 
 /** A Lucide icon, drawn in the text colour. @param {Document} doc @param {keyof typeof LUCIDE} name @param {number} [size] */

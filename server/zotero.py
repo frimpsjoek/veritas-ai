@@ -17,6 +17,7 @@ import shutil
 import sqlite3
 import tempfile
 import time
+import unicodedata
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -48,6 +49,74 @@ PREFIX = "zotero/"  # index paths look like zotero/ABCD1234; they are not vault 
 SKIP_TYPES = ("attachment", "note", "annotation")
 # Status tags written by Zotero plugins (#broken, #nosource, /unread, linter/error, zotmoov, notion): not topics.
 HOUSEKEEPING_TAG = re.compile(r"^([#/]|linter/)|^(zotmoov|notion)$", re.I)
+_TITLE_STOPWORDS = frozenset("the and for with from into using based study their this that".split())
+MIN_TITLE_WORDS = 3  # a shorter title says too little to judge a text by
+MIN_TITLE_MATCH = 0.5  # the share of the title's words a text must contain to count as this item's
+
+
+# Markup that strip_tags removes. Inline tags go without a trace (<i>G</i><sub>0</sub> -> G0); block tags leave a
+# space. A namespaced tag (jats:p, mml:mi) is always markup; the rest only when the name is in this list.
+INLINE_TAGS = frozenset(
+    "a abbr b bdi big cite code del dfn em font i ins kbd mark q s samp sc small span strike strong sub sup tt u var "
+    "wbr italic bold underline monospace roman sans-serif inline-formula "
+    "math mi mn mo ms mtext mrow msub msup msubsup mfrac msqrt mroot mover munder munderover mspace mstyle "
+    "semantics annotation".split())
+BLOCK_TAGS = frozenset(
+    "p div br hr li ul ol dl dt dd table tr td th thead tbody tfoot caption blockquote pre h1 h2 h3 h4 h5 h6 img "
+    "title sec section abstract list list-item label details summary figure figcaption center iframe video audio "
+    "source picture article aside header footer nav main html head body".split())
+VOID_TAGS = frozenset("br hr wbr".split())
+_TAG = re.compile(r"<(/?)([A-Za-z][\w.-]*(?::[A-Za-z][\w.-]*)?)(\s[^<>]*?)?\s*(/?)>")
+_ATTRS = re.compile(r"""(?:\s+[\w:.-]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'<>=]+))?)+\s*""")
+
+
+def strip_tags(text: str) -> str:
+    """`text` without its HTML/XML tags. Text that only looks like a tag stays: <psi|H|psi>, <110>, x < 2 > y, and
+    a<b>c (an opening tag with no attributes counts only when its closing tag is also in the text)."""
+    closed = {m.lower() for m in re.findall(r"</([A-Za-z][\w.:-]*)\s*>", text)}
+
+    def replace(match: re.Match) -> str:
+        closing, name, attrs, self_closing = match.groups()
+        attrs = attrs if attrs and attrs.strip() else None
+        lower = name.lower()
+        local = lower.rsplit(":", 1)[-1]
+        if ":" not in lower and lower not in INLINE_TAGS and lower not in BLOCK_TAGS:
+            return match.group(0)
+        if attrs and (closing or "=" not in attrs or not _ATTRS.fullmatch(attrs)):
+            return match.group(0)  # "x<i and j>y" is not a tag with attributes
+        # A bare opening tag (<p>, <b>) is markup only when it is void or closed somewhere: <p> alone is a momentum.
+        if not (closing or attrs or self_closing or ":" in lower or lower in VOID_TAGS or lower in closed):
+            return match.group(0)
+        return " " if local in BLOCK_TAGS else ""
+
+    return _TAG.sub(replace, text)
+
+
+def plain_title(title: str) -> str:
+    """A title as plain text: tags removed, entities unescaped, whitespace collapsed."""
+    return " ".join(html.unescape(strip_tags(title or "")).split())
+
+
+def _folded(text: str) -> str:
+    """Lower case letters and digits only, words kept apart, tags and accents dropped, for comparing text."""
+    plain = unicodedata.normalize("NFKD", html.unescape(strip_tags(text or "")))
+    return re.sub(r"[^a-z0-9]+", " ", plain.encode("ascii", "ignore").decode().lower())
+
+
+def text_belongs_to_item(title: str, doi: str, text: str) -> bool:
+    """False when an attachment's cached text is plainly not this item's: no DOI, and under half the title's words.
+
+    Zotero keeps an attachment's .zotero-ft-cache even after the file has moved or been replaced, so a cache can hold
+    another document, including a private one. Such text must not be indexed, shown or cited under this item's name.
+    A title too short to judge by is given the benefit of the doubt.
+    """
+    body = _folded(text)
+    if doi and _folded(doi).strip() in body:
+        return True
+    words = [w for w in _folded(title).split() if len(w) > 3 and w not in _TITLE_STOPWORDS]
+    if len(words) < MIN_TITLE_WORDS:
+        return True
+    return sum(f" {w} " in f" {body} " for w in words) / len(words) >= MIN_TITLE_MATCH
 
 
 @dataclass
@@ -194,7 +263,7 @@ def documents() -> list[ZoteroDoc]:
         if type_name in SKIP_TYPES or item_id in deleted:
             continue
         f = fields.get(item_id, {})
-        title = f.get("title") or f.get("shortTitle") or key
+        title = plain_title(f.get("title") or f.get("shortTitle") or "") or key
         authors = creators.get(item_id, [])
         year = (re.search(r"\d{4}", f.get("date", "")) or [""])[0]
         venue = f.get("publicationTitle") or f.get("proceedingsTitle") or f.get("bookTitle") or f.get("websiteTitle") or ""
@@ -224,7 +293,9 @@ def documents() -> list[ZoteroDoc]:
             cache = root() / "storage" / keys[attachment] / ".zotero-ft-cache"
             if cache.is_file():
                 signature = max(signature, cache.stat().st_mtime)
-                full_texts.append(cache.read_text(encoding="utf-8", errors="replace"))
+                cached_text = cache.read_text(encoding="utf-8", errors="replace")
+                if text_belongs_to_item(title, f.get("DOI", ""), cached_text):
+                    full_texts.append(cached_text)
         if highlights:
             parts += ["## Highlights"] + highlights
         for text in full_texts:
@@ -321,7 +392,12 @@ def item_detail(key: str, full_text: bool = False) -> dict | None:
                      "has_full_text": cache.is_file(),
                      "open_uri": f"zotero://open-pdf/library/items/{att_key}" if content_type == "application/pdf" else ""}
             if full_text and cache.is_file():
-                entry["full_text"] = cache.read_text(encoding="utf-8", errors="replace")
+                cached_text = cache.read_text(encoding="utf-8", errors="replace")
+                if text_belongs_to_item(fields.get("title") or fields.get("shortTitle") or key, fields.get("DOI", ""), cached_text):
+                    entry["full_text"] = cached_text
+                else:
+                    entry["has_full_text"] = False
+                    entry["full_text_mismatch"] = True
             attachments.append(entry)
         return {
             "key": key, "type": type_name, "title": fields.get("title") or fields.get("shortTitle") or key,

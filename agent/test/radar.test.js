@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { normalise, mergeItems, dropKnown, pickTop, keysOf, validateRadar, MCP_PRESETS } from '../src/radar.js';
-import { collectRadar } from '../src/radar-run.js';
+import { collectRadar, readableItems } from '../src/radar-run.js';
 import { emptyState } from '../src/radar-state.js';
 import { feedXml, res, routedFetch, radarLibrary, profile } from './support/radar-fakes.mjs';
 
@@ -62,7 +62,7 @@ test('pickTop is deterministic: score, then newer date, then id', () => {
 
 test('validateRadar fills defaults and refuses a broken source at the boundary', () => {
   const ok = validateRadar({ sources: [{ kind: 'database', db: 'arxiv' }, { kind: 'feed', url: 'https://j.example/rss' }], profile: { topics: [{ text: 'spindles' }] } });
-  assert.deepEqual(ok.size, { fresh: 8, older: 1, discover: 3 });
+  assert.deepEqual(ok.size, { fresh: 30, older: 3, discover: 3 });
   assert.equal(ok.note, true);
   assert.equal(ok.sources[0].id, 'database:arxiv');
   assert.equal(ok.sources[0].on, true);
@@ -107,6 +107,21 @@ test('size.fresh caps the digest, best score first', async () => {
   assert.deepEqual(out.picked.map((p) => p.doi), ['10.9999/inv.5', '10.9999/inv.4']);
 });
 
+test('a run looks up the abstracts of title-only papers before it ranks them, and remembers the misses', async () => {
+  const fetchFn = routedFetch({ [FEED]: res(200, feedWith(2)) });
+  const words = 'Thalamic spindle bursts were recorded in invented sleepers over many nights and compared across ages and recording montages.';
+  const abstractFetch = routedFetch({ 'https://api.crossref.org/works/10.9999%2Finv.1': res(200, JSON.stringify({ message: { abstract: `<jats:p>${words}</jats:p>` } })) });
+  const library = radarLibrary({ sim: (t) => (t.includes('Thalamic') ? 0.9 : 0.75) });
+  const out = await collectRadar({ config: config(), since: '2026-10-01', now: '2026-10-07T07:00:00.000Z', fetch: fetchFn, library, state: emptyState(), abstractFetch });
+  assert.equal(out.picked[0].doi, '10.9999/inv.1');
+  assert.equal(out.picked[0].abstract, words);
+  assert.ok(library.calls.score.at(-1).items.some((i) => i.text.includes('Thalamic')), 'the final ranking read the abstract');
+  assert.deepEqual(out.state.abstracts['doi:10.9999/inv.2'], { text: '', at: Date.parse('2026-10-07T07:00:00.000Z') });
+  const again = await collectRadar({ config: config(), since: '2026-10-01', now: '2026-10-08T07:00:00.000Z', fetch: fetchFn, library: radarLibrary(), state: { ...emptyState(), abstracts: out.state.abstracts }, abstractFetch });
+  assert.equal(again.picked.find((p) => p.doi === '10.9999/inv.1')?.abstract, words, 'a found abstract is reused');
+  assert.equal(abstractFetch.calls.filter((c) => c.url.includes('inv.2')).length, 3, 'a remembered miss is not asked again (OpenAlex, Crossref and Semantic Scholar once)');
+});
+
 test('a backend without the radar methods fails with a plain message', async () => {
   const bare = { async search() { return []; }, async read() { return null; }, async related() { return []; }, async resolve() { return new Map(); } };
   await assert.rejects(run(config(), routedFetch({}), bare), /library server/);
@@ -129,7 +144,7 @@ test('validateRadar keeps mcp args as a plain object under 4 KB and the Hugging 
 
 test('a source that hits the OpenAlex limit records the message, and the run finishes with the other sources', async () => {
   const { openAlexFetch } = await import('../src/openalex.js');
-  const net = openAlexFetch(routedFetch({ [FEED]: res(200, feedWith(3)), 'https://api.openalex.org/works?filter=authorships.author.id:A7,from_publication_date:2026-10-01&sort=publication_date:desc&per_page=50&select=id,doi,ids,display_name,publication_year,publication_date,authorships,primary_location,cited_by_count,best_oa_location,type,abstract_inverted_index,keywords': res(429, '{}', { 'retry-after': '600' }) }), () => null);
+  const net = openAlexFetch(routedFetch({ [FEED]: res(200, feedWith(3)), 'https://api.openalex.org/works?filter=authorships.author.id:A7,from_publication_date:2026-08-02&sort=publication_date:desc&per_page=20&select=id,doi,ids,display_name,publication_year,publication_date,authorships,primary_location,cited_by_count,best_oa_location,type,abstract_inverted_index,keywords,primary_topic': res(429, '{}', { 'retry-after': '600' }) }), () => null);
   const cfg = config({ sources: [{ id: 'f', on: true, kind: 'feed', url: FEED, title: 'J' }, { id: 'a', on: true, kind: 'author', openalexId: 'A7', name: 'Doe' }] });
   const out = await run(cfg, net, radarLibrary());
   assert.equal(out.picked.length, 3, 'the feed still gave its papers');
@@ -147,4 +162,44 @@ test('Worth reading stops with the limit message as its note when OpenAlex refus
   const out = await run(config({ size: { fresh: 8, older: 3 } }), wrapped, library);
   assert.equal(out.picked.length, 3);
   assert.match(out.olderNote, /^Worth reading stopped: OpenAlex's free daily limit is used up/);
+});
+
+test('books, chapters and abstract-less database finds are left out; followed feeds and authors keep theirs', () => {
+  const item = (id, sources, over = {}) => normalise(raw({ doi: `10.9999/${id}`, title: `Invented paper ${id} on spindles`, ...over }), sources[0]);
+  const withSources = (it, sources) => ({ ...it, sources });
+  const active = /** @type {any} */ ([{ id: 'author:A7', on: true, kind: 'author' }, { id: 'feed:j', on: true, kind: 'feed' }]);
+  const items = [
+    withSources(item('chapter', ['database:crossref'], { kind: 'book-chapter', abstract: 'Nucleation theory.' }), ['database:crossref']),
+    withSources(item('bare', ['database:crossref']), ['database:crossref']),
+    withSources(item('read', ['database:crossref'], { abstract: 'Spindles rose.' }), ['database:crossref']),
+    withSources(item('feed', ['feed:j']), ['feed:j']),
+    withSources(item('mine', ['author:A7'], { kind: 'book-chapter' }), ['author:A7', 'database:crossref']),
+  ];
+  const kept = (/** @type {boolean} */ looked) => readableItems(items, active, looked).map((it) => it.doi?.split('/')[1]);
+  assert.deepEqual(kept(true), ['read', 'feed', 'mine']);
+  assert.deepEqual(kept(false), ['bare', 'read', 'feed', 'mine'], 'without a lookup a missing abstract may still come later');
+});
+
+test('the profile check drops papers outside the field, fills New from the rest, and remembers the drops as seen', async () => {
+  const fetchFn = routedFetch({ [FEED]: res(200, feedWith(5)) });
+  let sent = null;
+  const judge = async (pool, prof) => { sent = { ids: pool.map((p) => p.doi), prof }; return { off: new Set(pool.filter((p) => p.doi === '10.9999/inv.2').map((p) => p.id)), error: null }; };
+  const out = await collectRadar({ config: config({ size: { fresh: 3, older: 0 } }), since: '2026-10-01', now: '2026-10-07T07:00:00.000Z', fetch: fetchFn, library: radarLibrary(), state: emptyState(), judge });
+  assert.equal(sent.ids.length, 5, 'the whole pool is read, not just the first three');
+  assert.ok(sent.prof.topics.length > 0);
+  assert.equal(out.picked.length, 3);
+  assert.ok(!out.picked.some((p) => p.doi === '10.9999/inv.2'));
+  assert.equal(out.offProfile, 1);
+  assert.equal(out.state.seen['doi:10.9999/inv.2'].verdict, 'off');
+  const again = await collectRadar({ config: config({ size: { fresh: 3, older: 0 } }), since: '2026-10-01', now: '2026-10-08T07:00:00.000Z', fetch: fetchFn, library: radarLibrary(), state: out.state, judge });
+  assert.ok(!again.picked.some((p) => p.doi === '10.9999/inv.2'), 'a dropped paper does not come back');
+});
+
+test('a failed profile check leaves the ranking alone and says why', async () => {
+  const fetchFn = routedFetch({ [FEED]: res(200, feedWith(4)) });
+  const judge = async () => ({ off: new Set(), error: 'offline' });
+  const out = await collectRadar({ config: config({ size: { fresh: 3, older: 0 } }), since: '2026-10-01', now: '2026-10-07T07:00:00.000Z', fetch: fetchFn, library: radarLibrary(), state: emptyState(), judge });
+  assert.equal(out.picked.length, 3);
+  assert.equal(out.offProfile, 0);
+  assert.equal(out.judgeProblem, 'offline');
 });

@@ -79,10 +79,11 @@ export async function runStepsChecks(browser, port, outDir) {
   await page.close();
 
   // ================================================================ empty state: 0, 1 and 5 sessions
+  // spec 029 R5: the start page lists recent chats only where the chat list is not on screen, so these fold the list
   const emptyState = async (sessions, extra = {}) => {
     const p = await open({ tokens: 'zotero' });
     const out = await p.evaluate(async ({ sessions, extra }) => {
-      const ctx = await window.__sbS.make({ sessions, ...extra });
+      const ctx = await window.__sbS.make({ sessions, prefs: { historyCollapsed: true }, ...extra });
       const cards = [...document.querySelectorAll('.sb-ai-empty .sb-ai-card')];
       return {
         cards: cards.length, titles: cards.map((c) => c.querySelector('.sb-ai-card-title').textContent),
@@ -97,8 +98,8 @@ export async function runStepsChecks(browser, port, outDir) {
   check('empty state, 0 sessions: no cards, the mode text and pills as before, "Your chats and reports appear here."', zero.out.cards === 0 && zero.out.pills > 0 && zero.out.listEmpty, zero.out);
   await zero.p.close();
   const one = await emptyState(1);
-  check('empty state, 1 session: one card with the title, "Research report · 4 days ago" and the artifact count 2',
-    one.out.cards === 1 && one.out.titles[0] === 'Excited-state ML review' && one.out.metas[0] === 'Research report · 4 days ago' && one.out.counts[0] === '2', one.out);
+  check('empty state, 1 session: one card with the title, "Research report · 4 days ago" and the count in words, "2 artifacts" (spec 029 R7)',
+    one.out.cards === 1 && one.out.titles[0] === 'Excited-state ML review' && one.out.metas[0] === 'Research report · 4 days ago' && one.out.counts[0] === '2 artifacts', one.out);
   await one.p.close();
   const five = await emptyState(5, { context: [] });
   check('empty state, 5 sessions: three cards (the most recent), five history rows',
@@ -127,10 +128,46 @@ export async function runStepsChecks(browser, port, outDir) {
   const withContext = await emptyState(2, { context: [paper] });
   check('empty state: the paper being read still gets its suggestions, after the session cards', withContext.out.cards === 2 && withContext.out.pills >= 2, withContext.out);
   await withContext.p.close();
+  // spec 029 R5: with the chat list beside the thread the start page does not repeat it; folding the list brings them back
+  {
+    const p = await open({ tokens: 'zotero' });
+    const beside = await p.evaluate(async () => {
+      const ctx = await window.__sbS.make({ sessions: 5 });
+      const before = document.querySelectorAll('.sb-ai-empty .sb-ai-card').length;
+      ctx.chat.setHistoryCollapsed(true);
+      const folded = document.querySelectorAll('.sb-ai-empty .sb-ai-card').length;
+      ctx.chat.setHistoryCollapsed(false);
+      return { before, folded, after: document.querySelectorAll('.sb-ai-empty .sb-ai-card').length, pills: document.querySelectorAll('.sb-ai-empty .sb-ai-pill').length };
+    });
+    check('spec 029 R5: no recent-chat cards while the chat list is on screen; folding it shows them, opening it hides them again',
+      beside.before === 0 && beside.folded === 3 && beside.after === 0 && beside.pills > 0, beside);
+    await p.close();
+  }
+  // spec 029 R5: Zotero's narrow item pane (300 px), light and dark: the list is a drawer, so the start page lists the
+  // recent chats as at most three compact rows, none cut short, and the welcome sits with the suggestions above the box
+  for (const theme of ['light', 'dark']) {
+    const p = await open({ tokens: 'zotero', theme, w: '300' }, { width: 332, height: 760 }, theme);
+    const narrowStart = await p.evaluate(async () => {
+      await window.__sbS.make({ sessions: 5, prefs: { historyCollapsed: true } });
+      const rect = (el) => el.getBoundingClientRect();
+      const kids = [...document.querySelector('.sb-ai-suggestions').children];
+      const cards = [...document.querySelectorAll('.sb-ai-empty .sb-ai-card')];
+      return { cards: cards.length, textToSuggestions: Math.round(rect(kids[0]).top - rect(document.querySelector('.sb-ai-empty-text')).bottom),
+        suggestionsToBox: Math.round(rect(document.querySelector('.sb-ai-box')).top - Math.max(...kids.map((k) => rect(k).bottom))),
+        cut: cards.flatMap((c) => [c.querySelector('.sb-ai-card-title'), c.querySelector('.sb-ai-card-when')]).filter((t) => t.scrollWidth > t.clientWidth + 1 || t.scrollHeight > t.clientHeight + 1).map((t) => t.textContent),
+        rows: cards.map((c) => Math.round(rect(c).height)) };
+    });
+    check(`narrow pane ${theme} (spec 029 R5): at most 3 compact recent rows, none cut short; the welcome sits with the suggestions just above the box`,
+      narrowStart.cards === 3 && narrowStart.cut.length === 0 && narrowStart.rows.every((h) => h <= 64) && narrowStart.textToSuggestions >= 0 && narrowStart.textToSuggestions <= 24
+      && narrowStart.suggestionsToBox >= 0 && narrowStart.suggestionsToBox <= 32, narrowStart);
+    check(`narrow pane ${theme} (spec 029 R5): no sideways scroll`, Object.values(await noScroll(p)).every(Boolean), await noScroll(p));
+    await p.screenshot({ path: join(outDir, `steps-narrow-start-r5-${theme}.png`) });
+    await p.close();
+  }
   // clicking a card reopens that session
   page = await open({ tokens: 'zotero' });
   const reopened = await page.evaluate(async () => {
-    const ctx = await window.__sbS.make({ sessions: 3 });
+    const ctx = await window.__sbS.make({ sessions: 3, prefs: { historyCollapsed: true } });
     document.querySelector('.sb-ai-card[data-id="old2"]').click();
     await new Promise((r) => setTimeout(r, 120));
     return { session: ctx.chat.sessionID, conversation: ctx.chat.conversationID, empty: Boolean(document.querySelector('.sb-ai-empty')), selected: document.querySelector('.sb-ai-conv.is-selected')?.dataset.id };
@@ -144,6 +181,9 @@ export async function runStepsChecks(browser, port, outDir) {
     const out = [...document.querySelectorAll('.sb-ai-list .sb-ai-conv')].map((r) => ({
       id: r.dataset.id, cls: r.className, d: r.querySelector('svg path').getAttribute('d'), count: r.querySelector('.sb-ai-conv-count')?.textContent ?? null,
       dot: getComputedStyle(r.querySelector('.sb-ai-conv-dot')).display,
+      kind: r.querySelector('.sb-ai-kind')?.title ?? null, kindName: r.querySelector('.sb-ai-kind')?.getAttribute('aria-label') ?? null,
+      countTip: r.querySelector('.sb-ai-conv-count')?.title ?? null,
+      countShown: (() => { const c = r.querySelector('.sb-ai-conv-count'); if (!c) return null; const b = c.getBoundingClientRect(); return c.scrollWidth <= c.clientWidth + 1 && b.right <= r.getBoundingClientRect().right + 1; })(),
     }));
     ctx.chat.sessionID = 'old1';
     ctx.chat.running = {};
@@ -155,10 +195,31 @@ export async function runStepsChecks(browser, port, outDir) {
   });
   const byId = Object.fromEntries(rows.out.map((r) => [r.id, r]));
   check('history: the icon follows the first step kind (report, find, chat)', byId.old1.d === rows.icons.report && byId.old2.d === rows.icons.find && byId.old3.d === rows.icons.chat, byId);
-  check('history: a session with artifacts shows a small count, one with none shows nothing', byId.old1.count === '2' && byId.old2.count === '1' && byId.old3.count === '2', rows.out.map((r) => [r.id, r.count]));
+  check('history: a session with artifacts shows a small count, one with none shows nothing', byId.old1.count === '2 artifacts' && byId.old2.count === '1 artifact' && byId.old3.count === '2 artifacts', rows.out.map((r) => [r.id, r.count]));
+  check('history (spec 029 R7): the count says what it counts, in words and a tooltip, and fits its row in the 220 px list',
+    rows.out.every((r) => r.countShown && /^\d+ artifacts? in this chat: the paper lists, tables and reports it made$/.test(r.countTip)), rows.out.map((r) => [r.id, r.countTip, r.countShown]));
+  check('history (spec 029 R7): the kind icon has its kind as tooltip and spoken name (Research report, Find papers, Chat)',
+    byId.old1.kind === 'Research report' && byId.old2.kind === 'Find papers' && byId.old3.kind === 'Chat' && rows.out.every((r) => r.kind && r.kind === r.kindName), rows.out.map((r) => [r.id, r.kind, r.kindName]));
   check('history: a running session shows a quiet dot; the others and a stopped one show none',
     rows.out.every((r) => r.dot === 'none') && rows.running.filter((r) => r[1]).map((r) => r[0]).join() === 'old1' && rows.running.find((r) => r[1])[2] !== 'none' && rows.afterStop === 0, rows.running);
   await page.close();
+
+  // spec 029 R7: the same rows in Zotero's narrow pane (the list is a drawer there), light and dark: the words fit
+  for (const theme of ['light', 'dark']) {
+    const p = await open({ tokens: 'zotero', theme, w: '300' }, { width: 332, height: 700 }, theme);
+    const narrowRows = await p.evaluate(async () => {
+      await window.__sbS.make({ sessions: 5, prefs: { historyCollapsed: false } });
+      return [...document.querySelectorAll('.sb-ai-list .sb-ai-conv')].map((r) => {
+        const c = r.querySelector('.sb-ai-conv-count');
+        const b = c?.getBoundingClientRect();
+        return { kind: r.querySelector('.sb-ai-kind')?.title, count: c?.textContent ?? null, fits: !c || (c.scrollWidth <= c.clientWidth + 1 && b.right <= r.getBoundingClientRect().right + 1) };
+      });
+    });
+    check(`narrow pane ${theme} (spec 029 R7): every row's count reads in words and fits, every kind icon has its tooltip`,
+      narrowRows.length === 5 && narrowRows.every((r) => r.fits && r.kind && (r.count === null || /artifacts?$/.test(r.count))), narrowRows);
+    await p.screenshot({ path: join(outDir, `steps-narrow-list-r7-${theme}.png`) });
+    await p.close();
+  }
 
   // ================================================================ "+ Add step" per result kind
   page = await open({ tokens: 'zotero' });
@@ -234,14 +295,16 @@ export async function runStepsChecks(browser, port, outDir) {
   check('Chat about this table: a plain chat turn (composer in Chat, "Ask about this table…", current result recorded)',
     aboutTable.mode === 'chat' && aboutTable.placeholder === 'Ask about this table…' && aboutTable.focus && aboutTable.currents.length === 1, aboutTable);
   // spec 007 E7: a paper set or a table starts a Research report from the session
-  const reviewOf = () => page.evaluate(() => ({ req: window.__ctx.calls.find((c) => c.kind === 'review')?.req, mode: window.__ctx.chat.mode, reportOpen: Boolean(document.querySelector('.sb-ai-thread .sb-rp')) }));
+  // spec 030 R3: the report opens inside the thread, under the paper set's card, which stays (no new page)
+  const reviewOf = () => page.evaluate(() => ({ req: window.__ctx.calls.find((c) => c.kind === 'review')?.req, mode: window.__ctx.chat.mode, reportOpen: Boolean(document.querySelector('.sb-ai-thread .sb-rp')),
+    kept: Boolean(document.querySelector('.sb-ai-thread .sb-art-card')), step: document.querySelector('.sb-ai-thread .sb-ai-user.is-step .sb-ai-user-step')?.textContent }));
   await start(['papers']);
   await addStepLabels(page);
   await page.locator('.sb-addstep-menu .sb-art-item', { hasText: 'Report on these' }).click();
   await wait(page, 200);
   const onPapers = await reviewOf();
-  check('Report on these: a pipeline-2 review on this session and paper set (it still asks and plans), and the report opens in the thread',
-    onPapers.req?.pipeline === 2 && onPapers.req.session === 'sessX' && onPapers.req.on?.id === 'R1' && !onPapers.req.fromTable && !onPapers.req.autoApprove && onPapers.mode === 'report' && onPapers.reportOpen, onPapers);
+  check('Report on these: a pipeline-2 review on this session and paper set (it still asks and plans); the report opens in the same thread, under the papers (spec 030 R3)',
+    onPapers.req?.pipeline === 2 && onPapers.req.session === 'sessX' && onPapers.req.on?.id === 'R1' && !onPapers.req.fromTable && !onPapers.req.autoApprove && onPapers.reportOpen && onPapers.kept && onPapers.step === 'Research report', onPapers);
   await start(['table']);
   await addStepLabels(page);
   await page.locator('.sb-addstep-menu .sb-art-item', { hasText: 'Write a report from this' }).click();
@@ -459,6 +522,9 @@ export async function runStepsChecks(browser, port, outDir) {
       ctx.chat.addUser('What is the conductance of the SAM?\nAnd the solution one?');
     });
     const row = page.locator('.sb-ai-user').last();
+    // spec 029 R14: your own message carries no avatar and no left gap for one
+    const mark = await row.evaluate((n) => ({ avatars: n.querySelectorAll('.sb-avatar').length, pad: getComputedStyle(n).paddingLeft }));
+    check('your message has no avatar mark (and no 38px gap left for one)', mark.avatars === 0 && mark.pad !== '38px', mark);
     const hiddenAtRest = await row.locator('.sb-ai-msg-actions').evaluate((n) => getComputedStyle(n).opacity);
     await row.hover();
     await wait(page, 200);
@@ -522,6 +588,144 @@ export async function runStepsChecks(browser, port, outDir) {
     const asked = await page.evaluate(() => window.__ctx.calls.filter((c) => c.kind === 'review-estimate').map((c) => c.req.depth));
     check('depth: each stop asked the engine for its own estimate', ['fastest', 'quick', 'standard', 'deep'].every((d) => asked.includes(d)), asked);
     check('depth: no page errors', page.errors.length === 0, page.errors);
+    await page.close();
+  }
+
+  // spec 029 R8: the wider column is for wide screens only; Zotero's narrow item pane (300 px, light and dark) keeps the
+  // message box and the thread across the whole pane, as before
+  for (const theme of ['light', 'dark']) {
+    const page = await open({ tokens: 'zotero', theme, w: '300' }, { width: 332, height: 700 }, theme);
+    await page.evaluate(async () => { window.__ctx = await window.__sbS.make({ sessions: 2 }); });
+    const pane = await page.evaluate(() => {
+      const composer = document.querySelector('.sb-ai-composer');
+      const cs = getComputedStyle(composer);
+      return { main: Math.round(document.querySelector('.sb-ai-main').getBoundingClientRect().width), thread: Math.round(document.querySelector('.sb-ai-thread').getBoundingClientRect().width),
+        box: Math.round(document.querySelector('.sb-ai-composer-inner').getBoundingClientRect().width), room: Math.round(composer.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)) };
+    });
+    check(`narrow pane ${theme}: spec 029 R8 leaves it as it was, the thread and the message box take the pane's whole width`, pane.thread === pane.main && pane.box === pane.room && pane.main <= 300, pane);
+    check(`narrow pane ${theme}: no sideways scroll`, Object.values(await noScroll(page)).every(Boolean), await noScroll(page));
+    await page.screenshot({ path: join(outDir, `steps-narrow-r8-${theme}.png`) });
+    await page.close();
+  }
+
+  // ---------------------------------------------------------------- spec 031 R5/R6: Add to Zotero under a Find table looks for free copies
+  {
+    const page = await open({ tokens: 'zotero', w: '1100' }, { width: 1132, height: 800 });
+    await page.evaluate(async () => {
+      const ctx = await window.__sbS.make({ searches: [window.__sbS.savedSearch('find-add', 'vole foraging')] });
+      window.__ctx = ctx;
+      ctx.chat.refreshList();
+    });
+    await wait(page, 150);
+    await page.locator('.sb-ai-conv[data-id="find-add"]').click();
+    await page.waitForSelector('.sb-fp-row');
+    await page.locator('.sb-fp thead .sb-fp-tick, .sb-fp .sb-fp-tick').first().check();
+    await wait(page, 100);
+    await page.locator('.sb-fp button', { hasText: /^Add 2 to Zotero$/ }).click();
+    await page.waitForFunction(() => window.__ctx.calls.some((c) => c.kind === 'notice' && /Added to Zotero/.test(c.text)), null, { timeout: 4000 }).catch(() => {});
+    const got = await page.evaluate(() => ({ add: window.__ctx.calls.filter((c) => c.kind === 'add-to-library').at(-1), notice: window.__ctx.calls.filter((c) => c.kind === 'notice').map((c) => c.text).at(-1) }));
+    check('spec 031 R5/R6: Add to Zotero under a Find table asks where each paper can be read and says so (one needs the publisher’s page, one has no copy yet)',
+      JSON.stringify(got.add?.titles) === '["A Unified Theory of Doorknob Ergonomics","Seasonal Migration of Burrowing Owls: A Review"]' && JSON.stringify(got.add?.pdfs) === '[null,null]'
+      && got.notice === 'Added to Zotero: 1 needs the publisher’s page · 1 not found yet (Zotero keeps looking).', got);
+    check('spec 031: no page errors', page.errors.length === 0, page.errors);
+    await page.close();
+  }
+
+  // ---------------------------------------------------------------- spec 030: one thread, many workflows (R1–R8)
+  // Chat → Find papers → Research report → Chat → Quick answer in one thread, then the thread reopened, in a Zotero tab
+  // and in a narrow Obsidian pane (both mount this ChatView; the web shell has its own check in web-checks.mjs).
+  for (const [tokens, query, viewport] of [['zotero', {}, { width: 1100, height: 900 }], ['obsidian', { tokens: 'obsidian', w: '380', bare: '1' }, { width: 380, height: 900 }]]) {
+    const tag = `chain ${tokens}`;
+    const page = await open(query, viewport);
+    await page.evaluate(async () => {
+      const ctx = await window.__sbS.make({ sessions: 0 });
+      window.__sbS.chainEngine(ctx);
+      window.__ctx = ctx;
+      ctx.chat.setMode('chat');
+    });
+    const pick = (mode) => page.evaluate((m) => { const p = window.__ctx.chat.modePick; p.value = m; p.dispatchEvent(new Event('change')); }, mode);
+    const ask = async (text) => { await page.fill('.sb-ai-input', text); await page.keyboard.press('Enter'); await wait(page, 250); };
+    const state = () => page.evaluate(() => {
+      const chat = window.__ctx.chat;
+      return {
+        title: chat.headerName.textContent, session: chat.sessionID, conversation: chat.conversationID, mode: chat.mode,
+        users: [...chat.thread.querySelectorAll(':scope > .sb-ai-user')].map((u) => [u.querySelector('.sb-ai-user-step')?.textContent ?? '', u.querySelector('.sb-ai-user-text')?.textContent]),
+        empty: Boolean(chat.thread.querySelector('.sb-ai-empty')), find: chat.thread.querySelectorAll('.sb-fp').length, report: chat.thread.querySelectorAll('.sb-rp').length,
+        calls: window.__ctx.calls.filter((c) => ['send', 'ask', 'review'].includes(c.kind)).map((c) => ({ kind: c.kind, id: c.id ?? c.req?.session ?? null, on: c.req?.on?.id ?? null })),
+        puts: window.__ctx.store.puts.map((p) => [p.id, p.input.kind]),
+      };
+    });
+    await ask('What do voles eat in winter?');
+    const first = await state();
+    check(`${tag}: a chat question opens a session titled after it`, first.session === 'sess1' && first.title === 'What do voles eat in winter?', first);
+    await pick('find');
+    const switched = await state();
+    check(`${tag} R1: switching to Find papers keeps the thread, its title and its session (no start page)`, !switched.empty && switched.title === first.title && switched.session === 'sess1' && switched.users.length === 1 && switched.mode === 'find', switched);
+    await ask('vole foraging');
+    await page.waitForFunction(() => window.__ctx.store.puts.length > 0, null, { timeout: 8000 }).catch(() => {});
+    await wait(page, 200);
+    const found = await state();
+    check(`${tag} R2: the search runs under the chat, names its step, and its papers become a find step of the same session`,
+      found.find === 1 && JSON.stringify(found.users.map((u) => u[0])) === '["","Find papers"]' && JSON.stringify(found.puts) === '[["sess1","find"]]' && found.title === first.title, found);
+    await pick('report');
+    await ask('What limits vole foraging?');
+    const reported = await state();
+    const review = reported.calls.find((c) => c.kind === 'review');
+    check(`${tag} R3: a Research report asked in the thread is a step of its session, on the papers just found, shown in the thread`,
+      review?.id === 'sess1' && review.on === 'R1' && reported.report === 1 && reported.find === 1 && reported.users.at(-1)?.[0] === 'Research report' && reported.title === first.title, reported);
+    await pick('chat');
+    await ask('Which of these study winter?');
+    await pick('ask');
+    await ask('One line: what is a vole?');
+    const chained = await state();
+    const sends = chained.calls.filter((c) => c.kind === 'send');
+    check(`${tag} R4/R5: Chat after the report and a Quick answer in the thread both go into the same session (no new chat, no one-off ask)`,
+      // (the ask before the review is Find's own summary of its top papers)
+      sends.length === 3 && sends.every((c) => c.id === 'sess1') && !chained.calls.slice(chained.calls.findIndex((c) => c.kind === 'review')).some((c) => c.kind === 'ask') && chained.report === 1, chained.calls);
+    await page.evaluate(() => window.__ctx.chat.refreshList());
+    await wait(page, 150);
+    const rows = await page.evaluate(() => [...document.querySelectorAll('.sb-ai-list .sb-ai-conv')].map((r) => r.dataset.id));
+    check(`${tag} R6: the history lists the thread once (its report is not a second row)`, JSON.stringify(rows) === '["sess1"]', rows);
+    // reopen: a new chat, then the session from the history
+    await page.evaluate(() => window.__ctx.chat.newChat());
+    await wait(page, 100);
+    const fresh = await state();
+    check(`${tag}: New chat still starts an empty thread`, fresh.empty && fresh.users.length === 0 && fresh.session === null, fresh);
+    await page.evaluate(() => window.__ctx.chat.openConversation('sess1'));
+    await wait(page, 300);
+    const reopened = await state();
+    check(`${tag} R6: reopened, the thread shows every step in order: chat, Find papers (with its table card), the report, chat, Quick answer`,
+      JSON.stringify(reopened.users) === JSON.stringify([['', 'What do voles eat in winter?'], ['Find papers', 'vole foraging'], ['Research report', 'What limits vole foraging?'], ['', 'Which of these study winter?'], ['', 'One line: what is a vole?']])
+      && reopened.report === 1 && (await page.locator('.sb-ai-thread .sb-art-card').count()) >= 1, reopened);
+    check(`${tag}: no sideways scroll`, Object.values(await noScroll(page)).every(Boolean), await noScroll(page));
+    check(`${tag}: no page errors`, page.errors.length === 0, page.errors);
+    await page.screenshot({ path: join(outDir, `steps-chain-${tokens}.png`), fullPage: false });
+
+    // the other way round: a Find search first (its own session), then a chat about it, then reopened from the history
+    await page.evaluate(async () => {
+      const ctx = await window.__sbS.make({ sessions: 0 });
+      window.__sbS.chainEngine(ctx);
+      window.__ctx = ctx;
+      ctx.chat.setMode('find');
+    });
+    await ask('owl migration');
+    await page.waitForFunction(() => window.__ctx.store.puts.length > 0, null, { timeout: 8000 }).catch(() => {});
+    await wait(page, 200);
+    const findFirst = await state();
+    await pick('chat');
+    await ask('Which of these are field studies?');
+    const after = await state();
+    const send = after.calls.find((c) => c.kind === 'send');
+    check(`${tag} R4: Chat after a Find search goes into the search's session (no second chat)`, findFirst.session && send?.id === findFirst.session && after.title === 'owl migration' && after.find === 1, { findFirst, after });
+    await page.evaluate(() => window.__ctx.chat.refreshList());
+    await wait(page, 150);
+    const listed = await page.evaluate(() => [...document.querySelectorAll('.sb-ai-list .sb-ai-conv')].map((r) => r.dataset.session ?? r.dataset.id));
+    await page.evaluate(() => window.__ctx.chat.newChat());
+    await page.evaluate(() => { const c = window.__ctx.chat.recent[0]; return window.__ctx.chat.openSession(c); });
+    await wait(page, 300);
+    const back = await state();
+    check(`${tag} R6: listed once, it reopens as its table with the chat about it underneath`, listed.length === 1 && back.find === 1 && JSON.stringify(back.users.map((u) => u[1])) === '["owl migration","Which of these are field studies?"]', { listed, back });
+    check(`${tag}: no page errors (find first)`, page.errors.length === 0, page.errors);
     await page.close();
   }
 

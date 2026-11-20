@@ -33,6 +33,9 @@ export interface AgentService {
     /** The user opened this chat: routine news in it is no longer news (`ConversationSummary.news`). Writes nothing
      *  when there is none, so calling it on every open is cheap. */
     markSeen(id: ConversationId): Promise<void>;
+    /** The user opened these papers (rows of a routine's results) without opening the chat: each is one paper less of
+     *  news. Idempotent; writes nothing when there is no news or every row was already viewed. */
+    markViewed(id: ConversationId, rowIds: RowId[]): Promise<void>;
     remove(id: ConversationId): Promise<void>;
     /** Streams one turn. Aborting the signal interrupts the provider; the stream then ends with failed{cancelled}.
      *  `after` resumes a stream this client lost (reconnect, phone waking up). */
@@ -134,6 +137,8 @@ export interface AgentService {
     update(id: string, patch: Partial<import("./domain").RoutineDraft>): Promise<import("./domain").Routine>;
     /** Starts at once and returns; ignores the 50% rule and the slot; refused while another routine runs. */
     runNow(id: string): Promise<{ started: boolean; reason?: string }>;
+    /** A radar only: forget the papers its latest issue showed (rated ones stay out) and build that issue again over the same window; the old issue is hidden behind the new one. */
+    redo(id: string): Promise<{ started: boolean; reason?: string }>;
     pause(id: string): Promise<import("./domain").Routine>;
     resume(id: string): Promise<import("./domain").Routine>;
     archive(id: string): Promise<import("./domain").Routine>;
@@ -173,6 +178,28 @@ export interface AgentService {
     forgetTopic(routineId: string, text: string): Promise<{ forgotten: boolean }>;
     verdicts(routineId: string): Promise<Record<string, import("./radar-types").Verdict>>;
     feedback(routineId: string, paperKey: string, verdict: import("./radar-types").FeedbackVerdict): Promise<{ verdict: import("./radar-types").Verdict; changed: boolean }>;
+  };
+
+  /** Spec 028 R8/R9: the Read later list (<dataDir>/reading-list.json). `add` of a paper already listed returns its
+   *  entry unchanged; `markRead(id, false)` makes it unread again; both refuse a paper they cannot use. */
+  readingList: {
+    /** Every entry, newest added first. */
+    list(): Promise<ReadingListEntry[]>;
+    add(paper: ReadingListPaper): Promise<ReadingListEntry>;
+    remove(id: string): Promise<{ removed: boolean }>;
+    markRead(id: string, read?: boolean): Promise<ReadingListEntry>;
+  };
+
+  /** Spec 031: getting the paper itself. `access` says, per paper (parallel to the input), where it can be read: a free
+   *  PDF (arXiv, Unpaywall, OpenAlex, Semantic Scholar, Europe PMC), only the publisher's page, or nothing; at most 50
+   *  papers a call. `textCache` is how much paper text the server keeps; `{ clear: true }` empties it. */
+  papers: {
+    access(papers: { doi?: string | null; url?: string | null; pdfUrl?: string | null; arxiv?: string | null }[]): Promise<import("./open-access").Access[]>;
+    textCache(opts?: { clear?: boolean }): Promise<{ papers: number; bytes: number }>;
+    /** Spec 032: keep one paper's PDF: its free copies are looked up (unless given) and the server keeps the first that
+     *  downloads, in Zotero (held until the plugin attaches it) or in Veritas's papers folder. `access` is what the
+     *  lookup found, so the caller can offer the publisher's page when no copy could be kept. */
+    keep(paper: import("./tools").KeptPaper & { pdfUrl?: string | null }): Promise<import("./tools").KeepResult & { access: import("./open-access").Access }>;
   };
 
   /** Outside paper search for hosts that cannot fetch other origins (the web app). One row per paper, per source. */
@@ -237,4 +264,18 @@ export declare function createRemoteRuntime(transport: {
 export interface OutsidePaperRow {
   title: string; authors: string[]; year: number | null; venue: string; doi: string | null; abstract: string;
   url: string | null; source: string; arxiv: string | null; citations: number | null;
+}
+
+/** Spec 028 R8: what Read later takes; the UI's OutsidePaper already has this shape. */
+export interface ReadingListPaper {
+  title: string; authors?: string[]; year?: number | null; venue?: string; doi?: string | null; arxiv?: string | null;
+  url?: string | null; abstract?: string; source?: string;
+}
+
+/** One paper on the Read later list. `id` is doi:<doi>, else arxiv:<id>, else url:<url>; `read` is when it was read. */
+export interface ReadingListEntry {
+  id: string; title: string; authors: string[]; year: number | null; venue: string; doi?: string; arxiv?: string;
+  url: string; abstract?: string; source: string; added: string; read?: string;
+  /** Spec 029 R9: put on the list by a Like on Home; taking the Like back takes it off. */
+  via?: "like";
 }

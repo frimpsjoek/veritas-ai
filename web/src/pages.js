@@ -5,14 +5,17 @@
 import { setupCard } from './setup-card.js';
 import { h } from '../../ui/src/dom.js';
 import { icon } from '../../ui/src/icons.js';
+import { openImageViewer } from '../../ui/src/image-viewer.js';
 import { formatRoute } from '../../ui/src/sources/route.js';
 import { paintPhone } from './phone.js';
 import { paintSetup } from './setup-view.js';
 import { paintHome } from '../../ui/src/home/home.js';
 import { SettingsView } from '../../ui/src/settings/settings-view.js';
+import { ocrLine } from '../../ui/src/settings/settings-schema.js';
 import { foldersWidget } from './folders-view.js';
 import { progressPanel } from './progress-view.js';
 import { mountSources } from '../../ui/src/sources/sources-view.js';
+import { showWaiting } from './news-badge.js';
 
 /** @typedef {import("./host.js").createWebHost extends (...a: any) => infer H ? H : never} WebHost */
 /** @typedef {{ host: any, doc: Document, go: (route: import("../../ui/src/sources/route.js").WebRoute) => void, links: import("../../ui/src/home/links.js").HomeLinks }} PageContext */
@@ -38,20 +41,12 @@ function linkCard(doc, href, iconName, title, meta, fresh = false) {
   return card;
 }
 
-/** The count on the rail's Home item. @param {Document} doc @param {number} n */
-function showWaiting(doc, n) {
-  const home = doc.querySelector('.sbw-nav-item[data-view="home"]');
-  if (!home) return;
-  let badge = /** @type {HTMLElement | null} */ (home.querySelector('.sbw-nav-badge'));
-  if (!badge) { badge = h(doc, 'span', 'sbw-nav-badge'); home.append(badge); }
-  badge.textContent = String(n);
-  badge.hidden = n === 0;
-}
-
 /** Home under the router: every link is a hash route, and the waiting count shows on the rail's Home item.
  *  @param {HTMLElement} into @param {PageContext} ctx */
 export async function paintWebHome(into, { host, doc, links }, route) {
-  await paintHome(into, { host, doc, links, issue: route?.issue, onWaiting: (n) => showWaiting(doc, n) });
+  // spec 029 R13: a paper's picture opens full screen
+  const viewImage = (/** @type {string} */ src) => { openImageViewer(doc, { src, alt: 'Graphical abstract', open: (u) => host.openLink(u) }); };
+  await paintHome(into, { host, doc, links: { ...links, viewImage }, issue: route?.issue, onWaiting: (n) => showWaiting(doc, n) });
   // a new user's "Get set up" card goes under the greeting; it paints nothing once every step is done or it is hidden
   const card = await setupCard(doc, host).catch((error) => { host.logError?.(error); return null; });
   const top = into.querySelector('.sbw-home-top');
@@ -125,9 +120,42 @@ export async function paintSettings(into, { host, doc, section, links }) {
       radarSetup: (_row, ctx) => { const box = h(ctx.doc, 'div', 'sbw-settings-radar'); void mountSources(box, { host: ctx.host, doc: ctx.doc, links }, { mode: 'settings' }); return box; },
       routinesList: (_row, ctx) => routinesList(ctx.doc, ctx.host),
       version: (_row, ctx) => versionLine(ctx.doc, ctx.host),
+      ocrEngine: (_row, ctx) => ocrEngineLine(ctx.doc, ctx.host),
+      ...(host.browse?.autoUpdate ? { appUpdates: (_row, ctx) => appUpdatesToggle(ctx.doc, /** @type {any} */ (host.browse)) } : {}),
     },
-    actions: { copyDiagnostics: () => copyDiagnostics(doc, host) },
+    actions: {
+      copyDiagnostics: () => copyDiagnostics(doc, host),
+      ...(host.browse ? { signOutSites: () => signOutSites(host) } : {}),
+    },
   });
+}
+
+/** Settings > On this computer > Sign out of sites (spec 027 G4): Browse's cookies and sign-ins, after a confirm.
+ *  @param {any} host */
+/** Spec 033 R3: the desktop app installs updates by itself when Veritas is not in use; this switches that off (then an
+ *  update is offered instead). @param {Document} doc @param {{ autoUpdate(on?: boolean): Promise<boolean> }} browse */
+function appUpdatesToggle(doc, browse) {
+  const label = h(doc, 'label', 'sbw-app-updates');
+  const box = /** @type {HTMLInputElement} */ (h(doc, 'input'));
+  box.type = 'checkbox';
+  box.disabled = true;
+  label.append(box, ' Install updates automatically');
+  void browse.autoUpdate().then((on) => { box.checked = on; box.disabled = false; }, () => { label.textContent = 'Updates: not available here'; });
+  box.addEventListener('change', () => { void browse.autoUpdate(box.checked).then((on) => { box.checked = on; }); });
+  return label;
+}
+
+async function signOutSites(host) {
+  const browse = host.browse;
+  if (!browse) return;
+  const ok = await host.confirm('Sign out of every site you signed in to in Browse? Its tabs close. Your library, notes and settings stay.', { title: 'Sign out of sites' });
+  if (!ok) return;
+  try {
+    await browse.signOut();
+    host.notice('Signed out of the sites in Browse');
+  } catch (error) {
+    host.notice(String(error instanceof Error ? error.message : error));
+  }
 }
 
 /** Settings > Server and phone > Servers: the setup screen's list and form (setup-view.js). @param {Document} doc */
@@ -196,6 +224,13 @@ function indexStatus(doc, host) {
 function versionLine(doc, host) {
   const line = h(doc, 'span', 'sbs-help', 'Veritas web app');
   host.json('/status').then((status) => { if (status?.version) line.textContent = `Veritas ${status.version}`; }).catch(() => {});
+  return line;
+}
+
+/** On this computer > Reading scans and images: which OCR engine the server has (spec 024 G2). @param {Document} doc @param {any} host */
+function ocrEngineLine(doc, host) {
+  const line = h(doc, 'span', 'sbs-help', '');
+  host.json('/status').then((status) => { line.textContent = ocrLine(status?.ocr); }).catch(() => { line.textContent = "Couldn't ask the server."; });
   return line;
 }
 

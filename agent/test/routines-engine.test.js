@@ -408,7 +408,7 @@ test('routines.list() also returns a broken routine file as a { broken, file, na
 
 const RADAR_FEED = 'https://j.example/feed';
 const radarDraft = (over = {}) => ({
-  name: 'Sleep radar', kind: 'radar', schedule: { kind: 'daily', time: '23:59' }, // not due: only Run now fires it
+  name: 'Sleep radar', kind: 'radar', schedule: { kind: 'daily', time: '23:59' }, // not due: after the first run on save, only Run now fires it
   radar: { scope: { kind: 'library' }, profile: { topics: [{ text: 'sleep spindle' }] }, sources: [{ kind: 'feed', url: RADAR_FEED, title: 'J' }, { kind: 'feed', url: 'https://broken.example/feed' }], size: { fresh: 5, older: 0 } },
   ...over,
 });
@@ -424,12 +424,13 @@ test('a radar routine writes one "New" papers result in a new session, with a ne
   assert.equal(r.prompt, 'Reading radar');
   assert.equal(r.radar.sources[0].id, 'feed:https://j.example/feed');
   assert.equal(r.target.kind, 'session');
-  assert.deepEqual(await ai.routines.runNow(r.id), { started: true });
+  // Saving a new radar starts its first run (no runNow needed).
   const run = await until(async () => (await ai.routines.list())[0].lastRun, 'the radar run');
   assert.equal(run.status, 'done');
   assert.equal(run.added, 2, 'study 1 is in the library');
   assert.match(run.summary, /Radar: 2 new papers from 1 source \(feed:https:\/\/broken\.example\/feed failed: HTTP 404\)/);
-  assert.equal(t.state.inputs.length, 0, 'no model call');
+  // The rows have no abstracts, so no why lines; the one model call is the profile check, which reads titles too.
+  assert.equal(t.state.inputs.length, 1, 'only the profile check');
 
   const summary = (await ai.conversations.list()).find((c) => c.id === run.session);
   assert.equal(summary.news.papers, 2);
@@ -453,6 +454,28 @@ test('a radar routine writes one "New" papers result in a new session, with a ne
   assert.ok(state.seen['doi:10.9999/inv.2'], 'the shown paper is remembered');
   assert.match(state.sourceStatus['feed:https://broken.example/feed'].error, /404/);
   assert.deepEqual((await ai.routines.list())[0].radarStatus, state.sourceStatus, 'the list carries each source\'s last answer for the setup sheet');
+  await ai.dispose();
+});
+
+test('a seed radar saved without a calibration calibrates on its first run and keeps the threshold on the routine', async () => {
+  const { CONTRAST } = await import('../src/radar-seeds.js');
+  const { arxivCategoryFeed } = await import('../src/scholarly.js');
+  const far = feedXml([1, 2, 3, 4, 5].map((n) => ({ title: `Invented far paper ${n}`, link: `https://arxiv.org/abs/2610.0000${n}`, summary: 'stars and galaxies' })));
+  const fetch = routedFetch({ [RADAR_FEED]: res(200, feedXml([2, 3].map((n) => ({ title: `Spindle study number ${n} of sleep`, link: `https://j.example/a/${n}`, doi: `10.9999/inv.${n}`, summary: 'Spindles.' })))),
+    ...Object.fromEntries(CONTRAST.map((c) => [arxivCategoryFeed(c), res(200, far)])) });
+  const library = radarLibrary({ known });
+  const asked = [];
+  library.radarCalibrate = async (q) => { asked.push(q); return { abstract: { threshold: 0.42, overlap: false }, full: null, seeds: 3, at: 1792500000, baseline: { labels: [], abstract: [], full: [] } }; };
+  const t = setup({ library, fetch });
+  const ai = await t.make();
+  const mine = (key) => ({ title: `Invented seed paper ${key}`, year: 2025, doi: null, key, abstract: '', openalexId: null });
+  const r = await ai.routines.create(radarDraft({ radar: { ...radarDraft().radar, seeds: { mine: [mine('S1'), mine('S2'), mine('S3')], papers: [], collections: [], author: null, categories: [] } } }));
+  const run = await until(async () => (await ai.routines.list())[0].lastRun, 'the radar run', 10_000);
+  assert.equal(run.status, 'done');
+  assert.equal(asked.length, 1);
+  const saved = (await ai.routines.list()).find((x) => x.id === r.id);
+  assert.equal(saved?.radar?.threshold?.abstract, 0.42);
+  assert.ok(saved?.radar?.threshold?.calibration?.seedsKey, 'the calibration remembers its seeds');
   await ai.dispose();
 });
 
@@ -493,6 +516,18 @@ test('a radar with older papers writes "Worth reading" as its own result; the ba
   const [second] = await ai.routines.list();
   assert.equal(second.lastRun.session, undefined, 'no New rows: no session, even if older papers are waiting');
   assert.equal(oa.calls.length, before, 'and no OpenAlex requests');
+  await ai.dispose();
+});
+
+test('a new radar starts as soon as it is saved, without waiting for its slot or the next tick', async () => {
+  const t = setup({ library: radarLibrary({ known }), fetch: radarFeed(), routines: { tickMs: 3_600_000 } }); // no tick in this test
+  const ai = await t.make();
+  const r = await ai.routines.create(radarDraft());
+  const run = await until(async () => (await ai.routines.list())[0].lastRun, 'the first run');
+  assert.equal(run.status, 'done');
+  assert.equal(run.added, 2);
+  const saved = (await ai.routines.list()).find((x) => x.id === r.id);
+  assert.ok(saved.nextRun > run.at, 'then it waits for its slot');
   await ai.dispose();
 });
 
@@ -662,6 +697,65 @@ test('R4: radar.note false writes no note; a failed note write is reported on th
   await a2.dispose();
 });
 
+test('spec 029 R9: a Like puts the paper on Read later (via like); taking the Like back takes it off, a hand-saved paper stays', async () => {
+  const { lib } = noted();
+  const t = setup({ library: lib, fetch: summaryFeed() });
+  const ai = await t.make();
+  const r = await ai.routines.create(radarDraft({ radar: { ...radarDraft().radar, profile: { topics: [{ text: 'sleep spindle' }], authors: [{ name: 'Doe, J.' }] } } }));
+  await ai.routines.runNow(r.id);
+  await finish(ai, r.id);
+  const key = 'doi:10.9999/inv.2';
+  const ids = async () => (await ai.readingList.list()).map((e) => e.id);
+  assert.deepEqual(await ids(), []);
+
+  await ai.radar.feedback(r.id, key, 'liked');
+  const [entry] = await ai.readingList.list();
+  assert.equal(entry.id, key);
+  assert.equal(entry.via, 'like');
+  assert.equal(entry.source, 'radar');
+  assert.ok(entry.title.length > 0);
+  assert.equal(entry.url, 'https://doi.org/10.9999/inv.2');
+  await ai.radar.feedback(r.id, key, 'undo');
+  assert.deepEqual(await ids(), [], 'the Like taken back takes off what it put on');
+
+  await ai.radar.feedback(r.id, key, 'liked');
+  await ai.radar.feedback(r.id, key, 'dismissed');
+  assert.deepEqual(await ids(), [], 'a Like changed to Not relevant takes it off too');
+
+  await ai.readingList.add({ title: 'Saved by hand', doi: '10.9999/inv.3', source: 'web' });
+  await ai.radar.feedback(r.id, 'doi:10.9999/inv.3', 'liked');
+  await ai.radar.feedback(r.id, 'doi:10.9999/inv.3', 'undo');
+  assert.deepEqual(await ids(), ['doi:10.9999/inv.3'], 'a paper saved by hand is never taken off by an Undo');
+  await ai.dispose();
+});
+
+test('spec 029 R10: papers liked before go on Read later once, at their Like time; one taken off by hand stays off', async () => {
+  const { lib } = noted();
+  const t = setup({ library: lib, fetch: summaryFeed() });
+  const a1 = await t.make();
+  const r = await a1.routines.create(radarDraft({ radar: { ...radarDraft().radar, profile: { topics: [{ text: 'sleep spindle' }], authors: [{ name: 'Doe, J.' }] } } }));
+  await a1.routines.runNow(r.id);
+  await finish(a1, r.id);
+  await a1.dispose();
+  // a Like given before this engine: in the radar's state only
+  const stateFile = `/data/radar/${r.id}/state.json`;
+  const state = JSON.parse(t.fs.files.get(stateFile));
+  const likedAt = '2026-05-01T09:00:00.000Z';
+  state.seen['doi:10.9999/inv.1'] = { ...state.seen['doi:10.9999/inv.1'], verdict: 'liked', at: likedAt };
+  t.fs.files.set(stateFile, JSON.stringify(state));
+
+  const a2 = await t.make();
+  const list = await a2.readingList.list();
+  assert.deepEqual(list.map((e) => [e.id, e.via, e.added]), [['doi:10.9999/inv.1', 'like', likedAt]]);
+  assert.deepEqual(await a2.readingList.remove('doi:10.9999/inv.1'), { removed: true });
+  await a2.dispose();
+  assert.ok(t.fs.files.has('/data/reading-list-liked-imported.json'));
+
+  const a3 = await t.make();
+  assert.deepEqual(await a3.readingList.list(), [], 'done once: a paper taken off by hand is not put back');
+  await a3.dispose();
+});
+
 test('R4: feedback updates the radar state and profile through the service, over the wire, and undo puts both back', async () => {
   const { lib } = noted();
   const t = setup({ library: lib, fetch: summaryFeed() });
@@ -740,9 +834,93 @@ test('R4 spec check 7: after 10 Not relevant clicks on one topic the next run ra
   t.clock.t += 60_000;
   await ai.routines.runNow(r.id);
   const run2 = await finish(ai, r.id, run1.at);
-  const rows2 = (await ai.sessions.read(run2.session, (await ai.sessions.view(run2.session)).results[0].ref)).rows.slice(0, 10);
+  // The same day, so the second run adds to the first issue: what it ranked are the rows it added.
+  assert.equal(run2.session, run1.session, 'one issue a day');
+  const body2 = await ai.sessions.read(run2.session, (await ai.sessions.view(run2.session)).results[0].ref);
+  const rows2 = body2.rows.filter((x) => body2.addedRows.includes(x.id)).slice(0, 10);
   assert.equal(rows2.filter((x) => topicOf(x) === 'hippocampal').length, 0, 'none of the dismissed topic in the top 10 (it was 10 of 20 before)');
   assert.equal(rows2.length, 10);
   assert.equal(JSON.parse(t.fs.files.get(`/data/radar/${r.id}/state.json`)).sourceStatus['feed:https://j.example/feed'].suggestRemove, true, 'ten dismissals in a row also suggest dropping that feed');
+  await ai.dispose();
+});
+
+test('Redo today rebuilds the latest radar issue over the same window: rated papers stay out, the old issue is hidden, over the wire too', async () => {
+  const t = setup({ library: radarLibrary({ known }), fetch: radarFeed() });
+  const local = await t.make();
+  const ai = createRemoteRuntime(loopbackTransport(local));
+  const r = await ai.routines.create(radarDraft());
+  const first = await until(async () => (await ai.routines.list())[0].lastRun, 'the first run');
+  assert.equal(first.added, 2);
+  // "Later", not "Not relevant": a dismissal teaches a negative example, and the fixture's papers differ by one digit.
+  await ai.radar.feedback(r.id, 'doi:10.9999/inv.2', 'later');
+
+  t.clock.t += 60_000;
+  assert.deepEqual(await ai.routines.redo(r.id), { started: true });
+  await until(async () => (await ai.routines.list())[0].lastRun.at !== first.at, 'the redo');
+  const [after] = await ai.routines.list();
+  assert.equal(after.lastRun.added, 1, 'the paper shown and not rated comes back; the rated one does not');
+  assert.notEqual(after.lastRun.session, first.session);
+  assert.equal(after.redo, undefined, 'the routine forgets the redo');
+  const listed = (await ai.conversations.list()).map((c) => c.id);
+  assert.deepEqual(listed, [after.lastRun.session], 'the old issue is listed nowhere');
+  const view = await local.sessions.view(after.lastRun.session);
+  const body = await local.sessions.read(after.lastRun.session, view.results[0].ref);
+  assert.deepEqual(body.rows.map((x) => x.doi), ['10.9999/inv.3']);
+  const state = JSON.parse(t.fs.files.get(`/data/radar/${r.id}/state.json`));
+  assert.equal(state.seen['doi:10.9999/inv.2'].verdict, 'later');
+  await local.dispose();
+});
+
+test('one issue a day: a later run the same day adds to today\'s issue, the next day starts a new one, and Redo forgets both runs', async () => {
+  const paper = (n) => ({ title: `Spindle study number ${n} of sleep`, link: `https://j.example/a/${n}`, doi: `10.9999/inv.${n}`, summary: `Spindles rose in study ${n}.` });
+  let xml = feedXml([2, 3].map(paper));
+  const t = setup({ library: radarLibrary({ known }), fetch: routedFetch({ [RADAR_FEED]: () => res(200, xml) }) });
+  const ai = await t.make();
+  const r = await ai.routines.create(radarDraft());
+  const first = await finish(ai, r.id);
+  assert.equal(first.added, 2);
+
+  xml = feedXml([2, 3, 4].map(paper));
+  t.clock.t += 60_000;
+  await ai.routines.runNow(r.id);
+  const second = await finish(ai, r.id, first.at);
+  assert.equal(second.added, 1);
+  assert.equal(second.session, first.session, 'the same issue');
+  const issues = (await ai.conversations.list()).filter((c) => c.routine === r.id);
+  assert.equal(issues.length, 1);
+  assert.equal(issues[0].news.papers, 3, 'the badge counts both runs');
+  assert.equal(issues[0].cover.count, '3 new papers');
+  const view = await ai.sessions.view(first.session);
+  const news = view.results.find((x) => x.title === 'New');
+  assert.equal(news.versions, 2);
+  const body = await ai.sessions.read(first.session, news.ref);
+  assert.deepEqual(body.rows.map((x) => x.doi), ['10.9999/inv.2', '10.9999/inv.3', '10.9999/inv.4'], 'the first run\'s papers first');
+  assert.deepEqual(body.addedRows, ['doi:10.9999/inv.4']);
+
+  t.clock.t += 60_000;
+  assert.deepEqual(await ai.routines.redo(r.id), { started: true });
+  const redone = await finish(ai, r.id, second.at);
+  assert.equal(redone.added, 3, 'both runs\' papers are read again');
+  assert.notEqual(redone.session, first.session);
+
+  // The next day (its 23:59 slot fires on the way, so whichever run gets there first) starts an issue of its own.
+  xml = feedXml([2, 3, 4, 5].map(paper));
+  t.clock.t += 86_400_000;
+  await ai.routines.runNow(r.id);
+  const listed = await until(async () => { const l = (await ai.conversations.list()).filter((c) => c.routine === r.id); return l.length === 2 ? l : null; }, 'the next day\'s issue');
+  assert.equal(listed[1].id, redone.session, 'yesterday\'s issue stays as it was');
+  const next = await ai.sessions.read(listed[0].id, (await ai.sessions.view(listed[0].id)).results[0].ref);
+  assert.deepEqual(next.rows.map((x) => x.doi), ['10.9999/inv.5'], 'a new day, a new issue');
+  await ai.dispose();
+});
+
+test('Redo today is refused for a radar with no issue yet and for a routine that is not a radar', async () => {
+  const t = setup({ library: radarLibrary({ known }), fetch: routedFetch({}) });
+  const ai = await t.make();
+  const plain = await ai.routines.create({ name: 'Digest', prompt: 'p', schedule: { kind: 'daily', time: '23:59' }, target: { kind: 'session' } });
+  assert.deepEqual(await ai.routines.redo(plain.id), { started: false, reason: 'Only a reading radar can redo its issue.' });
+  const r = await ai.routines.create(radarDraft());
+  await until(async () => (await ai.routines.list()).find((x) => x.id === r.id).lastRun, 'the first run');
+  assert.deepEqual(await ai.routines.redo(r.id), { started: false, reason: 'There is no issue to redo yet.' });
   await ai.dispose();
 });

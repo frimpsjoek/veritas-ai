@@ -36,7 +36,17 @@ export function SettingsView(host, doc, mount, options = {}) {
     },
     ...options.renderers,
   };
-  const actions = options.actions ?? {};
+  /** @type {NonNullable<SettingsOptions["actions"]>} */
+  const actions = {
+    // spec 031 D4: the text of free copies a report read is cached by the server; this empties it
+    clearPaperText: async () => {
+      const ai = await host.ai();
+      const before = await ai.papers.textCache();
+      await ai.papers.textCache({ clear: true });
+      return before.papers ? `Cleared the text of ${before.papers} paper${before.papers === 1 ? '' : 's'}.` : 'Nothing was saved.';
+    },
+    ...(options.actions ?? {}),
+  };
   /** Rows this host has what it needs to draw: a row with `needs` wants that capability in `host.can`, a custom row its
    *  renderer, an action row its handler. */
   const supports = (/** @type {SettingsRow} */ row) => rowAllowed(row, host.can)

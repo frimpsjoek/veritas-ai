@@ -57,23 +57,27 @@ export async function runDigestChecks(browser, port, outDir) {
     return kids;
   });
   check('the line sits right under the title and the actions close the cell', placed[0] === 'sb-art-title' && placed[1] === 'sb-dg-line' && placed.at(-1) === 'sb-dg-acts', placed);
-  check('every row offers Add to Zotero, Like and Dislike', JSON.stringify(await texts(page, '.sb-art-row:first-child .sb-dg-act')) === '["Add to Zotero","Like","Dislike"]', await texts(page, '.sb-art-row:first-child .sb-dg-act'));
+  check('every row offers Add to Zotero, the Read later bookmark, Like and Not for me', JSON.stringify(await texts(page, '.sb-art-row:first-child .sb-dg-act')) === '["Add to Zotero","Read later","Like","Not for me"]', await texts(page, '.sb-art-row:first-child .sb-dg-act'));
+  // spec 028 R10: the bookmark is an icon toggle (aria-pressed) with no key letter, beside Add to Zotero
+  const later = await page.locator('.sb-art-row:first-child .sb-dg-act.sb-bookmark').evaluate((b) => ({ pressed: b.getAttribute('aria-pressed'), icon: b.classList.contains('is-icon'), label: b.getAttribute('aria-label'), key: b.dataset.key ?? null, prev: b.previousElementSibling?.textContent }));
+  check('the Read later bookmark is an icon button with aria-pressed and no key, right after Add to Zotero', later.pressed === 'false' && later.icon && later.label === 'Read later' && later.key === null && later.prev === 'Add to Zotero', later);
   const colors = await page.evaluate(() => {
-    const acts = [...document.querySelectorAll('.sb-art-row:first-child .sb-dg-act')];
+    const acts = [...document.querySelectorAll('.sb-art-row:first-child .sb-dg-act:not(.sb-bookmark)')];
     const accent = getComputedStyle(document.querySelector('.sb-ai')).getPropertyValue('--sb-ui-accent').trim();
-    return { colors: acts.map((a) => getComputedStyle(a).color), fills: acts.map((a) => getComputedStyle(a).backgroundColor), accent };
+    const mark = document.querySelector('.sb-art-row:first-child .sb-dg-act.sb-bookmark');
+    return { colors: acts.map((a) => getComputedStyle(a).color), fills: acts.map((a) => getComputedStyle(a).backgroundColor), later: [getComputedStyle(mark).color, getComputedStyle(mark).backgroundColor], accent };
   });
-  check('only the primary action is accent-coloured, and none is filled', colors.colors[0] !== colors.colors[1] && colors.colors[1] === colors.colors[2] && colors.fills.every((f) => f === 'rgba(0, 0, 0, 0)'), colors);
+  check('only the primary action is accent-coloured, and none is filled (an unpressed Read later bookmark is plain too)', colors.colors[0] !== colors.colors[1] && colors.colors[1] === colors.colors[2] && colors.fills.every((f) => f === 'rgba(0, 0, 0, 0)') && colors.later[0] === colors.colors[1] && colors.later[1] === 'rgba(0, 0, 0, 0)', colors);
   await page.screenshot({ path: join(shots, 'r4-digest-1280-dark.png') });
 
-  // ---------------------------------------------------------------- Dislike: greys out, stays in place, toast with Undo
+  // ---------------------------------------------------------------- Not for me: folds, stays in place, toast with Undo
   const orderBefore = await page.locator('.sb-art-row').evaluateAll((rows) => rows.map((r) => r.dataset.row));
-  await rowOf(page, 2).locator('.sb-dg-act', { hasText: 'Dislike' }).click();
+  await rowOf(page, 2).locator('.sb-dg-act', { hasText: 'Not for me' }).click();
   await page.waitForSelector('.sb-dg-toast');
   const fb = await calls(page, 'radar-feedback');
-  check('Dislike tells the engine: routine, paper key, dismissed', fb.length === 1 && fb[0].routineId === 'radX' && fb[0].paperKey === 'doi:10.9999/vole.2' && fb[0].verdict === 'dismissed', fb);
-  check('a toast says so with an Undo', (await page.locator('.sb-dg-toast').innerText()).replace(/\s+/g, ' ') === 'Disliked: fewer like this Undo');
-  check('the row greys out, says Disliked, and stays where it was', await rowOf(page, 2).evaluate((r) => r.classList.contains('is-dismissed')) && (await texts(rowOf(page, 2), '.sb-dg-state')).join() === 'Disliked'
+  check('Not for me tells the engine: routine, paper key, dismissed', fb.length === 1 && fb[0].routineId === 'radX' && fb[0].paperKey === 'doi:10.9999/vole.2' && fb[0].verdict === 'dismissed', fb);
+  check('a toast says so with an Undo', (await page.locator('.sb-dg-toast').innerText()).replace(/\s+/g, ' ') === 'Not for me: fewer like this Undo');
+  check('the row is marked dismissed, says so, and stays where it was', await rowOf(page, 2).evaluate((r) => r.classList.contains('is-dismissed')) && (await texts(rowOf(page, 2), '.sb-dg-state')).join() === 'Not for me: fewer like this'
     && JSON.stringify(await page.locator('.sb-art-row').evaluateAll((rows) => rows.map((r) => r.dataset.row))) === JSON.stringify(orderBefore));
   check('a greyed row is dimmed, the others are not', await page.evaluate(() => {
     const op = (n) => getComputedStyle(document.querySelector(`[data-row="doi:10.9999/vole.${n}"] .sb-art-td`)).opacity;
@@ -83,17 +87,17 @@ export async function runDigestChecks(browser, port, outDir) {
   await page.locator('.sb-dg-toast .sb-dg-act', { hasText: 'Undo' }).click();
   await page.waitForFunction(() => !document.querySelector('[data-row="doi:10.9999/vole.2"]').classList.contains('is-dismissed'));
   const fb2 = await calls(page, 'radar-feedback');
-  check('the toast Undo sends undo, and the row has its actions back', fb2.at(-1).verdict === 'undo' && fb2.at(-1).paperKey === 'doi:10.9999/vole.2' && (await texts(rowOf(page, 2), '.sb-dg-act')).join() === 'Add to Zotero,Like,Dislike');
+  check('the toast Undo sends undo, and the row has its actions back', fb2.at(-1).verdict === 'undo' && fb2.at(-1).paperKey === 'doi:10.9999/vole.2' && (await texts(rowOf(page, 2), '.sb-dg-act')).join() === 'Add to Zotero,Read later,Like,Not for me');
   check('Undo says "Undone"', (await page.locator('.sb-dg-toast').innerText()).startsWith('Undone'));
 
   // ---------------------------------------------------------------- the toast goes after five seconds
-  await rowOf(page, 3).locator('.sb-dg-act', { hasText: 'Dislike' }).click();
+  await rowOf(page, 3).locator('.sb-dg-act', { hasText: 'Not for me' }).click();
   await page.waitForSelector('.sb-dg-toast');
   const t0 = Date.now();
   await page.waitForSelector('.sb-dg-toast', { state: 'detached', timeout: 8000 });
   const took = Date.now() - t0;
   check('the toast stays about five seconds', took > 3800 && took < 6500, took);
-  check('the settled row keeps an Undo link after the toast is gone', (await texts(rowOf(page, 3), '.sb-dg-act')).join() === 'Undo');
+  check('the settled row keeps its Read later bookmark and an Undo link after the toast is gone', (await texts(rowOf(page, 3), '.sb-dg-act')).join() === 'Read later,Undo');
   await rowOf(page, 3).locator('.sb-dg-act', { hasText: 'Undo' }).click();
   await page.waitForFunction(() => !document.querySelector('[data-row="doi:10.9999/vole.3"]').classList.contains('is-dismissed'));
 
@@ -108,9 +112,18 @@ export async function runDigestChecks(browser, port, outDir) {
   await page.waitForFunction(() => document.querySelector('[data-row="doi:10.9999/vole.1"] .sb-dg-act.is-primary'));
   check('undoing an add says the paper stays in Zotero', (await page.locator('.sb-dg-toast').innerText()).startsWith('Undone. The paper stays in Zotero.'));
   await rowOf(page, 3).locator('.sb-dg-act', { hasText: /^Like$/ }).click();
-  await page.waitForFunction(() => document.querySelector('[data-row="doi:10.9999/vole.3"] .sb-dg-state')?.textContent === 'Liked');
+  await page.waitForFunction(() => document.querySelector('[data-row="doi:10.9999/vole.3"] .sb-dg-state')?.textContent === 'Liked: more like this');
   check('Like records "liked", says Liked with a thumbs-up, and does not touch the library', (await calls(page, 'radar-feedback')).at(-1).verdict === 'liked' && (await calls(page, 'add-to-library')).length === 1
     && await rowOf(page, 3).locator('.sb-dg-state svg.sb-lucide').count() === 1);
+  // Settings > Reading radar > Add liked papers to Zotero: the like also adds it, tagged Liked, in To classify
+  await page.evaluate(() => window.__ctx.host.prefs.set('likeToZotero', true));
+  await rowOf(page, 2).locator('.sb-dg-act', { hasText: /^Like$/ }).click();
+  await page.waitForFunction(() => document.querySelector('[data-row="doi:10.9999/vole.2"] .sb-dg-state'));
+  const liked = (await calls(page, 'add-to-library')).at(-1);
+  check('with the setting on, Like also adds the paper to Zotero, tagged Liked, in To classify',
+    (await calls(page, 'add-to-library')).length === 2 && liked.dois[0] === '10.9999/vole.2' && liked.tag === 'Liked' && liked.collectionName === 'To classify'
+    && (await calls(page, 'radar-feedback')).at(-1).verdict === 'liked', liked);
+  check('its toast says where it went', (await page.locator('.sb-dg-toast').innerText()).startsWith('Liked, and added to Zotero in To classify'));
   check('no page errors in the digest', page.errors.length === 0, page.errors);
   await page.close();
 
@@ -118,16 +131,16 @@ export async function runDigestChecks(browser, port, outDir) {
   page = await open({ card: 'Worth reading' });
   const reasons = await texts(page, '.sb-art-row .sb-dg-line');
   check('a Worth reading row shows its cited-by reason under the title', reasons.length === 2 && reasons[0].startsWith('Cited by 7 papers in your library, including') && !(await texts(page, '.sb-art-row')).join().includes('No abstract'), reasons);
-  check('and offers the same three actions', (await texts(page, '.sb-art-row:first-child .sb-dg-act')).join() === 'Add to Zotero,Like,Dislike');
+  check('and offers the same actions, the Read later bookmark among them', (await texts(page, '.sb-art-row:first-child .sb-dg-act')).join() === 'Add to Zotero,Read later,Like,Not for me');
   const marks = await page.evaluate(() => [...document.querySelectorAll('.sb-art-row:first-child .sb-dg-act')].map((b) => b.querySelector('svg')?.getAttribute('class')));
-  check('Add to Zotero is the Zotero logo, Like and Dislike Lucide thumbs', JSON.stringify(marks) === JSON.stringify(['sb-logo sb-dg-mark', 'sb-lucide', 'sb-lucide']), marks);
+  check('Add to Zotero is the Zotero logo; Read later, Like and Not for me Lucide icons (bookmark, thumbs)', JSON.stringify(marks) === JSON.stringify(['sb-logo sb-dg-mark', 'sb-lucide', 'sb-lucide', 'sb-lucide']), marks);
   const named = await page.evaluate(() => [...document.querySelectorAll('.sb-art-row:first-child .sb-dg-act')].map((b) => [b.getAttribute('aria-label'), b.title, b.querySelector('.sb-dg-label')?.getBoundingClientRect().width]));
   check('the buttons are icons alone, each named and with a tooltip that says what it teaches', named.every(([label, title, w]) => label && title.startsWith(`${label}:`) && w <= 1), named);
   await page.close();
 
   // ---------------------------------------------------------------- a host that cannot add offers two actions
   page = await open({ kind: 'obsidian' });
-  check('without host.can.addToLibrary there is no Add to Zotero', (await texts(page, '.sb-art-row:first-child .sb-dg-act')).join() === 'Read later,Like,Dislike');
+  check('without host.can.addToLibrary there is no Add to Zotero', (await texts(page, '.sb-art-row:first-child .sb-dg-act')).join() === 'Read later,Like,Not for me');
   await rowOf(page, 4).locator('.sb-dg-act', { hasText: 'Read later' }).click();
   await page.waitForFunction(() => document.querySelector('[data-row="doi:10.9999/vole.4"] .sb-dg-state')?.textContent === 'Saved to read later');
   check('without Zotero the save button is Read later: records "later", touches no library', (await calls(page, 'radar-feedback')).at(-1).verdict === 'later' && (await calls(page, 'add-to-library')).length === 0);
@@ -137,23 +150,24 @@ export async function runDigestChecks(browser, port, outDir) {
   // ---------------------------------------------------------------- an earlier session's clicks show when the digest is reopened
   page = await open({ radar: { verdicts: { 'doi:10.9999/vole.5': 'dismissed', 'doi:10.9999/vole.4': 'added' } } });
   await page.waitForFunction(() => document.querySelector('[data-row="doi:10.9999/vole.5"]')?.classList.contains('is-dismissed'));
-  check('a paper dismissed earlier is greyed on open, one added earlier says so', (await texts(rowOf(page, 5), '.sb-dg-state')).join() === 'Disliked' && (await texts(rowOf(page, 4), '.sb-dg-state')).join() === 'Added to Zotero');
+  check('a paper dismissed earlier is greyed on open, one added earlier says so', (await texts(rowOf(page, 5), '.sb-dg-state')).join() === 'Not for me: fewer like this' && (await texts(rowOf(page, 4), '.sb-dg-state')).join() === 'Added to Zotero');
   await page.close();
 
   // ---------------------------------------------------------------- a failed save changes nothing and says so
   page = await open({ radar: { failFeedback: true } });
-  await rowOf(page, 2).locator('.sb-dg-act', { hasText: 'Dislike' }).click();
+  await rowOf(page, 2).locator('.sb-dg-act', { hasText: 'Not for me' }).click();
   await page.waitForFunction(() => window.__ctx.calls.some((c) => c.kind === 'notice'));
   check('a failed save leaves the row as it was and shows a notice', !(await rowOf(page, 2).evaluate((r) => r.classList.contains('is-dismissed'))) && (await calls(page, 'notice')).at(-1).text === "Couldn't save that. Try again." && await page.locator('.sb-dg-toast').count() === 0);
   await page.close();
 
   // ---------------------------------------------------------------- 390 light: cards
   page = await open({ theme: 'light', w: 390, h: 844, bare: true });
-  check('on a phone the rows are cards with the line and the actions', await page.locator('.sb-art-rowcard').count() === 5 && await page.locator('.sb-art-rowcard .sb-dg-line').count() === 5 && await page.locator('.sb-art-rowcard .sb-dg-act').count() === 15);
+  const phone = { cards: await page.locator('.sb-art-rowcard').count(), lines: await page.locator('.sb-art-rowcard .sb-dg-line').count(), acts: await page.locator('.sb-art-rowcard .sb-dg-act').count(), later: await page.locator('.sb-art-rowcard .sb-dg-act.sb-bookmark').count() };
+  check('on a phone the rows are cards with the line and the actions (four each, the Read later bookmark one of them)', phone.cards === 5 && phone.lines === 5 && phone.acts === 20 && phone.later === 5, phone);
   const over = await page.evaluate(() => ({ doc: document.documentElement.scrollWidth, client: document.documentElement.clientWidth, body: document.querySelector('.sb-art-body').scrollWidth, bodyClient: document.querySelector('.sb-art-body').clientWidth }));
   check('no sideways scroll at 390 px', over.doc <= over.client && over.body <= over.bodyClient, over);
   await page.screenshot({ path: join(shots, 'r4-digest-390-light.png') });
-  await rowOf(page, 2).locator('.sb-dg-act', { hasText: 'Dislike' }).click();
+  await rowOf(page, 2).locator('.sb-dg-act', { hasText: 'Not for me' }).click();
   await page.waitForSelector('.sb-dg-toast');
   const toastBox = await page.locator('.sb-dg-toast').boundingBox();
   check('the toast fits inside the 390 px screen', toastBox.x >= 0 && toastBox.x + toastBox.width <= 390, toastBox);
@@ -192,5 +206,79 @@ export async function runDigestChecks(browser, port, outDir) {
   check('no page errors in the sheet', page.errors.length === 0, page.errors);
   await page.close();
 
+  // ---------------------------------------------------------------- a new chat in Zotero's narrow item pane (user screenshot, 2026-11-10)
+  {
+    const narrow = await browser.newPage({ viewport: { width: 332, height: 700 } });
+    await narrow.goto(`http://127.0.0.1:${port}/dev/harness/steps.html?${new URLSearchParams({ tokens: 'zotero', theme: 'light', w: '300' })}`);
+    await narrow.waitForFunction(() => window.__sbHarnessReady === true, null, { timeout: 8000 });
+    await narrow.evaluate(async () => { window.__ctx = await window.__sbS.make({ kind: 'zotero' }); });
+    await narrow.waitForSelector('.sb-ai-box');
+    const layout = await narrow.evaluate(async () => {
+      document.querySelectorAll('.sb-ai-source[hidden]').forEach((b) => { b.hidden = false; }); // Valency, as when connected
+      window.__ctx.chat.renderSources();
+      const scroller = document.querySelector('.sb-ai-scroll') ?? document.querySelector('.sb-ai-thread')?.parentElement;
+      if (scroller) { scroller.scrollTop = scroller.scrollHeight; await new Promise((r) => setTimeout(r, 30)); scroller.scrollTop = 0; scroller.dispatchEvent(new Event('scroll')); }
+      await new Promise((r) => setTimeout(r, 60));
+      const box = document.querySelector('.sb-ai-box').getBoundingClientRect();
+      const outside = (els) => els.filter((b) => b.getClientRects().length && (b.getBoundingClientRect().right > box.right + 1 || b.getBoundingClientRect().left < box.left - 1)).map((b) => b.textContent);
+      const row = document.querySelector('.sb-ai-box > .sb-ai-row:not(.sb-ai-report-options)');
+      const out = outside([...row.children]);
+      // spec 029 R6: the sources are one button; its menu opens inside the pane, every source in it
+      document.querySelector('.sb-ai-sources-btn').click();
+      await new Promise((r) => setTimeout(r, 30));
+      const menuOut = outside([document.querySelector('.sb-ai-sources-menu'), ...document.querySelectorAll('.sb-ai-source')]);
+      const items = [...document.querySelectorAll('.sb-ai-sources-menu .sb-ai-source')].filter((b) => b.getClientRects().length).map((b) => b.textContent);
+      const sideways = document.documentElement.scrollWidth > document.documentElement.clientWidth;
+      document.querySelector('.sb-ai-sources-btn').click();
+      return { out, menuOut, items, sideways, label: document.querySelector('.sb-ai-sources-btn').textContent, jump: !document.querySelector('.sb-ai-jump')?.hidden };
+    });
+    check('narrow pane: the composer controls wrap inside the message box', layout.out.length === 0, layout);
+    check('narrow pane (spec 029 R6): one Sources button names what is on; its menu lists every source inside the pane, no sideways scroll',
+      layout.label === 'Sources: Papers, Notes, Scholarly, Valency' && layout.menuOut.length === 0 && layout.items.join() === 'Papers,Notes,Scholarly,Web,Valency' && !layout.sideways, layout);
+    check('narrow pane: an empty chat scrolled up shows no "Jump to latest"', layout.jump === false, layout);
+    await narrow.screenshot({ path: join(outDir, 'chat-narrow-empty.png') });
+    await narrow.close();
+  }
+
+  // ---------------------------------------------------------------- right-click on a paper: copy its link, share it (2026-11-10)
+  {
+    const menuPage = await open();
+    await menuPage.evaluate(() => {
+      window.__copied = [];
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (t) => { window.__copied.push(t); } } });
+      Object.defineProperty(navigator, 'share', { configurable: true, value: undefined });
+    });
+    const row = menuPage.locator('.sb-art-row').first();
+    const want = await row.evaluate((tr) => tr.querySelector('.sb-art-first')?.textContent ?? '');
+    await row.click({ button: 'right', position: { x: 200, y: 10 } });
+    await menuPage.waitForSelector('.sb-paper-menu');
+    const labels = await texts(menuPage, '.sb-paper-menu .sb-art-item-label');
+    check('right-click on a digest paper opens its menu', JSON.stringify(labels) === JSON.stringify(['Open', 'Open in your browser', 'Copy link', 'Copy title and link', 'Share…']), labels);
+    await menuPage.screenshot({ path: join(shots, 'paper-menu.png') });
+    await menuPage.click('.sb-paper-menu [data-action="copy-link"]');
+    await menuPage.waitForFunction(() => window.__copied.length === 1);
+    const link = (await menuPage.evaluate(() => window.__copied))[0];
+    check('Copy link copies the paper\'s https link and the menu closes', /^https:\/\//.test(link) && await menuPage.locator('.sb-paper-menu').count() === 0, { link });
+    check('…and says so', (await menuPage.locator('.sb-paper-flash').textContent()) === 'Link copied');
+    await row.click({ button: 'right', position: { x: 200, y: 10 } });
+    await menuPage.click('.sb-paper-menu [data-action="share"]');
+    await menuPage.waitForFunction(() => window.__copied.length === 2);
+    const shared = (await menuPage.evaluate(() => window.__copied))[1];
+    check('Share with no share menu copies the title and the link', shared.endsWith(`\n${link}`) && shared.split('\n')[0].length > 3 && want.includes(shared.split('\n')[0].slice(0, 12)), { shared, want });
+    await menuPage.evaluate(() => {
+      window.__shared = [];
+      Object.defineProperty(navigator, 'share', { configurable: true, value: async (data) => { window.__shared.push(data); } });
+    });
+    await row.click({ button: 'right', position: { x: 200, y: 10 } });
+    await menuPage.click('.sb-paper-menu [data-action="share"]');
+    await menuPage.waitForFunction(() => window.__shared.length === 1);
+    const data = (await menuPage.evaluate(() => window.__shared))[0];
+    check('Share opens the system share menu with the title and link where there is one', data.url === link && Boolean(data.title), data);
+    await row.click({ button: 'right', position: { x: 200, y: 10 } });
+    await menuPage.keyboard.press('Escape');
+    check('Escape closes the menu', await menuPage.locator('.sb-paper-menu').count() === 0);
+    check('no page errors with the paper menu', menuPage.errors.length === 0, menuPage.errors);
+    await menuPage.close();
+  }
   return { failures, count };
 }

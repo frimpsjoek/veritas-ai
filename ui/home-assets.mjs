@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const here = (/** @type {string} */ path) => fileURLToPath(new URL(path, import.meta.url));
 
 /** The sheets Home and the Sources page need, in order, after a host's token map and ui.css. */
-export const HOME_CSS = ['src/home/type.css', 'src/home/home.css', 'src/sources/sources.css'].map(here);
+export const HOME_CSS = ['src/home/type.css', 'src/home/home.css', 'src/sources/sources.css', 'src/image-viewer.css'].map(here);
 
 // Fraunces (headings) and Inter (interface), both SIL OFL; cover photos from the NASA Image Library (covers/CREDITS.txt).
 const FONTS = ['fraunces.woff2', 'fraunces-italic.woff2', 'fraunces-ext.woff2', 'fraunces-italic-ext.woff2', 'inter.woff2', 'inter-ext.woff2'];

@@ -36,7 +36,7 @@ export async function runWebChecks(browser, port, outDir) {
     const page = await browser.newPage({ viewport: { width, height: 800 }, ...extra });
     const errors = [];
     page.on('pageerror', (error) => errors.push(String(error)));
-    page.on('console', (msg) => { if (msg.type() === 'error') errors.push(msg.text()); });
+    page.on('console', (msg) => { if (msg.type() === 'error') errors.push(`${msg.text()}${msg.location()?.url ? ` (${msg.location().url})` : ''}`); });
     page.errors = errors;
     // the fake-host shell makes real requests for Library and Notes; the invented server answers them (dev/web-fixtures.mjs)
     if (url.startsWith(`${origin}/dev/harness/web.html`)) {
@@ -66,33 +66,44 @@ export async function runWebChecks(browser, port, outDir) {
     await page.waitForSelector('.sbw-paper');
     const home = await page.evaluate(() => ({
       banner: (() => { const b = document.querySelector('.sbw-today-banner'); return { label: b.querySelector('.sbw-cover-label')?.textContent, title: b.querySelector('.sbw-cover-title')?.textContent, line: b.querySelector('.sbw-cover-line')?.textContent, fresh: b.classList.contains('is-new'), href: b.getAttribute('href'), chat: document.querySelector('.sbw-today-chat:not([hidden])')?.getAttribute('href') ?? null }; })(),
-      papers: [...document.querySelectorAll('.sbw-paper')].map((p) => ({ source: p.querySelector('.sbw-paper-source')?.textContent ?? null, title: p.querySelector('.sbw-paper-title')?.textContent, href: p.querySelector('a.sbw-paper-title')?.getAttribute('href') ?? null, meta: p.querySelector('.sbw-paper-meta')?.textContent ?? null, why: p.querySelector('.sbw-paper-why')?.textContent ?? null })),
-      heads: [...document.querySelectorAll('.sbw-papers-head')].map((x) => x.textContent),
+      papers: [...document.querySelectorAll('.sbw-paper')].map((p) => ({ via: p.querySelector('.sbw-why-via')?.textContent ?? null, authors: p.querySelector('.sbw-paper-authors')?.textContent ?? null, title: p.querySelector('.sbw-paper-title')?.textContent, href: p.querySelector('a.sbw-paper-title')?.getAttribute('href') ?? null, meta: p.querySelector('.sbw-paper-meta')?.textContent ?? null, why: p.querySelector('.sbw-paper-why')?.textContent ?? null })),
+      heads: [...document.querySelectorAll('.sbw-papers-head')].map((x) => x.firstChild.textContent),
       shelves: [...document.querySelectorAll('.sbw-shelf')].map((sh) => ({ title: sh.querySelector('.sbw-shelf-title')?.textContent, count: sh.querySelector('.sbw-shelf-count')?.textContent, covers: [...sh.querySelectorAll('.sbw-cover-title')].map((c) => c.textContent), pager: sh.querySelector('.sbw-pager-where')?.textContent ?? null })),
       count: document.querySelector('.sbw-home-date')?.textContent, badge: document.querySelector('.sbw-nav-item[data-view="home"] .sbw-nav-badge')?.textContent,
     }));
     const today = new Date().toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
     check(`${tag} Today leads across the full width: today's radar issue, dated, how many are new, marked new, its chat one link away (the banner itself is not a link)`, home.banner.label === "Today's reading radar" && home.banner.title === today && home.banner.line === '5 new papers' && home.banner.fresh && home.banner.href === null && home.banner.chat === '#/chat?session=c4', home.banner);
-    check(`${tag} Today shows every paper in abstract form: the title to the paper, authors, venue and date, why read it`, home.papers.length === 3 && home.papers[0].title === 'Burrow microclimates in field voles' && home.papers[0].href === 'https://doi.org/10.1/vole' && home.papers[0].meta === 'A. Vole, B. Mole · Ecology · 2026-10-10' && home.papers[0].why === 'Burrows stay four degrees warmer than the surface.' && home.papers[1].why === 'Voles cache seeds under the snowpack.' && home.papers[2].why === 'Cited by 3 papers in your library' && JSON.stringify(home.heads) === '["Worth reading"]', home.papers);
-    check(`${tag} the rest is separated into Research reports, Chats and Earlier issues, each counted`, JSON.stringify(home.shelves.map((x) => [x.title, x.count])) === '[["Research reports","1"],["Chats","10"],["Earlier issues","1"]]', home.shelves);
+    check(`${tag} Today shows every paper in abstract form: the title to the paper, venue and date, its abstract (a paper with none keeps its why line); no authors until asked for`, home.papers.length === 3 && home.papers[0].title === 'Burrow microclimates in field voles' && home.papers[0].href === 'https://doi.org/10.1/vole' && home.papers[0].meta === 'Ecology · 2026-10-10' && home.papers[0].why?.startsWith('Field voles dig burrows') && home.papers[1].why === 'Voles cache seeds under the snowpack, where CO2 builds up over a time τ (Møller–Shrew).' && home.papers[2].why === 'Cited by 3 papers in your library' && home.papers.every((p) => p.authors === null) && JSON.stringify(home.heads) === '["Worth reading"]', home.papers);
+    check(`${tag} the rest is separated into Research reports and Earlier issues, each counted; no Chats shelf (the Chat page lists them)`, JSON.stringify(home.shelves.map((x) => [x.title, x.count])) === '[["Research reports","1"],["Earlier issues","1"]]', home.shelves);
     await page.waitForSelector('.sbw-paper.has-figure');
     const figures = await page.evaluate(async () => {
       const papers = [...document.querySelectorAll('.sbw-paper')];
       const first = papers[0];
       const box = first.querySelector('.sbw-paper-figure-box')?.getBoundingClientRect();
-      const text = first.querySelector('.sbw-paper-text').getBoundingClientRect();
+      const paper = first.getBoundingClientRect();
       const more = first.querySelector('.sbw-paper-more');
       const summary = more?.querySelector('summary');
-      const before = { label: summary?.textContent, shown: more ? more.querySelector('.sbw-paper-abstract').checkVisibility() : null };
+      const preview = () => first.querySelector('.sbw-paper-why')?.checkVisibility() ?? null;
+      const before = { label: summary?.textContent, shown: more ? more.querySelector('.sbw-paper-abstract').checkVisibility() : null, preview: preview() };
       summary?.click();
       await new Promise((r) => setTimeout(r, 50));
-      const after = { label: summary?.textContent, text: more?.querySelector('.sbw-paper-abstract')?.textContent ?? '', shown: more ? more.querySelector('.sbw-paper-abstract').checkVisibility() : null };
+      const after = { label: summary?.textContent, text: more?.querySelector('.sbw-paper-abstract')?.textContent ?? '', shown: more ? more.querySelector('.sbw-paper-abstract').checkVisibility() : null, preview: preview() };
       summary?.click();
-      return { withFigure: papers.map((p) => p.classList.contains('has-figure')), right: box ? box.left >= text.right && Math.abs(box.width / box.height - 4 / 3) < 0.02 : false, before, after };
+      return { withFigure: papers.map((p) => p.classList.contains('has-figure')), right: box ? box.left >= paper.left + paper.width / 2 && box.right <= paper.right + 1 && Math.abs(box.width / box.height - 4 / 3) < 0.02 : false, before, after };
     });
-    check(`${tag} a paper with a graphical abstract shows it on the right in a 4:3 frame; the others have none`, JSON.stringify(figures.withFigure) === '[true,false,false]' && figures.right, figures);
-    check(`${tag} "Read the abstract" opens the full abstract and "Show less" closes it`, figures.before.label === 'Read the abstract' && figures.before.shown === false && figures.after.label === 'Show less' && figures.after.shown === true && figures.after.text.endsWith('The end.'), figures);
-    check(`${tag} each paper says where it was found`, home.papers[0].source === 'Found via bioRxiv, Ecology feed', home.papers[0]);
+    check(`${tag} a paper with a graphical abstract shows it on the right of the paper in a 4:3 frame; the others have none`, JSON.stringify(figures.withFigure) === '[true,false,false]' && figures.right, figures);
+    // spec 029 R13: in the web app a Home paper's picture opens full screen (the title still leads to the paper)
+    {
+      const hashBefore = await page.evaluate(() => location.hash);
+      await page.locator('.sbw-paper.has-figure .sbw-paper-figure-box').first().click();
+      await page.waitForSelector('.sb-iv.is-ready', { timeout: 5000 }).catch(() => {});
+      const homeViewer = await page.evaluate(() => ({ open: Boolean(document.querySelector('.sb-iv.is-ready')), viewable: document.querySelector('.sbw-paper-figure-box')?.classList.contains('is-viewable') ?? false, role: document.querySelector('.sbw-paper-figure-box')?.getAttribute('role') ?? null }));
+      await page.keyboard.press('Escape');
+      const homeBack = await page.evaluate((h) => ({ gone: !document.querySelector('.sb-iv'), stayed: location.hash === h, focus: document.activeElement?.classList.contains('sbw-paper-figure-box') ?? false }), hashBefore);
+      check(`${tag} spec 029 R13: a Home paper's picture opens full screen and Escape returns to Home with focus on it`, homeViewer.open && homeViewer.viewable && homeViewer.role === 'button' && homeBack.gone && homeBack.stayed && homeBack.focus, { homeViewer, homeBack });
+    }
+    check(`${tag} "Read more" opens a long abstract in full in place of its preview, and "Show less" closes it`, figures.before.label === 'Read more' && figures.before.shown === false && figures.before.preview === true && figures.after.label === 'Show less' && figures.after.shown === true && figures.after.preview === false && figures.after.text.endsWith('The end.'), figures);
+    check(`${tag} no source line under a paper (Home keeps to title, venue and abstract)`, home.papers.every((p) => p.via === null), home.papers);
     const stepped = await page.evaluate(async () => {
       const wait = () => new Promise((r) => setTimeout(r, 80));
       const title = () => document.querySelector('.sbw-today-banner .sbw-cover-title')?.textContent;
@@ -115,20 +126,38 @@ export async function runWebChecks(browser, port, outDir) {
     await go(page, '#/home');
     await page.waitForSelector('.sbw-paper');
     check(`${tag} a research report gets its own cover in its own shelf`, JSON.stringify(home.shelves[0].covers) === '["What Voles Eat: A Review"]', home.shelves[0]);
-    check(`${tag} Chats shows 8 a page, newest first, with "1 of 2"`, home.shelves[1].covers.length === 8 && JSON.stringify(home.shelves[1].covers.slice(0, 3)) === '["Foraging in voles","Voles weekly","Doorknob ergonomics"]' && home.shelves[1].pager === '1 of 2', home.shelves[1]);
-    const paged = await page.evaluate(async () => {
-      const shelf = [...document.querySelectorAll('.sbw-shelf')].find((x) => x.querySelector('.sbw-shelf-title')?.textContent === 'Chats');
-      const prev = shelf.querySelector('.sbw-pager-prev');
-      const next = shelf.querySelector('.sbw-pager-next');
-      const before = { prev: prev.disabled, next: next.disabled };
-      next.click();
-      await new Promise((r) => setTimeout(r, 30));
-      const after = { covers: [...shelf.querySelectorAll('.sbw-cover-title')].map((c) => c.textContent), where: shelf.querySelector('.sbw-pager-where').textContent, prev: prev.disabled, next: next.disabled };
-      prev.click();
-      return { before, after };
-    });
-    check(`${tag} Next shows the second page and Previous comes back`, paged.before.prev && !paged.before.next && paged.after.where === '2 of 2' && JSON.stringify(paged.after.covers) === '["Old vole question 6","Old vole question 7"]' && !paged.after.prev && paged.after.next, paged);
+    check(`${tag} Earlier issues is one row: a single issue has no pager`, home.shelves[1].covers.length === 1 && home.shelves[1].pager === null, home.shelves[1]);
     check(`${tag} the new papers waiting are counted beside the greeting and on the Home rail item`, home.count === '8 new papers' && home.badge === '8', home);
+    // "Read the abstract" above opened today's first paper: one paper less waiting, here and on the rail, after a repaint too
+    const viewed = await page.evaluate(() => ({ count: document.querySelector('.sbw-home-date')?.textContent, badge: document.querySelector('.sbw-nav-item[data-view="home"] .sbw-nav-badge')?.textContent }));
+    check(`${tag} a paper opened on Home counts as read: the waiting count and the rail badge drop by one`, viewed.count === '7 new papers' && viewed.badge === '7', viewed);
+    // arXiv writes abstracts in TeX: the formula is set, the math drawn, accents and dashes as text (paper-text.js)
+    const tex = await page.evaluate(() => { const p = [...document.querySelectorAll('.sbw-paper-why')].find((el) => el.textContent?.includes('snowpack')); return { text: p?.textContent ?? '', sub: p?.querySelector('sub')?.textContent ?? null, math: p?.querySelectorAll('math').length ?? 0 }; });
+    check(`${tag} TeX in a paper's abstract is drawn, not shown: CO2 with a subscript, tau as math, Møller–Shrew`, tex.sub === '2' && tex.math === 1 && !tex.text.includes('$') && tex.text.includes('Møller–Shrew'), tex);
+    // rating a paper is reading it too: Like on a paper not opened yet takes one more off the count
+    const likeAt = 1; // the first paper was opened above
+    await page.locator('.sbw-paper').nth(likeAt).locator('.sb-dg-act[aria-label="Like"]').click();
+    await page.waitForFunction(() => document.querySelector('.sbw-nav-item[data-view="home"] .sbw-nav-badge')?.textContent === '6', null, { timeout: 3000 }).catch(() => {});
+    const rated = await page.evaluate(() => ({ count: document.querySelector('.sbw-home-date')?.textContent, badge: document.querySelector('.sbw-nav-item[data-view="home"] .sbw-nav-badge')?.textContent }));
+    await page.locator('.sbw-paper').nth(likeAt).locator('.sb-dg-act', { hasText: 'Undo' }).click(); // the checks below read the paper unrated
+    await page.locator('.sbw-paper').nth(likeAt).locator('.sb-dg-act[aria-label="Like"]').waitFor();
+    check(`${tag} a paper rated on Home counts as read too: the count and the badge drop by one more`, likeAt >= 0 && rated.count === '6 new papers' && rated.badge === '6', { likeAt, ...rated });
+    // spec 028 R7: the shell reads the badge again on a route change, so a paper viewed elsewhere (here the service
+    // itself, no UI) shows on the rail as soon as another view opens; fails if render() stops calling news.route()
+    const railBadge = () => page.evaluate(() => document.querySelector('.sbw-nav-item[data-view="home"] .sbw-nav-badge')?.textContent);
+    const beforeRoute = Number(await railBadge());
+    await page.evaluate(async () => { await (await window.__host.ai()).conversations.markViewed('c3', ['doi:10.1/elsewhere']); });
+    await go(page, '#/library');
+    await page.waitForFunction((n) => document.querySelector('.sbw-nav-item[data-view="home"] .sbw-nav-badge')?.textContent === String(n), beforeRoute - 1, { timeout: 4000 }).catch(() => {});
+    const afterRoute = Number(await railBadge());
+    check(`${tag} a paper viewed outside the page drops the rail Home badge on the next route change (Home → Library)`, beforeRoute > 0 && afterRoute === beforeRoute - 1, { beforeRoute, afterRoute });
+    // and when the window comes back into focus, with no route change
+    await page.evaluate(async () => { await (await window.__host.ai()).conversations.markViewed('c3', ['doi:10.1/elsewhere-2']); window.dispatchEvent(new Event('focus')); });
+    await page.waitForFunction((n) => document.querySelector('.sbw-nav-item[data-view="home"] .sbw-nav-badge')?.textContent === String(n), afterRoute - 1, { timeout: 4000 }).catch(() => {});
+    const afterFocus = Number(await railBadge());
+    check(`${tag} and on the window's focus, with no route change`, afterFocus === afterRoute - 1, { afterRoute, afterFocus });
+    await go(page, '#/home');
+    await page.waitForSelector('.sbw-paper');
 
     // Folio look: Fraunces headings, an even grid of photo covers, near-square corners, white text, a wide banner photo
     const look = await page.evaluate(async () => {
@@ -144,14 +173,13 @@ export async function runWebChecks(browser, port, outDir) {
         colors: [...new Set(covers.map((c) => getComputedStyle(c).color))],
         widths: new Set(covers.map((c) => Math.round(rect(c).width))).size,
         reportPhoto: /cover-(sky|earth|wide)-\d\d\.webp/.exec(getComputedStyle(report).backgroundImage)?.[1] ?? null,
-        chatPhotos: [...document.querySelectorAll('.sbw-cover.is-chat, .sbw-cover.is-find')].map((c) => getComputedStyle(c).backgroundImage),
-        chatText: getComputedStyle(document.querySelector('.sbw-cover.is-chat .sbw-cover-title')).color,
+        chats: document.querySelectorAll('.sbw-cover.is-chat, .sbw-cover.is-find').length,
         clamped: [...document.querySelectorAll('.sbw-cover-title, .sbw-paper-title')].filter((t) => t.scrollHeight > t.clientHeight + 1).length,
         bannerPhoto: /cover-(wide)-\d\d\.webp/.exec(getComputedStyle(banner).backgroundImage)?.[1] ?? null,
         bannerFull: Math.abs(rect(banner).width - rect(document.querySelector('.sbw-home-body')).width) <= 1,
         frame: getComputedStyle(report, '::before').borderTopWidth,
         lefts: [rect(document.querySelector('.sbw-h1')).left, rect(banner).left],
-        buttons: document.querySelectorAll('.sb-button.is-primary').length,
+        buttons: [...document.querySelectorAll('.sb-button.is-primary')].filter((b) => !b.closest('.sbw-setup')).length,
       };
     });
     check(`${tag} Home headings are Fraunces, the page title at least 32 px`, look.fraunces && /^"?Fraunces\b/.test(look.h1) && /^"?Fraunces\b/.test(look.title) && look.h1Size >= 32, look);
@@ -163,7 +191,7 @@ export async function runWebChecks(browser, port, outDir) {
       width: Math.round(document.querySelector('.sbw-today').getBoundingClientRect().width),
     }));
     check(`${tag} two columns only when the issue is at least 960 px wide, and no column switch on Home (it is in Settings)`, columns.switch === 0 && columns.cols === (columns.width >= 960 ? 2 : 1), columns);
-    check(`${tag} the banner spans the page with a wide photo; the report has a research photo and a hairline frame; chats are text cards with no photo`, look.bannerFull && look.bannerPhoto === 'wide' && look.reportPhoto === 'earth' && look.frame === '1px' && look.chatPhotos.every((p) => p === 'none') && look.chatText !== 'rgb(255, 255, 255)', look);
+    check(`${tag} the banner spans the page with a wide photo; the report has a research photo and a hairline frame; no chat covers on Home`, look.bannerFull && look.bannerPhoto === 'wide' && look.reportPhoto === 'earth' && look.frame === '1px' && look.chats === 0, look);
     check(`${tag} the page title and the banner share a left edge`, Math.abs(look.lefts[0] - look.lefts[1]) <= 1, look.lefts);
     const loaded = await page.evaluate(async () => {
       const url = /url\("?([^")]+)"?\)/.exec(getComputedStyle(document.querySelector('.sbw-today-banner')).backgroundImage)?.[1];
@@ -188,11 +216,63 @@ export async function runWebChecks(browser, port, outDir) {
     });
     check(`${tag} the theme switch flips light and dark and relabels itself`, flip.visible && flip.after.theme !== flip.back && ['light', 'dark'].includes(flip.after.theme) && flip.before.bg !== flip.after.bg && flip.before.label !== flip.after.label, flip);
 
-    // a conversation opens in the chat
-    await page.locator('.sbw-cover', { hasText: 'Foraging in voles' }).click();
+    // a conversation opens in the chat (Home has no Chats shelf: a chat's link goes straight there)
+    await go(page, '#/chat?session=c1');
     await page.waitForSelector('.sb-ai-answer .sb-ai-md');
-    const opened = await page.evaluate(() => ({ hash: location.hash, text: document.querySelector('.sb-ai-thread')?.textContent ?? '' }));
-    check(`${tag} a Home conversation opens the chat on that session`, opened.hash === '#/chat?session=c1' && opened.text.includes('Seeds and roots.'), opened);
+    const opened = await page.evaluate(() => ({ hash: location.hash, text: document.querySelector('.sb-ai-thread')?.textContent ?? '', history: [...document.querySelectorAll('.sb-ai-conv-title')].map((t) => t.textContent) }));
+    check(`${tag} a chat link opens the chat on that session`, opened.hash === '#/chat?session=c1' && opened.text.includes('Seeds and roots.'), opened);
+    check(`${tag} the chat history leaves out the reading radar's issues (Home reaches them)`, opened.history.includes('Foraging in voles') && !opened.history.includes('Reading radar'), opened.history);
+
+    // the history list and the header
+    if (width === 1280) {
+      const list = await page.evaluate(() => {
+        const toggle = document.querySelector('.sb-ai-history-toggle');
+        const selected = document.querySelector('.sb-ai-conv.is-selected');
+        return {
+          toggle: [toggle.textContent, Boolean(toggle.querySelector('svg')), toggle.getAttribute('aria-label'), toggle.getAttribute('aria-expanded')],
+          days: [...document.querySelectorAll('.sb-ai-list-day')].map((d) => d.textContent), openers: document.querySelectorAll('button.sb-ai-conv-open').length, rows: document.querySelectorAll('.sb-ai-conv').length, xs: document.querySelectorAll('.sb-ai-conv-x').length,
+          current: selected.querySelector('.sb-ai-conv-open').getAttribute('aria-current'), weight: getComputedStyle(selected.querySelector('.sb-ai-conv-title')).fontWeight, tint: getComputedStyle(selected).backgroundColor !== getComputedStyle(document.documentElement).getPropertyValue('--sb-ui-accent'),
+          title: document.querySelector('.sb-ai-head-name').textContent, where: document.querySelector('.sb-ai-box .sb-ai-where')?.textContent, badge: Boolean(document.querySelector('.sb-ai-conv-meta .sb-ai-news')),
+        };
+      });
+      check(`${tag} the history toggle is an icon with a name and a state`, list.toggle[0] === '' && list.toggle[1] && list.toggle[2] === 'Hide chat history' && list.toggle[3] === 'true', list.toggle);
+      check(`${tag} the history has day headings, every row opens from a real button, no hover x`, list.days.includes('Today') && list.days.includes('Earlier') && list.openers === list.rows && list.rows > 0 && list.xs === 0, list);
+      check(`${tag} the open row is tinted and bold, the header names it, where the AI runs is in the composer, badges on the meta line`, list.current === 'true' && Number(list.weight) === 600 && list.tint && list.title === 'Foraging in voles' && /computer|server/.test(list.where ?? '') && list.badge, list);
+      // spec 029 R7: c5 is still titled "New chat" (a report asked "What do voles eat across seasons?"); the list shows the question
+      const r7 = await page.evaluate(() => {
+        const row = document.querySelector('.sb-ai-conv[data-id="c5"]');
+        const pill = row?.querySelector('.sb-ai-conv-count');
+        return { title: row?.querySelector('.sb-ai-conv-title').textContent, titles: [...document.querySelectorAll('.sb-ai-conv-title')].map((t) => t.textContent),
+          kind: row?.querySelector('.sb-ai-kind')?.title, pill: pill?.textContent, tip: pill?.title };
+      });
+      check(`${tag} spec 029 R7: a chat still titled "New chat" shows its first question; its kind icon and count say what they are`,
+        r7.title === 'What do voles eat across seasons?' && !r7.titles.includes('New chat') && r7.kind === 'Research report' && r7.pill === '2 artifacts' && r7.tip?.includes('paper lists, tables and reports'), r7);
+      await page.fill('.sb-ai-find-input', 'across seasons');
+      check(`${tag} spec 029 R7: Find a chat finds it by that question`, JSON.stringify(await page.locator('.sb-ai-conv-title').allTextContents()) === '["What do voles eat across seasons?"]');
+      await page.locator('.sb-ai-side').screenshot({ path: join(outDir, 'web-chat-list-r7-1280.png') });
+      await page.fill('.sb-ai-find-input', 'old vole 3');
+      check(`${tag} Find a chat filters the titles`, JSON.stringify(await page.locator('.sb-ai-conv-title').allTextContents()) === '["Old vole question 3"]');
+      await page.fill('.sb-ai-find-input', 'zzzz');
+      check(`${tag} Find a chat says when nothing matches`, (await page.locator('.sb-ai-list-empty').textContent()) === 'No chats match “zzzz”.');
+      await page.fill('.sb-ai-find-input', '');
+      await page.evaluate(() => { window.__store.listFail = true; window.__host._setWhere('server'); });
+      await page.waitForSelector('.sb-ai-list-failed');
+      const down = await page.evaluate(() => ({ text: document.querySelector('.sb-ai-list-failed').textContent, empty: Boolean(document.querySelector('.sb-ai-list-empty')), rows: document.querySelectorAll('.sb-ai-conv').length, off: document.querySelector('.sb-ai-where').classList.contains('is-off') }));
+      check(`${tag} a failed list says Can't reach the server with Try again, keeps its rows and never looks empty`, down.text.includes("Can't reach the server") && down.text.includes('Try again') && !down.empty && down.rows > 0 && down.off, down);
+      await page.evaluate(() => { window.__store.listFail = false; });
+      await page.locator('.sb-ai-list-retry').click();
+      await page.waitForFunction(() => !document.querySelector('.sb-ai-list-failed') && !document.querySelector('.sb-ai-where').classList.contains('is-off'));
+      check(`${tag} Try again brings the list back`, true);
+
+      const row = page.locator('.sb-ai-conv', { hasText: 'Doorknob ergonomics' });
+      await row.locator('.sb-ai-conv-open').focus();
+      await page.keyboard.press('Tab');
+      check(`${tag} Tab reaches the row's menu button`, (await page.evaluate(() => document.activeElement.className)) === 'sb-ai-conv-more');
+      await page.keyboard.press('Enter');
+      const menu = await page.locator('.sb-ai-rowmenu').textContent();
+      check(`${tag} the row's one menu has Rename, Move and Delete`, menu.includes('Rename') && menu.includes('Move to project') && menu.includes('Delete'), menu);
+      await page.keyboard.press('Escape');
+    }
 
     // a turn through the fake engine
     if (width >= 700) {
@@ -239,7 +319,7 @@ export async function runWebChecks(browser, port, outDir) {
     await page.locator('.sbw-more').click();
     // below 700 px the bar has no room for Routines and Projects, so More lists them first (ledger 12)
     const menuItems = await page.evaluate(() => [...document.querySelectorAll('.sbw-menu-item')].filter((n) => getComputedStyle(n).display !== 'none').map((n) => n.textContent));
-    check(`${tag} the ellipsis menu lists ${width < 700 ? 'the theme switch, Projects, ' : ''}Settings and Search index (Routines and the radar are in Settings)`, JSON.stringify(menuItems) === JSON.stringify([...(width < 700 ? [menuItems[0], 'Projects'] : []), 'Settings', 'Search index']) && (width >= 700 || /^(Light|Dark) mode$/.test(menuItems[0])), menuItems);
+    check(`${tag} the ellipsis menu lists ${width < 700 ? 'the theme switch, Read later, Projects, ' : ''}Settings, Search index and Server (Routines and the radar are in Settings)`, JSON.stringify(menuItems) === JSON.stringify([...(width < 700 ? [menuItems[0], 'Read later', 'Projects'] : []), 'Settings', 'Search index', 'Server']) && (width >= 700 || /^(Light|Dark) mode$/.test(menuItems[0])), menuItems);
     await page.locator('.sbw-menu-item', { hasText: 'Search index' }).click();
     await page.waitForSelector('.sbw-row');
     check(`${tag} Search index shows the index`, (await page.locator('#sbw-index').textContent()).includes('40 documents'));
@@ -249,7 +329,7 @@ export async function runWebChecks(browser, port, outDir) {
     await page.waitForSelector('#sbw-folders .sbw-folder');
     const folderRows = await page.evaluate(() => [...document.querySelectorAll('#sbw-folders .sbw-folder')].map((r) => `${r.querySelector('.sbw-row-name').textContent}: ${r.querySelector('.sbw-row-detail').textContent}`));
     check(`${tag} Folders lists the vault, Zotero and the plain folder with kind and count`, JSON.stringify(folderRows) === JSON.stringify([
-      'second-brain: Obsidian vault · 40 documents · main folder: notes Second Brain writes go here',
+      'second-brain: Obsidian vault · 40 documents · main folder: notes Veritas writes go here',
       'zotero: Zotero library · 12 documents', 'papers: Folder · 7 documents']), folderRows);
     check(`${tag} Folders: no sideways page scroll`, await noSideways(page));
     if (width === 1280) {
@@ -276,27 +356,25 @@ export async function runWebChecks(browser, port, outDir) {
       check(`${tag} Remove asks first and takes the row away`, true);
     }
 
-    // Home: each paper of the issue can be rated where it is read (Add to Zotero or Read later, Like, Dislike), with Undo
+    // Home: each paper of the issue can be rated where it is read (Add to Zotero or Read later, Like, Not for me), with Undo
     await go(page, '#/home');
     await page.waitForSelector('.sbw-paper .sb-dg-acts .sb-dg-act');
     const acts = await page.evaluate(() => [...document.querySelectorAll('.sbw-paper')].map((p) => [...p.querySelectorAll('.sb-dg-act')].map((b) => b.textContent)));
-    check(`${tag} Home: every paper of the issue has the radar's actions`, acts.length >= 2 && acts.every((a) => a.length === 3 && (a[0] === 'Add to Zotero' || a[0] === 'Read later') && a[1] === 'Like' && a[2] === 'Dislike'), acts);
-    const rows = await page.evaluate(() => [...document.querySelectorAll('.sbw-paper .sb-dg-acts')].map((box) => new Set([...box.querySelectorAll('.sb-dg-act')].map((b) => Math.round(b.getBoundingClientRect().top))).size));
-    check(`${tag} Home: each paper's actions fit on one line`, rows.every((n) => n === 1), rows);
+    check(`${tag} Home: every paper of the issue has the radar's actions`, acts.length >= 2 && acts.every((a) => a.length === 3 && (a[0] === 'Add to Zotero' || a[0] === 'Read later') && a[1] === 'Like' && a[2] === 'Not for me'), acts);
+    const rows = await page.evaluate(() => [...document.querySelectorAll('.sbw-paper .sb-dg-acts')].map((box) => { const paper = box.closest('.sbw-paper').getBoundingClientRect(); return [...box.querySelectorAll('.sb-dg-act, .sb-dg-chev')].every((b) => b.getBoundingClientRect().right <= paper.right + 1); }));
+    check(`${tag} Home: each paper's actions wrap inside its column`, rows.every(Boolean), rows);
     if (width === 1280) {
-      // under each paper: the AI summary (default) or the abstract, remembered
+      // under each paper: the abstract (default) or the AI summary, remembered
       const firstLine = () => page.locator('.sbw-paper .sbw-paper-why').first().textContent();
-      check(`${tag} Home: the AI summary is shown by default`, (await firstLine()) === 'Burrows stay four degrees warmer than the surface.');
-      await page.locator('.sbw-layout-btn', { hasText: 'Abstract' }).click();
-      await page.waitForFunction(() => document.querySelector('.sbw-paper .sbw-paper-why')?.textContent.startsWith('Field voles dig burrows'));
-      check(`${tag} Home: Abstract shows each paper's abstract instead, justified`, (await page.evaluate(() => getComputedStyle(document.querySelector('.sbw-paper .sbw-paper-why')).textAlign)) === 'justify');
+      check(`${tag} Home: the abstract is shown by default, justified`, (await firstLine()).startsWith('Field voles dig burrows') && (await page.evaluate(() => getComputedStyle(document.querySelector('.sbw-paper .sbw-paper-why')).textAlign)) === 'justify');
       await page.locator('.sbw-layout-btn', { hasText: 'AI summary' }).click();
       await page.waitForFunction(() => document.querySelector('.sbw-paper .sbw-paper-why')?.textContent.startsWith('Burrows stay'));
+      check(`${tag} Home: AI summary shows each paper's summary instead`, (await firstLine()) === 'Burrows stay four degrees warmer than the surface.');
       const first = page.locator('.sbw-paper').first();
-      await first.getByRole('button', { name: 'Dislike' }).click();
+      await first.getByRole('button', { name: 'Not for me' }).click();
       await page.waitForFunction(() => document.querySelector('.sbw-paper')?.classList.contains('is-dismissed'));
       const fb = await page.evaluate(() => window.__store.feedback ?? []);
-      check(`${tag} Home: Dislike tells the radar and greys the paper`, JSON.stringify(fb.at(-1)) === JSON.stringify({ routineId: 'r2', key: 'doi:10.1/vole', verdict: 'dismissed' }) && (await first.locator('.sb-dg-state').textContent()) === 'Disliked', fb);
+      check(`${tag} Home: Not for me tells the radar and folds the paper`, JSON.stringify(fb.at(-1)) === JSON.stringify({ routineId: 'r2', key: 'doi:10.1/vole', verdict: 'dismissed' }) && (await first.locator('.sb-dg-state').textContent()) === 'Not for me: fewer like this', fb);
       await first.getByRole('button', { name: 'Undo' }).click();
       await page.waitForFunction(() => !document.querySelector('.sbw-paper')?.classList.contains('is-dismissed'));
       check(`${tag} Home: Undo puts it back`, (await page.evaluate(() => window.__store.feedback.at(-1).verdict)) === 'undo');
@@ -315,6 +393,87 @@ export async function runWebChecks(browser, port, outDir) {
       await page.locator('.sbw-lib-collections').click();
       const back = await page.evaluate(() => getComputedStyle(document.querySelector('.sbw-lib-tree')).display);
       check(`${tag} Library: Collections folds the column away, remembers it, and brings it back`, folded === 'none' && still === 'none' && back === 'block', { folded, still, back });
+    }
+
+    // the composer on the real web host's controls (the `+` picker holds Skills)
+    if (width === 1280) {
+      const composer = await browser.newPage({ viewport: { width, height: 800 } });
+      await useFixtures(composer);
+      await composer.goto(`${fakeUrl}&picker=1`);
+      await composer.waitForFunction(() => window.__sbWebReady === true);
+      await composer.evaluate(() => { location.hash = '#/chat?session=c1'; });
+      await composer.waitForSelector('.sb-ai-answer .sb-ai-md');
+      const line = await composer.evaluate(() => {
+        const row = document.querySelector('.sb-ai-box > .sb-ai-row:not(.sb-ai-report-options)');
+        const shown = [...row.children].filter((c) => c.getClientRects().length && c.getBoundingClientRect().width);
+        return { lines: new Set(shown.map((c) => Math.round(c.getBoundingClientRect().bottom - c.getBoundingClientRect().height / 2))).size, text: row.textContent };
+      });
+      check('1280px the composer controls fit one line, Skills behind +', line.lines === 1 && !line.text.includes('Skills'), line);
+      await composer.evaluate(() => { window.__failNext = true; });
+      await composer.fill('.sb-ai-input', 'A question that fails');
+      await composer.keyboard.press('Enter');
+      await composer.waitForSelector('.sb-ai-error');
+      await composer.locator('.sb-ai-error-again').click();
+      await composer.waitForFunction(() => document.querySelector('.sb-ai-thread').textContent.includes('Echo: A question that fails'));
+      check('1280px Try again on a failed turn asks the question again', true);
+      // spec 030 R1/R8 in the web shell: changing the mode in an open chat keeps it (its address, its title, its turns)
+      const before = await composer.evaluate(() => ({ hash: location.hash, title: document.querySelector('.sb-ai-head-name')?.textContent ?? '', users: document.querySelectorAll('.sb-ai-thread > .sb-ai-user').length }));
+      await composer.selectOption('.sb-ai-modepick', 'find');
+      await composer.waitForTimeout(300);
+      const kept = await composer.evaluate(() => ({ hash: location.hash, title: document.querySelector('.sb-ai-head-name')?.textContent ?? '', users: document.querySelectorAll('.sb-ai-thread > .sb-ai-user').length,
+        empty: Boolean(document.querySelector('.sb-ai-thread .sb-ai-empty')), placeholder: document.querySelector('.sb-ai-input').placeholder }));
+      check('1280px spec 030 R1: switching an open chat to Find papers keeps the chat on screen and in the address; only the composer changes',
+        kept.users === before.users && kept.users > 0 && !kept.empty && kept.title === before.title && kept.hash.includes('session=c1') && kept.placeholder === 'What papers are you looking for?', { before, kept });
+      await composer.close();
+    }
+
+    // spec 029 R6: Papers, Notes, Scholarly and Web fold into one Sources menu button that names what is on; at 1280 px the
+    // controls fit one line, with the `+` picker and without it (Skills and "+ Add papers…" then show); the menu is a list of
+    // checkboxes the keyboard can work (arrows, Space, Escape back to the button); light and dark; no sideways scroll on a phone
+    for (const [picker, scheme] of width === 1280 ? [[true, 'light'], [false, 'light'], [true, 'dark']] : width === 360 ? [[true, 'dark']] : []) {
+      const sp = await browser.newPage({ viewport: { width, height: 800 }, colorScheme: scheme });
+      await useFixtures(sp);
+      await sp.goto(`${fakeUrl}${picker ? '&picker=1' : ''}${scheme === 'dark' ? '&theme=dark' : ''}`);
+      await sp.waitForFunction(() => window.__sbWebReady === true, null, { timeout: 8000 });
+      await sp.evaluate(() => { location.hash = '#/chat'; });
+      await sp.waitForSelector('.sb-ai-sources-btn');
+      await sp.waitForTimeout(150);
+      const row = await sp.evaluate(() => {
+        const r = document.querySelector('.sb-ai-box > .sb-ai-row:not(.sb-ai-report-options)');
+        const shown = [...r.children].filter((c) => c.getClientRects().length && c.getBoundingClientRect().width);
+        const btn = document.querySelector('.sb-ai-sources-btn');
+        return { lines: new Set(shown.map((c) => Math.round(c.getBoundingClientRect().bottom - c.getBoundingClientRect().height / 2))).size, text: r.textContent,
+          label: btn.textContent, pills: [...r.querySelectorAll('.sb-ai-source')].filter((b) => b.checkVisibility()).length,
+          aria: [btn.getAttribute('aria-haspopup'), btn.getAttribute('aria-expanded')], skills: r.textContent.includes('Skills'), add: r.textContent.includes('Add papers') || Boolean(r.querySelector('.sb-ai-add')) };
+      });
+      const tag2 = `${width}px ${scheme}${picker ? '' : ' (no picker)'}`;
+      check(`${tag2} spec 029 R6: one Sources button names what is on ("Sources: Papers, Notes, Scholarly"); no source pills in the row; mode, scope${picker ? '' : ', Skills'} and Add stay`,
+        row.label === 'Sources: Papers, Notes, Scholarly' && row.pills === 0 && JSON.stringify(row.aria) === '["menu","false"]' && row.text.includes('Chat') && row.text.includes('Whole library') && row.add && (picker || row.skills), row);
+      if (width === 1280) check(`${tag2} spec 029 R6: the composer controls fit one line`, row.lines === 1, row);
+      // the keyboard: focus the button, ArrowDown opens on the first item, ArrowDown x3 reaches Web, Space ticks it, Escape closes
+      await sp.focus('.sb-ai-sources-btn');
+      await sp.keyboard.press('ArrowDown');
+      const opened = await sp.evaluate(() => {
+        const menu = document.querySelector('.sb-ai-sources-menu');
+        const m = menu.getBoundingClientRect();
+        return { shown: menu.checkVisibility(), role: menu.getAttribute('role'), expanded: document.querySelector('.sb-ai-sources-btn').getAttribute('aria-expanded'),
+          focus: document.activeElement?.textContent, items: [...menu.querySelectorAll('.sb-ai-source')].filter((b) => b.checkVisibility()).map((b) => [b.textContent, b.getAttribute('role'), b.getAttribute('aria-checked')]),
+          inside: m.left >= 0 && m.right <= innerWidth && m.top >= 0, sideways: document.scrollingElement.scrollWidth > innerWidth };
+      });
+      check(`${tag2} spec 029 R6: ArrowDown opens the menu of checkboxes on its first item, inside the window`,
+        opened.shown && opened.role === 'menu' && opened.expanded === 'true' && opened.focus === 'Papers' && opened.inside && !opened.sideways
+        && JSON.stringify(opened.items) === '[["Papers","menuitemcheckbox","true"],["Notes","menuitemcheckbox","true"],["Scholarly","menuitemcheckbox","true"],["Web","menuitemcheckbox","false"]]', opened);
+      if (picker && scheme === 'light') await sp.screenshot({ path: join(outDir, `web-sources-menu-r6-${width}.png`) });
+      for (let i = 0; i < 3; i++) await sp.keyboard.press('ArrowDown');
+      await sp.keyboard.press('Space');
+      const ticked = await sp.evaluate(() => ({ focus: document.activeElement?.textContent, web: document.querySelector('.sb-ai-source:nth-child(4)').getAttribute('aria-checked'),
+        label: document.querySelector('.sb-ai-sources-btn').textContent, open: document.querySelector('.sb-ai-sources-menu').checkVisibility() }));
+      check(`${tag2} spec 029 R6: Space ticks Web, the menu stays open, the button names it`, ticked.focus === 'Web' && ticked.web === 'true' && ticked.open && ticked.label === 'Sources: Papers, Notes, Scholarly, Web', ticked);
+      await sp.keyboard.press('Escape');
+      const closed = await sp.evaluate(() => ({ open: document.querySelector('.sb-ai-sources-menu').checkVisibility(), focus: document.activeElement?.className, expanded: document.querySelector('.sb-ai-sources-btn').getAttribute('aria-expanded') }));
+      check(`${tag2} spec 029 R6: Escape closes the menu and gives the keyboard back to the button`, !closed.open && closed.focus.includes('sb-ai-sources-btn') && closed.expanded === 'false', closed);
+      await sp.screenshot({ path: join(outDir, `web-composer-r6-${width}-${scheme}${picker ? '' : '-nopicker'}.png`) });
+      await sp.close();
     }
 
     // wording: the web host never names Zotero or Obsidian as the place papers and notes live
@@ -340,6 +499,55 @@ export async function runWebChecks(browser, port, outDir) {
     await page.waitForSelector('.sbw-today');
     const seen = await page.evaluate(() => ({ setup: document.body.textContent.includes('Set up a reading radar'), intro: Boolean(document.querySelector('.sbw-sources.is-intro')), hint: document.querySelector('.sbw-today')?.textContent ?? '' }));
     check('1280px Home: routines that fail to load do not read as "no radar"', !seen.setup && !seen.intro && /Couldn't read your reading radar/.test(seen.hint) || (!seen.setup && !seen.intro), seen);
+    await page.close();
+  }
+
+  // ------------------------------------------------------------ opening chats: two quick clicks, the slower answer first
+  // The engine's replies are held back per chat (window.__slow, ms): the first chat clicked answers last. The thread must
+  // belong to the chat the header names, say "Opening…" while it waits, and a chat link must not wait for the history.
+  {
+    const { page, goto } = await open(fakeUrl, 1280);
+    await goto();
+    await page.waitForFunction(() => window.__sbWebReady === true, null, { timeout: 8000 });
+    await page.evaluate(() => {
+      const turn = (q, a) => [{ type: 'user', text: q, attachments: [], web: 'off', at: '2026-10-01T09:00:00Z' },
+        { type: 'assistant', answer: { text: a, citations: [], structured: null, usage: {} }, model: { provider: 'x', model: 'y' }, activities: [], at: '2026-10-01T09:00:01Z' }];
+      window.__store.recordsBy.old1 = turn('First question?', 'Answer of the first chat.');
+      window.__store.recordsBy.old2 = turn('Second question?', 'Answer of the second chat.');
+      window.__slow = {};
+      const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms ?? 0));
+      const plain = window.__host.ai.bind(window.__host);
+      window.__host.ai = async () => {
+        const ai = await plain();
+        const { load, list } = ai.conversations;
+        ai.conversations.load = async (id) => { const out = await load(id); await wait(window.__slow[id]); return out; };
+        ai.conversations.list = async () => { await wait(window.__slow.list); return list(); };
+        if (ai.sessions?.view) { const view = ai.sessions.view.bind(ai.sessions); ai.sessions.view = async (id) => { const out = await view(id); await wait(window.__slow[id]); return out; }; }
+        return ai;
+      };
+    });
+    await go(page, '#/chat');
+    await page.waitForSelector('.sb-ai-conv[data-id="old2"]');
+    await page.evaluate(() => { window.__slow = { old1: 900, old2: 100 }; });
+    await page.locator('.sb-ai-conv[data-id="old1"] .sb-ai-conv-open').click();
+    const waiting = await page.evaluate(() => ({ opening: document.querySelector('.sb-ai-thread .sb-ai-opening')?.textContent ?? null, text: document.querySelector('.sb-ai-thread')?.textContent ?? '' }));
+    check('1280px a chat says Opening… in its thread until its records arrive', waiting.opening === 'Opening…' && !waiting.text.includes('Seeds and roots.'), waiting);
+    await page.locator('.sb-ai-conv[data-id="old2"] .sb-ai-conv-open').click();
+    await page.waitForTimeout(2300); // both answers are in, even asked one after the other: the second chat's within ~0.2 s, the first's within ~1.8 s
+    const raced = await page.evaluate(() => ({ title: document.querySelector('.sb-ai-head-name')?.textContent, text: document.querySelector('.sb-ai-thread')?.textContent ?? '', opening: Boolean(document.querySelector('.sb-ai-opening')), selected: document.querySelector('.sb-ai-conv.is-selected')?.dataset.id }));
+    check('1280px two chats clicked quickly, the slower first: the header and the thread are the same chat (the late answer is dropped)', raced.title === 'Old vole question 2' && raced.text.includes('Answer of the second chat.') && !raced.text.includes('Answer of the first chat.') && !raced.opening && raced.selected === 'old2', raced);
+
+    // a chat link opens the thread while the history (four list calls) is still on its way
+    await go(page, '#/chat');
+    await page.evaluate(() => { window.__slow = { list: 2500 }; });
+    const started = Date.now();
+    await page.evaluate(() => { location.hash = '#/chat?session=c1'; });
+    await page.waitForFunction(() => document.querySelector('.sb-ai-thread')?.textContent.includes('Seeds and roots.'), null, { timeout: 5000 }).catch(() => {});
+    const linkMs = Date.now() - started;
+    const linked = await page.evaluate(() => ({ title: document.querySelector('.sb-ai-head-name')?.textContent, text: document.querySelector('.sb-ai-thread')?.textContent ?? '' }));
+    check('1280px a chat link opens its thread without waiting for the history list', linked.text.includes('Seeds and roots.') && linkMs < 1500 && linked.title === 'Foraging in voles', { linkMs, ...linked });
+    await page.evaluate(() => { window.__slow = {}; });
+    check('1280px opening chats logged no errors', page.errors.length === 0, page.errors);
     await page.close();
   }
 
@@ -604,7 +812,7 @@ export async function runWebChecks(browser, port, outDir) {
       await page.click('.sbw-today-sources');
       await page.waitForSelector('.sbw-sources .sbw-chip');
       const edit = await page.evaluate(() => ({ hash: location.hash, ring: document.querySelector('.sbw-src-ring-n').textContent, title: document.title, more: document.querySelector('.sbw-more').classList.contains('is-active') || getComputedStyle(document.querySelector('.sbw-more')).display === 'none', hasIntro: Boolean(document.querySelector('.is-intro')) }));
-      check(`${tag} the Sources link opens Settings > Reading radar with the existing radar's 2 follows counted`, edit.hash === '#/settings?section=radar' && edit.ring === '2' && edit.title === 'Settings · Second Brain' && !edit.hasIntro && true, edit);
+      check(`${tag} the Sources link opens Settings > Reading radar with the existing radar's 2 follows counted`, edit.hash === '#/settings?section=radar' && edit.ring === '2' && edit.title === 'Settings · Veritas' && !edit.hasIntro && true, edit);
       check(`${tag} #/sources has no sideways page scroll`, await noSideways(page));
       check(`${tag} #/sources lights the More item in the rail`, edit.more, edit);
       const sizes = await page.evaluate(() => {
@@ -699,6 +907,38 @@ export async function runWebChecks(browser, port, outDir) {
     }
   }
 
+  // ------------------------------------------------------------ spec 029 R5: the new-chat start page
+  // The welcome and the suggestions sit together just above the message box; the recent chats are left out where the
+  // chat list is beside the thread (from 700 px) and are a compact list of at most three rows on a phone, never cut short.
+  for (const [width, scheme] of [[1280, 'light'], [1280, 'dark'], [390, 'light'], [390, 'dark'], [360, 'light']]) {
+    const { page, goto } = await open(`${fakeUrl}&picker=1${scheme === 'dark' ? '&theme=dark' : ''}`, width, { colorScheme: scheme, viewport: { width, height: width < 700 ? 844 : 800 } });
+    await goto();
+    await page.waitForFunction(() => window.__sbWebReady === true, null, { timeout: 8000 });
+    await go(page, '#/chat');
+    await page.waitForSelector('.sb-ai-empty .sb-ai-pill');
+    await page.waitForTimeout(150);
+    const start = await page.evaluate(() => {
+      const rect = (el) => el.getBoundingClientRect();
+      const text = rect(document.querySelector('.sb-ai-empty-text'));
+      const kids = [...document.querySelector('.sb-ai-suggestions').children];
+      const box = rect(document.querySelector('.sb-ai-box'));
+      const cards = [...document.querySelectorAll('.sb-ai-empty .sb-ai-card')];
+      return {
+        textToSuggestions: Math.round(rect(kids[0]).top - text.bottom), suggestionsToBox: Math.round(box.top - Math.max(...kids.map((k) => rect(k).bottom))),
+        cards: cards.length, listShown: Boolean(document.querySelector('.sb-ai-side')?.checkVisibility()),
+        // never cut short: a title fits its two lines, the kind and when are shown whole
+        cut: cards.flatMap((c) => [c.querySelector('.sb-ai-card-title'), c.querySelector('.sb-ai-card-when')]).filter((t) => t.scrollWidth > t.clientWidth + 1 || t.scrollHeight > t.clientHeight + 1).map((t) => t.textContent),
+        rows: cards.map((c) => Math.round(rect(c).height)), sideways: document.scrollingElement.scrollWidth > innerWidth,
+      };
+    });
+    const tag = `${width}px ${scheme}`;
+    check(`${tag} spec 029 R5: the welcome and the suggestions sit together just above the message box (no empty gap)`, start.textToSuggestions >= 0 && start.textToSuggestions <= 24 && start.suggestionsToBox >= 0 && start.suggestionsToBox <= 32, start);
+    if (width >= 700) check(`${tag} spec 029 R5: no recent-chat cards beside the chat list (they would repeat it)`, start.listShown && start.cards === 0, start);
+    else check(`${tag} spec 029 R5: the recent chats are a compact list of at most 3 rows, none cut short, no sideways scroll`, !start.listShown && start.cards >= 1 && start.cards <= 3 && start.cut.length === 0 && start.rows.every((h) => h <= 64) && !start.sideways, start);
+    await page.screenshot({ path: join(outDir, `web-chat-start-r5-${width}-${scheme}.png`) });
+    await page.close();
+  }
+
   // ------------------------------------------------------------ rail geometry and both palettes (ledger 2, 11, 12)
   for (const [width, expectRail] of [[800, 56], [1280, 224]]) {
     const { page, goto } = await open(fakeUrl, width);
@@ -737,6 +977,32 @@ export async function runWebChecks(browser, port, outDir) {
     await page.close();
   }
 
+  // ------------------------------------------------------------ spec 029 R8: a wider answer column on a wide screen
+  // The thread's text and the message box grow to 860 px where there is room (712 before); at 1280 the rail and the chat
+  // list leave less, so both fill what is left; below 560 px nothing changes (the box fills the pane).
+  for (const [width, scheme] of [[1600, 'light'], [1600, 'dark'], [1280, 'light'], [390, 'dark']]) {
+    const { page, goto } = await open(`${fakeUrl}&picker=1${scheme === 'dark' ? '&theme=dark' : ''}`, width, { colorScheme: scheme });
+    await goto();
+    await page.waitForFunction(() => window.__sbWebReady === true, null, { timeout: 8000 });
+    await go(page, '#/chat?session=c1');
+    await page.waitForSelector('.sb-ai-answer .sb-ai-md');
+    const col = await page.evaluate(() => {
+      const thread = document.querySelector('.sb-ai-thread');
+      const style = getComputedStyle(thread);
+      const main = document.querySelector('.sb-ai-main').getBoundingClientRect().width;
+      const composer = document.querySelector('.sb-ai-composer');
+      const cs = getComputedStyle(composer);
+      return { text: Math.round(thread.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)), main: Math.round(main),
+        box: Math.round(document.querySelector('.sb-ai-composer-inner').getBoundingClientRect().width),
+        room: Math.round(composer.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)), sideways: document.scrollingElement.scrollWidth > innerWidth };
+    });
+    const tag = `${width}px ${scheme}`;
+    if (width === 1600) check(`${tag} spec 029 R8: the answer column and the message box are 860 px wide (were 712)`, col.text === 860 && col.box === 860 && !col.sideways, col);
+    else check(`${tag} spec 029 R8: with less room the answer column and the message box fill the chat (no cap below 860), no sideways scroll`, col.text <= 860 && col.box === Math.min(860, col.room) && col.text >= col.main - 48 - 1 && !col.sideways, col);
+    await page.screenshot({ path: join(outDir, `web-chat-r8-${width}-${scheme}.png`) });
+    await page.close();
+  }
+
   // ------------------------------------------------------------ dialogs never block the page
   {
     const { page, goto } = await open(fakeUrl, 1280);
@@ -766,12 +1032,12 @@ export async function runWebChecks(browser, port, outDir) {
   // ------------------------------------------------------------ the real web host against a scripted server
   const server = scriptedServer();
   for (const width of WIDTHS) {
-    const { page, goto } = await open(`${origin}/dist-web/index.html#/home`, width);
+    const { page, goto } = await open(`${origin}/app/index.html#/home`, width);
     server.attach(page);
     await goto();
     await page.waitForSelector('.sbw-cover');
     const tag = `${width}px real host`;
-    check(`${tag} Home reads conversations through /agent`, (await page.locator('.sbw-cover .sbw-cover-title').allTextContents()).includes('Foraging in voles'));
+    check(`${tag} Home reads conversations through /agent`, (await page.locator('.sbw-cover .sbw-cover-title').allTextContents()).includes('What Voles Eat'));
     check(`${tag} no sideways page scroll`, await noSideways(page));
     if (width === 1280) {
       // a turn: POST /agent/conversations/send, then the answer arrives over the long-poll /agent/events?after=
@@ -788,7 +1054,10 @@ export async function runWebChecks(browser, port, outDir) {
       await page.waitForTimeout(700);
       check(`${tag} prefs write through to /web/state`, server.state.prefs.chatMode === 'ask', server.state);
 
-      // a fresh load sees them (state is read before the UI is built)
+      // a fresh load sees them (state is read before the UI is built). Spec 030 R1: the mode change kept the open chat,
+      // whose address would reopen it (as a chat); a new chat's address shows the saved mode.
+      await page.evaluate(() => { location.hash = '#/chat'; });
+      await page.waitForTimeout(200);
       await page.reload();
       await page.waitForSelector('.sb-ai-modepick');
       check(`${tag} the saved mode is back after a reload`, (await page.locator('.sb-ai-modepick').inputValue()) === 'ask');
@@ -830,7 +1099,7 @@ export async function runWebChecks(browser, port, outDir) {
 
       // the manifest is real
       const manifest = await page.evaluate(() => fetch('manifest.webmanifest').then((r) => r.text()).then(JSON.parse));
-      check(`${tag} the manifest names the app and installs standalone`, manifest.name === 'Second Brain' && manifest.display === 'standalone' && manifest.icons.length > 0 && (await page.title()) === 'Settings · Second Brain', manifest);
+      check(`${tag} the manifest names the app and installs standalone`, manifest.name === 'Veritas' && manifest.display === 'standalone' && manifest.icons.length > 0 && (await page.title()) === 'Settings · Veritas', manifest);
       await page.screenshot({ path: join(outDir, 'web-real-1280.png') });
     }
     check(`${tag} logged no errors`, page.errors.filter((e) => !/Failed to load resource/.test(e)).length === 0, page.errors);
@@ -844,7 +1113,7 @@ export async function runWebChecks(browser, port, outDir) {
       { provider: 'codex', state: 'missing', version: null, account: { kind: 'none', label: null, plan: null }, usage: null, installHelp: 'Install the ChatGPT app to use your ChatGPT plan.' },
       { provider: 'local', state: 'ready', version: null, account: { kind: 'none', label: null, plan: null }, usage: null, installHelp: null, detail: '2 models found.' },
     ];
-    const { page, goto } = await open(`${origin}/dist-web/index.html#/settings?section=models`, 1280);
+    const { page, goto } = await open(`${origin}/app/index.html#/settings?section=models`, 1280);
     server.attach(page);
     await goto();
     await page.waitForSelector('.sbm .sbm-models');
@@ -919,13 +1188,13 @@ export async function runWebChecks(browser, port, outDir) {
     await page.screenshot({ path: join(outDir, 'models-1280.png') });
 
     await page.getByRole('button', { name: 'Open ›' }).click();
-    check(`${tag} the On this Mac row opens that section`, (await page.locator('.sbs-nav-item.is-active').textContent()) === 'On this Mac');
+    check(`${tag} the On this Mac row opens that section`, (await page.locator('.sbs-nav-item.is-active').textContent()) === 'On this computer');
     check(`${tag} the section list fills the height of the window`, await page.evaluate(() => { const side = document.querySelector('.sbs-side').getBoundingClientRect(); return Math.abs(side.bottom - window.innerHeight) <= 1; }));
     check(`${tag} logged no errors`, page.errors.filter((e) => !/Failed to load resource/.test(e)).length === 0, page.errors);
     await page.close();
   }
   {
-    const { page, goto } = await open(`${origin}/dist-web/index.html#/settings?section=models`, 390);
+    const { page, goto } = await open(`${origin}/app/index.html#/settings?section=models`, 390);
     server.attach(page);
     await goto();
     await page.waitForSelector('.sbm .sbm-models');
@@ -945,7 +1214,7 @@ export async function runWebChecks(browser, port, outDir) {
 
   // the server going away shows as offline, and the app recovers
   {
-    const { page, goto } = await open(`${origin}/dist-web/index.html#/chat`, 1280);
+    const { page, goto } = await open(`${origin}/app/index.html#/chat`, 1280);
     server.attach(page);
     await goto();
     await page.waitForSelector('.sb-ai-where');
@@ -975,16 +1244,22 @@ function scriptedServer() {
     convs: [
       { id: 'c1', mode: 'chat', title: 'Foraging in voles', updated: hoursAgo(2), artifacts: 0, kind: 'chat' },
       { id: 'c2', mode: 'chat', title: 'Doorknob ergonomics', updated: hoursAgo(30), artifacts: 0, kind: 'chat' },
+      // Home shelves reports, not chats: this one shows it read the conversations
+      { id: 'c3', mode: 'chat', title: 'New chat', updated: hoursAgo(40), artifacts: 1, kind: 'report', cover: { kind: 'report', title: 'What Voles Eat', by: '4 papers' } },
     ],
     log: /** @type {{ seq: number, type: string, [k: string]: any }[]} */ ([]),
     attach(page) {
-      page.route(/\/(web|agent|ping|status|zotero|search|recent|links)\b/, async (route) => {
+      page.route(/\/(web|agent|ping|status|zotero|search|recent|links|sources|setup|site-icon)\b/, async (route) => {
         const url = new URL(route.request().url());
         const method = route.request().method();
         const json = (body, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
         if (s.down) return route.abort();
         const path = url.pathname;
-        if (path === '/ping') return json({ ok: true });
+        if (path === '/ping') return json({ ok: true, ready: true });
+        // Home's guided setup (spec 023) and the source pills' icons; shapes as server/http_api.py
+        if (path === '/sources') return json({ folders: [] });
+        if (path === '/setup/suggest') return json({ zotero: null, vaults: [], pdf_folders: [] });
+        if (path === '/site-icon') return route.fulfill({ status: 200, contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"/>' });
         if (path === '/web/state') {
           if (method === 'POST') {
             const body = JSON.parse(route.request().postData() ?? '{}');
@@ -1033,7 +1308,11 @@ function scriptedServer() {
             { id: 'mistral/large', label: 'mistral/large', hint: null, efforts: [], source: 'provider', isDefault: false }]);
           return json([]);
         }
-        if (api === '/routines' || api === '/projects' || api === '/skills' || api === '/reviews') return json([]);
+        if (api === '/reading-list') return json([]);
+        if (api === '/routines' || api === '/projects' || api === '/skills' || api === '/reviews' || api === '/mcp-servers') return json([]);
+        // shapes as agent/src/service.d.ts (sessions.view, radar.profile)
+        if (api === '/sessions/view') return json({ steps: [], results: [], current: null });
+        if (api === '/radar/profile') return json({ topics: [], authors: [], journals: [] });
         if (api === '/settings') {
           if (method === 'POST') {
             const patch = JSON.parse(route.request().postData() ?? '{}');

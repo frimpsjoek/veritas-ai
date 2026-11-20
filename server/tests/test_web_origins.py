@@ -45,7 +45,7 @@ def test_unlisted_origin_still_refused(server):
 
 def test_allowed_origin_with_token_gets_cors_headers(server):
     status, headers, body = server("GET", "/ping", {"Origin": APP, "Authorization": "Bearer tok"})
-    assert status == 200 and json.loads(body) == {"ok": True}
+    assert status == 200 and json.loads(body) == {"ok": True, "ready": True}
     assert headers["access-control-allow-origin"] == APP and "Origin" in headers["vary"]
 
 

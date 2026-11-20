@@ -4,7 +4,8 @@
 // so this can't be forgotten). handleMcp is the pure JSON-RPC handler; createMcpHttpHandler adds the per-session
 // bearer-token check in front of it, which is what the "wrong token gets 401" and "notifications get 202" rules
 // need to hold even for an unauthenticated caller.
-import { searchScholarly, SOURCES } from './scholarly.js';
+import { searchScholarly, SOURCES, fillAbstracts } from './scholarly.js';
+import { findOpenAccess, bareDoi, arxivIdOf } from './open-access.js';
 import { createMcpHub } from './mcp-hub.js';
 import { errorMessage } from './errors.js';
 import { renderResult } from './sessions.js';
@@ -60,7 +61,7 @@ function refFromArgs(args) {
   return null;
 }
 
-/** @param {import("./tools").LibraryBackend} library @param {typeof fetch} fetchFn @param {{ scholarly?: string[] }} settings
+/** @param {import("./tools").LibraryBackend} library @param {typeof fetch} fetchFn @param {{ scholarly?: string[], paperEmail?: () => Promise<string | null> }} settings
  *  @returns {import("./tools").ToolRow[]} */
 function builtinRows(library, fetchFn, settings) {
   return [
@@ -209,6 +210,36 @@ function builtinRows(library, fetchFn, settings) {
         const rendered = renderResult(result, { rows, columns: args.columns, abstracts: session.on ? args.abstracts !== false : args.abstracts === true, offset: clamp(args.offset, 0, Number.MAX_SAFE_INTEGER, 0), maxChars: clamp(args.maxChars, 500, 20000, 12000) });
         return { text: rendered.text, seen: rendered.seen,
           meta: { source: { kind: result.kind === 'report' ? 'note' : 'paper', title: shortTitle(result.title) } } };
+      },
+    },
+    {
+      // spec 031 R7: a paper outside the library, read from a legal free copy when one exists, else its abstract
+      name: 'read_paper',
+      description: "Read a paper that is not in the user's library, by DOI or arXiv id: the text of a legal free copy (arXiv, Unpaywall, OpenAlex, Semantic Scholar, Europe PMC) when one exists, else its abstract. Use it only for papers already found or cited in this chat, or that the user asked about; it downloads the paper.",
+      inputSchema: { type: 'object', properties: { doi: { type: 'string' }, arxiv: { type: 'string' }, maxChars: { type: 'integer' } } },
+      annotations: READ_ONLY,
+      activity: { kind: 'read', label: (a) => `Reading the paper ${a?.doi || a?.arxiv || ''}`.trim() },
+      enabled: (ctx) => ctx.sources.scholarly && Boolean(library.paperText) && !ctx.session?.on,
+      async run(args) {
+        const doi = bareDoi(args.doi);
+        const arxiv = arxivIdOf({ arxiv: args.arxiv ? String(args.arxiv) : null, doi });
+        if (!doi && !arxiv) return { text: 'Give the paper\'s DOI or arXiv id.', seen: [] };
+        /** @type {import("./domain").CitationRef} */
+        const ref = { kind: 'web', url: doi ? `https://doi.org/${doi}` : `https://arxiv.org/abs/${arxiv}` };
+        const email = (await settings.paperEmail?.().catch(() => null)) ?? null;
+        const found = await findOpenAccess(fetchFn, { doi, arxiv }, { email });
+        const max = clamp(args.maxChars, 1000, 40000, 20000);
+        if (found.access === 'open') {
+          const text = (await /** @type {NonNullable<typeof library.paperText>} */ (library.paperText)({ url: found.pdfUrl, key: doi ? `doi:${doi}` : `arxiv:${arxiv}` }).catch(() => null))?.trim();
+          if (text) {
+            return { text: `The full text of a free copy (found through ${found.via}; cite it as ${ref.url}):\n\n${text.slice(0, max)}`, seen: [ref],
+              meta: { source: { kind: 'web', title: `Free copy via ${found.via}`, host: hostOf(found.pdfUrl) } } };
+          }
+        }
+        const abstract = (await fillAbstracts(fetchFn, [{ id: 'p', doi: doi || null, arxiv }], { lookups: 1 }).catch(() => new Map())).get('p');
+        const where = found.access === 'publisher' ? ` The paper is at ${found.page}, where the user can sign in.` : '';
+        if (abstract) return { text: `No free copy could be read; this is its abstract only (cite it as ${ref.url}).${where}\n\n${abstract}`, seen: [ref] };
+        return { text: `No free copy and no abstract were found for ${ref.url}.${where}`, seen: [] };
       },
     },
     {

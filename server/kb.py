@@ -5,7 +5,7 @@ Notes are split at headings into chunks of about CHUNK_CHARS. Each chunk goes in
 onnxruntime). A search runs both, fuses the two rankings (reciprocal rank fusion), scales by the note's
 source weight and returns at most two chunks per note.
 
-Re-indexing is incremental: a note is re-chunked only when its mtime or size changed.
+Re-indexing is incremental: a note is re-chunked only when its mtime or size changed, or CHUNKER_VERSION did.
 
 CLI:
   kb.py index [--full]            build or update the index
@@ -19,15 +19,25 @@ CLI:
 """
 from __future__ import annotations
 
+import sys
+
+import listen_first
+
+# `kb.py serve`: the port opens before the imports below, and before the folder list is looked at (reload_layout).
+listen_first.if_serving(sys.argv)
+
 import argparse
 import ctypes
-import fcntl
 import fnmatch
 import json
 import os
 import re
 import sqlite3
-import sys
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 import threading
 import time
 import urllib.parse
@@ -79,6 +89,9 @@ VECTOR_GATE = float(os.environ.get("KB_VECTOR_GATE", "0.55"))
 
 CHUNK_CHARS = 1400
 MIN_CHUNK_CHARS = 200
+# Bump when clean() or chunking changes what is stored: the next index run re-chunks every document (vectors of
+# unchanged passages are kept). 2: real tags only, sentences rejoined as prose, plain Zotero titles.
+CHUNKER_VERSION = "2"
 
 # Sync conflict copies, drawings (JSON, not prose), templates and agent instruction files are left out.
 SKIP_DIRS = {"Excalidraw", "templates", "assets", "attachments"}
@@ -217,7 +230,7 @@ def clean(text: str) -> str:
     text = MD_IMAGE.sub("", text)
     text = MD_LINK.sub(r"\1", text)
     text = BARE_URL.sub("", text)
-    text = re.sub(r"<[^>]{1,200}>", " ", text)
+    text = zotero.strip_tags(text)  # real tags only: "< 2 eV", <psi|H|psi> and <110> stay
     text = re.sub(r"[ \t]+", " ", text)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
@@ -260,16 +273,27 @@ def pack(text: str) -> list[str]:
         return [text]
     pieces, current = [], ""
     for para in re.split(r"\n\s*\n", text):
-        units = [para] if len(para) <= CHUNK_CHARS else re.split(r"(?<=[.!?])\s+|\n", para)
-        for unit in units:
+        # (unit, what joins it to the text before): pieces of one paragraph rejoin as a line or a space
+        if len(para) <= CHUNK_CHARS:
+            units = [(para, "\n\n")]
+        else:
+            parts = re.split(r"((?<=[.!?])\s+|\n)", para)
+            units = [(parts[0], "\n\n")] + [(parts[i + 1], "\n" if "\n" in parts[i] else " ")
+                                            for i in range(1, len(parts) - 1, 2)]
+        for unit, joiner in units:
+            if not unit:
+                continue
+            if len(unit) > CHUNK_CHARS and current:
+                pieces.append(current)
+                current = ""
             while len(unit) > CHUNK_CHARS:  # one unbroken run of text
                 pieces.append(unit[:CHUNK_CHARS])
                 unit = unit[CHUNK_CHARS:]
-            if current and len(current) + len(unit) + 2 > CHUNK_CHARS:
+            if current and len(current) + len(joiner) + len(unit) > CHUNK_CHARS:
                 pieces.append(current)
                 current = unit
             else:
-                current = f"{current}\n\n{unit}" if current else unit
+                current = f"{current}{joiner}{unit}" if current else unit
     if current:
         pieces.append(current)
     return pieces
@@ -450,6 +474,15 @@ def code_is_current() -> bool:
 PROGRESS_FILE = paths.data_dir(HOME) / "index-progress.json"
 LOCK_FILE = paths.data_dir(HOME) / "index.lock"
 STOP = threading.Event()  # set by "Stop" in the plugin (or SIGTERM): indexing ends after its current batch
+# "Stop" for an indexing process: Windows has no SIGTERM to catch (os.kill there is TerminateProcess, which would end
+# the run mid-batch), so the server leaves this file and the run checks for it between batches, on every system.
+STOP_FILE = paths.data_dir(HOME) / "index-stop"
+
+
+def clear_stop() -> None:
+    """A new run starts unstopped, whatever an earlier Stop left behind."""
+    STOP.clear()
+    STOP_FILE.unlink(missing_ok=True)
 
 
 class Stopped(Exception):
@@ -487,7 +520,7 @@ class Progress:
         self.write(force=True)
 
     def advance(self, done: int, total: int | None = None) -> None:
-        if STOP.is_set():
+        if STOP.is_set() or STOP_FILE.exists():
             raise Stopped
         self.state["done"] = done
         if total is not None:
@@ -524,15 +557,38 @@ class Progress:
         self.write(force=True)
 
 
+def _try_lock(lock) -> bool:
+    """Takes the index lock without waiting; False when another holder has it. fcntl on macOS and Linux, msvcrt on
+    Windows (one byte at the start of the file); either way the lock goes when the file is closed."""
+    if os.name == "nt":
+        lock.seek(0)
+        try:
+            msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
+        return True
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return False
+    return True
+
+
+def _unlock(lock) -> None:
+    if os.name == "nt":
+        lock.seek(0)
+        msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        fcntl.flock(lock, fcntl.LOCK_UN)
+
+
 def index_running() -> bool:
     """True when some process holds the index lock."""
     LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(LOCK_FILE, "a") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
+        if not _try_lock(lock):
             return True
-        fcntl.flock(lock, fcntl.LOCK_UN)
+        _unlock(lock)
         return False
 
 
@@ -544,11 +600,9 @@ def index(full: bool = False, verbose: bool = True, reread_zotero: bool = False,
         return {"skipped": "this process runs out-of-date code; a fresh process will index"}
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(LOCK_FILE, "a") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
+        if not _try_lock(lock):
             return {"skipped": True}
-        STOP.clear()
+        clear_stop()
         progress = Progress()
         try:
             if reread_zotero or reread_media:
@@ -560,6 +614,7 @@ def index(full: bool = False, verbose: bool = True, reread_zotero: bool = False,
                 db.commit()
             result = _index(full, verbose, progress)
         except Stopped:
+            clear_stop()  # the request is met; the file should not outlive the run
             progress.finish(stopped=True)
             return {"stopped": True}
         except Exception as error:
@@ -584,6 +639,7 @@ def _index_stages(full: bool, verbose: bool, progress: Progress) -> dict:
     if full:
         db.executescript("DELETE FROM chunks; DELETE FROM vecs; DELETE FROM chunks_fts; DELETE FROM links; DELETE FROM notes;")
         db.execute(f"DELETE FROM meta WHERE {ZOTERO_STAMPS}")  # or every library would be skipped as unchanged
+    rechunk_if_chunker_changed(db)
     files, where = {}, {}
     for root in roots():
         for rel, st in vault_files(root.path, root.kind, root.skip).items():
@@ -653,6 +709,18 @@ def _index_stages(full: bool, verbose: bool, progress: Progress) -> dict:
     return result
 
 
+def rechunk_if_chunker_changed(db: sqlite3.Connection) -> None:
+    """A new CHUNKER_VERSION marks every stored document as changed, so each stage re-stores it through store_note
+    (and the vector stash). Zotero libraries and online accounts are read again; PDFs come from media_cache."""
+    row = db.execute("SELECT value FROM meta WHERE key='chunker_version'").fetchone()
+    if row and row[0] == CHUNKER_VERSION:
+        return
+    db.execute("UPDATE notes SET mtime=-1")
+    db.execute(f"DELETE FROM meta WHERE {ZOTERO_STAMPS}")
+    db.execute("INSERT OR REPLACE INTO meta VALUES ('chunker_version', ?)", (CHUNKER_VERSION,))
+    db.commit()
+
+
 def refresh_paper_references(paths: list[str]) -> None:
     """Paper notes edited in Obsidian: bring their References list in line with what "My notes" cites."""
     if not paths:
@@ -671,6 +739,8 @@ def refresh_paper_references(paths: list[str]) -> None:
 def store_note(db: sqlite3.Connection, rel: str, title: str, folder: str, source: str, tags: list[str],
                links: list[str], mtime: float, size: int, frontmatter: str, meta: dict | None, body: str) -> None:
     delete_note(db, rel)
+    if source == "zotero":  # Zotero titles carry rich-text tags (<i>, <sub>)
+        title = zotero.plain_title(title) or title
     db.execute("INSERT INTO notes (path, title, folder, source, tags, mtime, size, frontmatter, meta) "
                "VALUES (?,?,?,?,?,?,?,?,?)",
                (rel, title, folder, source, " ".join(tags), mtime, size, frontmatter,
@@ -681,7 +751,8 @@ def store_note(db: sqlite3.Connection, rel: str, title: str, folder: str, source
                          (rel, ord_, chunk.heading, chunk.text))
         db.execute("INSERT INTO chunks_fts (rowid, title, heading, text, tags) VALUES (?,?,?,?,?)",
                    (cur.lastrowid, title, chunk.heading, chunk.text, " ".join(tags)))
-        vec = _VEC_STASH.get(_embed_text(title, chunk.heading, chunk.text)) if _VEC_STASH is not None else None
+        # pop: a re-chunk of the whole index would otherwise hold every vector in memory until the run ends
+        vec = _VEC_STASH.pop(_embed_text(title, chunk.heading, chunk.text), None) if _VEC_STASH is not None else None
         if vec is not None:
             db.execute("INSERT OR REPLACE INTO vecs VALUES (?,?,?)", (cur.lastrowid, rel, vec))
 
@@ -845,7 +916,7 @@ def index_zotero_web(db: sqlite3.Connection, verbose: bool, progress: Progress) 
             continue
         key = zotero_web.get_key(account.user_id)
         if not key:
-            errors.append(f"{account.name}: no Zotero API key in the Keychain")
+            errors.append(f"{account.name}: no Zotero API key saved on this computer")
             continue
         client = zotero_web.Client(account.user_id, key)
         stamp_key = f"zotero_web_version:{account.name}"
@@ -1012,6 +1083,15 @@ def _append_vectors(current, block: np.ndarray):
         _mx.eval(merged)
         return merged
     return block.copy() if current is None else np.vstack([current, block])
+
+
+def same_paper_key(title: str, meta: dict) -> tuple | None:
+    """What makes two Zotero items the same paper: the DOI (any case), else the normalised title and year."""
+    doi = re.sub(r"^(https?://(dx\.)?doi\.org/|doi:)", "", str(meta.get("doi") or "").strip().lower())
+    if doi:
+        return ("doi", doi)
+    words = re.sub(r"\W+", " ", zotero.plain_title(title).lower()).strip()
+    return ("title", words, str(meta.get("year") or "")) if words else None
 
 
 class Searcher:
@@ -1214,8 +1294,19 @@ class Searcher:
         # (the same content saved under two paths) is skipped, so copies don't crowd out other notes.
         results: dict[str, dict] = {}
         seen_text: set[int] = set()
+        # One paper saved as several Zotero items is one result; the others are listed in its "duplicates".
+        paper_of: dict[str, tuple | None] = {}
+        first_of: dict[tuple, str] = {}
         for score, cid in scored:
             path, heading, text, title, src, tags, mtime, meta = info[cid]
+            if path not in paper_of:
+                paper_of[path] = same_paper_key(title, json.loads(meta) or {}) if src == "zotero" and meta else None
+            paper = paper_of[path]
+            if paper in first_of and first_of[paper] != path:
+                kept = results[first_of[paper]]
+                if path not in kept.setdefault("duplicates", []):
+                    kept["duplicates"].append(path)
+                continue
             key = hash(" ".join(text.split())[:2000])
             if key in seen_text:
                 continue
@@ -1230,6 +1321,8 @@ class Searcher:
                                  "passages": [{"heading": heading, "snippet": snippet(text, terms)}]}
                 if meta:
                     results[path]["zotero"] = json.loads(meta)
+                if paper is not None:
+                    first_of[paper] = path
             elif len(hit["passages"]) < per_note:
                 hit["passages"].append({"heading": heading, "snippet": snippet(text, terms)})
         return list(results.values())
@@ -1824,6 +1917,10 @@ def main() -> None:
     p = sub.add_parser("web-origins", help="web-app origins allowed to call this server (phase 3)")
     p.add_argument("action", nargs="?", default="list", choices=["list", "add", "remove"])
     p.add_argument("origin", nargs="?")
+    p = sub.add_parser("import-data", help="reuse an index another install built (import_data.py)")
+    p.add_argument("source", nargs="?", help="the data folder to copy from")
+    p.add_argument("--find", action="store_true", help="list the indexes found on this computer, as JSON")
+    p.add_argument("--replace", action="store_true", help="overwrite this install's index")
     args = parser.parse_args()
     if args.cmd == "index":
         import signal
@@ -1863,6 +1960,10 @@ def main() -> None:
             print(origin)
     elif args.cmd == "sources":
         sources_cli(args.action, args.target, args.name)
+    elif args.cmd == "import-data":
+        import import_data
+
+        import_data.cli(args.source, args.find, args.replace)
     else:
         print(json.dumps(stats(), indent=2, ensure_ascii=False))
 

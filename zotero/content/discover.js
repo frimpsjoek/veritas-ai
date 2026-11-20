@@ -369,9 +369,13 @@ SecondBrain.Discover = class {
 		// a lookup can save the item and still fail afterwards; don't make a second copy of it
 		if (!item && result.doi) item = await this.itemByDOI(result.doi);
 		if (!item) item = await this.create(result, collections);
+		let attached = false;
 		if (result.pdf && !(await this.sb.hasWorkingPDF(item))) {
-			await this.sb.attachPDF(item, result.pdf, "Open Access PDF").catch((error) => Zotero.logError(error));
+			attached = await this.sb.attachPDF(item, result.pdf, "Open Access PDF").catch((error) => { Zotero.logError(error); return false; });
 		}
+		// spec 031 R5: a paper added without a PDF (none found, or the one given was not a PDF) gets the plugin's own
+		// "Find PDFs" (Zotero's resolvers, Unpaywall, arXiv, OpenAlex, Semantic Scholar, Europe PMC), in the background
+		if (!attached && !(await this.sb.hasWorkingPDF(item).catch(() => true))) this.sb.queueFindPDF(item);
 		if (this.known) this.remember(this.known, item);
 		return item;
 	}

@@ -1,18 +1,78 @@
 // @ts-check
-// agent-src/src/secrets.js (server spec 020 G1). Where Second Brain keeps the keys it is given (OpenAlex,
-// model services, outside sources): the macOS login Keychain, service "second-brain", the key's name as the account.
-// Off a Mac, <data>/secrets.json, owner-only (0600). Settings hold only a reference and the last four characters
+// agent-src/src/secrets.js (server spec 020 G1, spec 024 G2). Where Second Brain keeps the keys it is given (OpenAlex,
+// model services, outside sources): the system's own store, service "second-brain", the key's name as the account.
+//   macOS    the login Keychain, through `security`
+//   Windows  Credential Manager, through Windows PowerShell (its PasswordVault)
+//   Linux    the Secret Service (GNOME Keyring, KWallet), through `secret-tool`
+// When the system has none that works (no `secret-tool`, no D-Bus session over SSH, no Keychain for this login):
+// <data>/secrets.json, owner-only (0600). Settings hold only a reference and the last four characters
 // (settings.js); a value leaves this module only for the code that uses it.
 //
-// Writes go through `security -i`, which reads its command from stdin, so the key never appears in the process
-// list (`security add-generic-password -w <key>` would show it to `ps`).
+// The key always goes to the store on stdin, so it never appears in the process list (`security
+// add-generic-password -w <key>` would show it to `ps`): `security -i` reads its whole command there, secret-tool
+// reads the secret there, and the PowerShell script (passed encoded, with only the key's name in it) reads it there.
 
 const SERVICE = 'second-brain';
-const SECURITY = '/usr/bin/security';
 const FILE = 'secrets.json';
-const NOT_FOUND = 44;  // security's exit code for "no such item"
-/** What `security` says when there is no Keychain it may use; the key then goes to the owner-only file. */
-const NO_KEYCHAIN = /keychain cannot be found|no default keychain|user interaction is not allowed|authorization was canceled|could not be found in the keychain/i;
+
+/** A PowerShell script for one Credential Manager call, as -EncodedCommand wants it (UTF-16LE, base64). Names are
+ *  checked against NAME first, so one cannot break out of the quotes. Exit 44 = no such key (as `security`), 3 = no
+ *  Credential Manager to use. @param {"set" | "get" | "remove"} op @param {string} name */
+function credentialScript(op, name) {
+  const script = `$ErrorActionPreference = 'Stop'
+$op = '${op}'
+$name = '${name}'
+try {
+  [void][Windows.Security.Credentials.PasswordVault, Windows.Security.Credentials, ContentType = WindowsRuntime]
+  $vault = New-Object Windows.Security.Credentials.PasswordVault
+} catch { [Console]::Error.WriteLine("no credential manager: $_"); exit 3 }
+function Find { try { $vault.Retrieve('${SERVICE}', $name) } catch { $null } }
+$found = Find
+if ($op -eq 'set') {
+  $value = [Console]::In.ReadToEnd().TrimEnd([char]13, [char]10)
+  if ($found) { $vault.Remove($found) }
+  $vault.Add((New-Object Windows.Security.Credentials.PasswordCredential('${SERVICE}', $name, $value)))
+} elseif (-not $found) { exit 44 }
+elseif ($op -eq 'get') { $found.RetrievePassword(); [Console]::Out.Write($found.Password) }
+else { $vault.Remove($found) }
+`;
+  const utf16 = [...script].map((c) => String.fromCharCode(c.charCodeAt(0) & 0xff, c.charCodeAt(0) >> 8)).join('');
+  return ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', btoa(utf16)];
+}
+
+/** @typedef {{ args: string[], input?: string }} StoreCall */
+/** @typedef {{ kind: string, label: string, commands: string[], set(name: string, value: string): StoreCall,
+ *    get(name: string): StoreCall, remove(name: string): StoreCall, notFound(code: number): boolean, unusable: RegExp }} SystemStore */
+
+/** @type {Record<string, SystemStore>} */
+const STORES = {
+  darwin: {
+    kind: 'keychain', label: 'the Keychain', commands: ['/usr/bin/security'],
+    set: (name, value) => ({ args: ['-i'], input: `add-generic-password -U -s ${SERVICE} -a ${name} -w "${value}"` }),
+    get: (name) => ({ args: ['find-generic-password', '-s', SERVICE, '-a', name, '-w'] }),
+    remove: (name) => ({ args: ['delete-generic-password', '-s', SERVICE, '-a', name] }),
+    notFound: (code) => code === 44,  // security's exit code for "no such item"
+    // What `security` says when there is no Keychain it may use
+    unusable: /keychain cannot be found|no default keychain|user interaction is not allowed|authorization was canceled|could not be found in the keychain/i,
+  },
+  linux: {
+    kind: 'secret-service', label: 'the Secret Service', commands: ['secret-tool'],
+    set: (name, value) => ({ args: ['store', `--label=Veritas: ${name}`, 'service', SERVICE, 'account', name], input: value }),
+    get: (name) => ({ args: ['lookup', 'service', SERVICE, 'account', name] }),
+    remove: (name) => ({ args: ['clear', 'service', SERVICE, 'account', name] }),
+    notFound: () => true,  // `clear` of a key that is not there is not an error
+    // No session bus (SSH, a server), no keyring daemon, or the unlock prompt dismissed
+    unusable: /d-bus|dbus|org\.freedesktop\.secrets|secret service|not provided by any|no such secret collection|prompt dismissed|was not provided/i,
+  },
+  win32: {
+    kind: 'credential-manager', label: 'Windows Credential Manager', commands: ['powershell.exe'],
+    set: (name, value) => ({ args: credentialScript('set', name), input: value }),
+    get: (name) => ({ args: credentialScript('get', name) }),
+    remove: (name) => ({ args: credentialScript('remove', name) }),
+    notFound: (code) => code === 44,
+    unusable: /no credential manager/i,
+  },
+};
 
 /** A name is one short token: what kind of key and whose ("openalex", "endpoint:lm-studio", "mcp:nasa-ads:env:ADS_API_KEY"). */
 const NAME = /^[A-Za-z0-9][A-Za-z0-9:._-]{0,127}$/;
@@ -33,19 +93,22 @@ function checkName(name) {
 /**
  * @param {import("./platform").Platform} platform
  * @param {string} dataDir
- * @param {{ keychain?: boolean }} [opts] `keychain: false` forces the file (tests, or a Mac without `security`)
+ * @param {{ keychain?: boolean }} [opts] `keychain: false` forces the file (tests, or a system store not to be used)
  */
 export function createSecretStore(platform, dataDir, opts = {}) {
   /** @type {Map<string, string | null>} */
   const cache = new Map();
-  /** @type {Promise<boolean> | null} */
-  let useKeychain = null;
-  const keychain = () => (useKeychain ??= opts.keychain === false || typeof platform.which !== 'function' ? Promise.resolve(false)
-    : platform.which([SECURITY]).then((found) => Boolean(found), () => false));
+  const system = STORES[platform.os ?? 'darwin'];  // a platform that does not say is the Mac this began on
+  /** @type {Promise<string | null> | null} the store's command, or null: the file */
+  let found = null;
+  const command = () => (found ??= opts.keychain === false || !system || typeof platform.which !== 'function' ? Promise.resolve(null)
+    : platform.which(system.commands).catch(() => null));
+  const keychain = async () => Boolean(await command());
 
-  /** @param {string[]} args @param {string} [input] */
-  async function security(args, input) {
-    const child = await platform.spawn({ cmd: SECURITY, args, env: {}, cwd: platform.homeDir || '/' });
+  /** @param {StoreCall} call */
+  async function run({ args, input }) {
+    const cmd = /** @type {string} */ (await command());
+    const child = await platform.spawn({ cmd, args, env: {}, cwd: platform.homeDir || '/' });
     /** @type {string[]} */
     const out = [];
     const reading = (async () => { for await (const line of child.lines()) out.push(line); })();
@@ -67,7 +130,7 @@ export function createSecretStore(platform, dataDir, opts = {}) {
   const writeFile = (all) => platform.fs.writeAtomic(filePath, JSON.stringify(all, null, 2), { private: true });
 
   return {
-    async kind() { return (await keychain()) ? 'keychain' : 'file'; },
+    async kind() { return (await keychain()) ? system.kind : 'file'; },
 
     /** @param {string} name @param {string} value */
     async set(name, value) {
@@ -75,10 +138,10 @@ export function createSecretStore(platform, dataDir, opts = {}) {
       if (!VALUE.test(value)) throw new SecretError('That key has characters Second Brain cannot store safely (quotes, backslashes or line breaks). Copy it again from the site.');
       if (cache.get(name) === value) return;
       if (await keychain()) {
-        const { code, err } = await security(['-i'], `add-generic-password -U -s ${SERVICE} -a ${name} -w "${value}"`);
+        const { code, err } = await run(system.set(name, value));
         if (code === 0) { cache.set(name, value); return; }
-        // No usable Keychain (none for this login, a locked one over SSH, no session to ask): the owner-only file.
-        if (!NO_KEYCHAIN.test(err)) throw new SecretError(`Couldn't save the key in the Keychain (${err.trim() || `exit ${code}`}).`);
+        // No usable store (no Keychain for this login, no D-Bus session over SSH, no session to ask): the owner-only file.
+        if (!system.unusable.test(err)) throw new SecretError(`Couldn't save the key in ${system.label} (${err.trim() || `exit ${code}`}).`);
         await writeFile({ ...(await readFile()), [name]: value });
       } else {
         await writeFile({ ...(await readFile()), [name]: value });
@@ -92,8 +155,8 @@ export function createSecretStore(platform, dataDir, opts = {}) {
       if (cache.has(name)) return cache.get(name) ?? null;
       let value = null;
       if (await keychain()) {
-        const { code, out } = await security(['find-generic-password', '-s', SERVICE, '-a', name, '-w']);
-        // a key kept in the file because there was no Keychain when it was saved
+        const { code, out } = await run(system.get(name));
+        // a key kept in the file because there was no usable store when it was saved
         value = code === 0 ? out : (await readFile())[name] ?? null;
       } else {
         value = (await readFile())[name] ?? null;
@@ -106,8 +169,8 @@ export function createSecretStore(platform, dataDir, opts = {}) {
     async remove(name) {
       checkName(name);
       if (await keychain()) {
-        const { code, err } = await security(['delete-generic-password', '-s', SERVICE, '-a', name]);
-        if (code !== 0 && code !== NOT_FOUND) throw new SecretError(`Couldn't remove the key from the Keychain (${err.trim() || `exit ${code}`}).`);
+        const { code, err } = await run(system.remove(name));
+        if (code !== 0 && !system.notFound(code) && !system.unusable.test(err)) throw new SecretError(`Couldn't remove the key from ${system.label} (${err.trim() || `exit ${code}`}).`);
         const { [name]: _inFile, ...others } = await readFile();
         if (_inFile !== undefined) await writeFile(others);
       } else {

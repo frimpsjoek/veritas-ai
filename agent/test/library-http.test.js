@@ -82,17 +82,20 @@ test('search: only "papers" sends source=zotero; only "notes" sends exclude_sour
   assert.equal('exclude_source' in fetchFn.calls[2].params, false);
 });
 
-test('read: a paper ref maps to zotero/<citekey>; a missing note returns null, not a throw', async () => {
-  const fetchFn = fakeFetch({ '/note': (params) => (params.get('path') === 'zotero/smith2021' ? { title: 'Smith 2021', text: 'full text' } : null) });
+test('read: a Zotero item key maps to zotero/<key>, a citation key to @<key> (spec 030 R9); a missing note returns null, not a throw', async () => {
+  const texts = { 'zotero/Q7RT2KXM': 'item text', '@DOEX24': 'citekey text', '@smith2021': 'lower-case citekey text' };
+  const fetchFn = fakeFetch({ '/note': (params) => (texts[params.get('path')] ? { title: 'T', text: texts[params.get('path')] } : null) });
   const library = createHttpLibraryBackend(fetchFn, { baseUrl: 'http://127.0.0.1:27182' });
-  const hit = await library.read({ kind: 'paper', citekey: 'smith2021' });
-  assert.equal(hit.text, 'full text');
+  assert.equal((await library.read({ kind: 'paper', citekey: 'Q7RT2KXM' })).text, 'item text');
+  // a Better BibTeX key (a Find table's library row) was asked for as zotero/DOEX24, which is no item: read nothing
+  assert.equal((await library.read({ kind: 'paper', citekey: 'DOEX24' })).text, 'citekey text');
+  assert.equal((await library.read({ kind: 'paper', citekey: 'smith2021' })).text, 'lower-case citekey text');
   const miss = await library.read({ kind: 'note', path: 'Nope.md' });
   assert.equal(miss, null);
 });
 
 test('resolve: builds a title map keyed the same way citations.js does', async () => {
-  const fetchFn = fakeFetch({ '/note': (params) => (params.get('path') === 'zotero/smith2021' ? { title: 'Smith 2021' } : null) });
+  const fetchFn = fakeFetch({ '/note': (params) => (params.get('path') === '@smith2021' ? { title: 'Smith 2021' } : null) });
   const library = createHttpLibraryBackend(fetchFn, { baseUrl: 'http://127.0.0.1:27182' });
   const map = await library.resolve([{ kind: 'paper', citekey: 'smith2021' }, { kind: 'paper', citekey: 'fabricated' }]);
   assert.deepEqual(map.get('paper:smith2021'), { title: 'Smith 2021' });
@@ -185,4 +188,36 @@ test('radar methods: items, score, profile and digest go to the spec 012 routes 
 test('items on a server without the route is an error, not an empty library', async () => {
   const library = createHttpLibraryBackend(async () => ({ ok: false, status: 404, json: async () => null }), { baseUrl: 'http://127.0.0.1:27182' });
   await assert.rejects(library.items({ collections: null }), /too old/);
+});
+
+test('the whole-paper and calibration calls go through slowFetch when the host has one', async () => {
+  const quick = [], slow = [];
+  const answer = (list) => async (url) => { list.push(new URL(url).pathname); return { ok: true, status: 200, json: async () => ({ scores: {} }) }; };
+  const lib = createHttpLibraryBackend(answer(quick), { baseUrl: 'http://127.0.0.1:1', slowFetch: answer(slow) });
+  await lib.radarFulltext?.({ seeds: { keys: [], collections: [], texts: [] }, items: [] });
+  await lib.radarCalibrate?.({ seeds: { keys: [], collections: [], texts: [] }, unrelated: [] });
+  await lib.radarScore?.({ scope: { collections: null }, positives: [], negatives: [], items: [] });
+  assert.deepEqual(slow, ['/radar/fulltext', '/radar/calibrate']);
+  assert.deepEqual(quick, ['/radar/score']);
+});
+
+test('spec 031 R3: paperText posts the address and key; a copy the server cannot read (422) is null, not a throw', async () => {
+  const bodies = [];
+  const fetchFn = async (url, init) => {
+    const body = JSON.parse(init.body);
+    bodies.push(body);
+    return body.url.endsWith('ok.pdf') ? new Response(JSON.stringify({ text: 'Core holes.', cached: false }), { status: 200 }) : new Response(JSON.stringify({ error: 'not a PDF' }), { status: 422 });
+  };
+  const library = createHttpLibraryBackend(fetchFn, { baseUrl: 'http://127.0.0.1:27182' });
+  assert.equal(await library.paperText({ url: 'https://repo.example/ok.pdf', key: 'doi:10.1/x' }), 'Core holes.');
+  assert.equal(await library.paperText({ url: 'https://repo.example/login', key: 'doi:10.1/y' }), null);
+  assert.deepEqual(bodies[0], { url: 'https://repo.example/ok.pdf', key: 'doi:10.1/x' });
+});
+
+test('spec 032: paperKeep posts the paper and its free copies to /paper/keep', async () => {
+  const seen = [];
+  const fetchFn = async (url, init) => { seen.push([new URL(String(url)).pathname, JSON.parse(init.body)]); return new Response(JSON.stringify({ status: 'queued', where: 'zotero', downloaded: true }), { status: 200 }); };
+  const library = createHttpLibraryBackend(fetchFn, { baseUrl: 'http://127.0.0.1:27182' });
+  assert.deepEqual(await library.paperKeep({ paper: { title: 'T' }, urls: ['https://x/a.pdf'] }), { status: 'queued', where: 'zotero', downloaded: true });
+  assert.deepEqual(seen, [['/paper/keep', { paper: { title: 'T' }, urls: ['https://x/a.pdf'] }]]);
 });

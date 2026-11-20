@@ -5,7 +5,10 @@
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { useFixtures } from './web-fixtures.mjs';
+import { useFixtures, ITEMS } from './web-fixtures.mjs';
+
+/** A stand-in TOC graphic (spec 029 R11): a drawn picture, so the row's figure box has something to load. */
+const FIGURE_PNG = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="400" height="300" fill="#e8f0f4"/><circle cx="140" cy="150" r="60" fill="#c33"/><circle cx="260" cy="150" r="60" fill="#36a"/><rect x="190" y="140" width="20" height="20" fill="#333"/></svg>')}`;
 
 const dist = fileURLToPath(new URL('../../web/dist-web', import.meta.url));
 const WIDTHS = [1280, 700, 360];
@@ -74,14 +77,14 @@ export async function runWebLibraryChecks(browser, port, outDir) {
     check('390px the phone bar is Home, Chat, Library, Notes and More', JSON.stringify(bar) === '["Home","Chat","Library","Notes","More"]', bar);
     await page.locator('.sbw-more').click();
     const menu = await page.evaluate(() => [...document.querySelectorAll('.sbw-menu-item')].filter((n) => getComputedStyle(n).display !== 'none').map((n) => n.textContent));
-    check('390px More holds the theme switch, Routines, Projects, Sources, Settings and Search index', JSON.stringify(menu) === '["Dark mode","Routines","Projects","Sources","Settings","Search index"]', menu);
+    check('390px More holds the theme switch, Read later, Projects, Settings, Search index and Server (Routines and the radar are in Settings)', JSON.stringify(menu) === '["Dark mode","Read later","Projects","Settings","Search index","Server"]', menu);
     await page.close();
     const wide = await open(1280);
     const rail = await wide.evaluate(() => [...document.querySelectorAll('.sbw-nav-item:not(.sbw-more):not(.sbw-theme)')].filter((n) => getComputedStyle(n).display !== 'none').map((n) => n.getAttribute('aria-label')));
-    check('1280px the rail lists Home, Chat, Library, Notes, Routines and Projects', JSON.stringify(rail) === '["Home","Chat","Library","Notes","Routines","Projects"]', rail);
+    check('1280px the rail lists Home, Chat, Library, Read later (its unread count in its name), Notes and Projects', JSON.stringify(rail.map((r) => r.replace(/, \d+ unread$/, ''))) === '["Home","Chat","Library","Read later","Notes","Projects"]', rail);
     await wide.locator('.sbw-more').click();
     const wideMenu = await wide.evaluate(() => [...document.querySelectorAll('.sbw-menu-item')].filter((n) => getComputedStyle(n).display !== 'none').map((n) => n.textContent));
-    check('1280px More holds only Sources, Settings and Search index', JSON.stringify(wideMenu) === '["Sources","Settings","Search index"]', wideMenu);
+    check('1280px More holds only Settings, Search index and Server', JSON.stringify(wideMenu) === '["Settings","Search index","Server"]', wideMenu);
     await go(wide, `#/note/${encodeURIComponent('Inbox/Gauge $U(1)$ idea.md')}`);
     await wide.waitForSelector('.sbw-reader-article .sbw-table-wrap');
     const reader = await wide.evaluate(() => ({
@@ -203,7 +206,7 @@ export async function runWebLibraryChecks(browser, port, outDir) {
     await page.locator('.sbw-tree-row', { hasText: 'Condensed matter' }).click();
     await page.waitForFunction(() => location.hash === '#/library?collection=COLC' && document.querySelector('.sbw-lib-status').textContent === '250 papers');
     const col = await page.evaluate(() => ({ status: document.querySelector('.sbw-lib-status').textContent, crumb: document.querySelector('.sbw-lib-crumb').textContent, selected: document.querySelector('.sbw-tree-row.is-selected .sbw-tree-name').textContent }));
-    check('choosing a collection shows its papers (children included) and marks it', col.status === '250 papers' && col.crumb === ' / Condensed matter' && col.selected === 'Condensed matter', col);
+    check('choosing a collection shows its papers (children included) and marks it', col.status === '250 papers' && col.crumb === ' / Physics / Condensed matter' && col.selected === 'Condensed matter', col);
 
     // row click opens the paper
     await page.locator('.sbw-lib-row').first().click({ position: { x: 300, y: 28 } });
@@ -225,6 +228,145 @@ export async function runWebLibraryChecks(browser, port, outDir) {
     });
     check('"Ask about 2" is the one filled button in the library', ask.label === 'Ask about 2' && !ask.hidden && ask.primary && ask.bg === ask.accent && ask.filled === 1, ask);
     await page.screenshot({ path: join(outDir, 'web-library-1280.png') });
+    // spec 028 R11-R12: Read later in the Library tree with its count, its list in place of the table, and its own view
+    const tree = await page.evaluate(() => document.querySelector('.sbw-tree-later')?.textContent ?? null);
+    check('1280px the Library tree has a Read later row with its count', tree === 'Read later2', tree);
+    await page.locator('.sbw-tree-later a').click();
+    await page.waitForSelector('.sbw-lib-later:not([hidden]) .sbw-later-row, .sbw-lib-later:not([hidden]) li');
+    const libLater = await page.evaluate(() => { const box = document.querySelector('.sbw-lib-later'); return { text: box?.textContent ?? '', raw: (box?.textContent ?? '').includes('\\textit'), tableHidden: !document.querySelector('.sbw-lib-table')?.getClientRects().length, barHidden: !document.querySelector('.sbw-lib-bar')?.getClientRects().length }; });
+    check('1280px Read later in Library takes the table\'s place (no search bar, no table) and lists Unread then Read, its titles drawn (no raw TeX)', /Unread[\s\S]*Oxirane[\s\S]*Read[\s\S]*burrow lattice study 112/.test(libLater.text) && !libLater.raw && libLater.tableHidden && libLater.barHidden, libLater);
+    await page.screenshot({ path: join(outDir, 'web-library-later-1280.png') });
+    await page.evaluate(() => { location.hash = '#/later'; });
+    await page.waitForSelector('.sbw-nav-badge');
+    const view = await page.evaluate(() => ({ badge: [...document.querySelectorAll('.sbw-rail a')].find((a) => a.textContent.startsWith('Read later'))?.querySelector('.sbw-nav-badge')?.textContent ?? null, text: document.querySelector('.sbw-page, main')?.textContent ?? '' }));
+    check('1280px the Read later view and its rail badge (1 unread)', view.badge === '1' && view.text.includes('Mark as read') && view.text.includes('Remove from Read later'), view);
+    // spec 029 R1: two lines of the abstract, TeX drawn, and when it was saved
+    const rich = await page.evaluate(() => {
+      const row = document.querySelector('.sbw-page .sbw-later-row');
+      const abs = row?.querySelector('.sbw-later-abstract');
+      const lh = abs ? parseFloat(getComputedStyle(abs).lineHeight) : 0;
+      return { abstract: abs?.textContent ?? null, lines: abs ? Math.round(abs.getBoundingClientRect().height / lh) : 0, raw: /\\ce|\$/.test(abs?.textContent ?? ''), saved: row?.querySelector('.sbw-later-saved')?.textContent ?? null, noAbstractRow: document.querySelectorAll('.sbw-page .sbw-later-row')[1]?.querySelector('.sbw-later-abstract') ?? null };
+    });
+    check('1280px spec 029 R1: a Read later row shows at most two lines of its abstract (TeX drawn) and "Saved …"; a row with no abstract has none', rich.abstract?.includes('C2H4O') && rich.lines >= 1 && rich.lines <= 2 && !rich.raw && /^Saved /.test(rich.saved ?? '') && rich.noAbstractRow === null, rich);
+    // spec 029 R3: Read is folded at first, its row not on screen; a click on "Read · 1" opens it
+    const shut = await page.evaluate(() => { const f = document.querySelector('.sbw-page details.sbw-later-fold'); return { open: f?.open ?? null, head: f?.querySelector('summary')?.textContent ?? null, rowShown: f?.querySelector('.sbw-later-row')?.checkVisibility() ?? null }; });
+    await page.locator('.sbw-page .sbw-later-fold-head').click();
+    const opened = await page.evaluate(() => document.querySelector('.sbw-page details.sbw-later-fold .sbw-later-row')?.checkVisibility() ?? null);
+    check('1280px spec 029 R3: Read is folded under "Read · 1" at first, and a click opens it', shut.open === false && shut.head === 'Read · 1' && shut.rowShown === false && opened === true, { shut, opened });
+    // spec 029 R2: Open is the one worded button; the others are icons with tooltips; a row's actions keep one line on a phone
+    for (const w of [1280, 360]) {
+      await page.setViewportSize({ width: w, height: 800 });
+      await page.waitForTimeout(100);
+      const acts = await page.evaluate(() => [...document.querySelectorAll('.sbw-page .sbw-later-acts')].map((box) => {
+        const bs = [...box.querySelectorAll('button')];
+        const text = box.parentElement.querySelector('.sbw-later-text').getBoundingClientRect();
+        return { words: bs.filter((b) => !b.classList.contains('sbw-later-icon')).map((b) => b.textContent), icons: bs.filter((b) => b.classList.contains('sbw-later-icon')).map((b) => [b.title, b.getAttribute('aria-label'), Boolean(b.querySelector('svg'))]), tops: new Set(bs.map((b) => Math.round(b.getBoundingClientRect().top))).size, under: box.getBoundingClientRect().top >= text.bottom - 1, openWidth: Math.round(bs[0].getBoundingClientRect().width), inZotero: Boolean(box.parentElement.querySelector('.sbw-later-zotero')) };
+      }));
+      // (spec 031 R5 adds a Get PDF / Open PDF icon to a row not in the library)
+      check(`${w}px spec 029 R2: Read later actions are a small Open plus icon buttons with tooltips, on one line under the words (the page 900 px or wider at 1280)`, acts.length === 2 && acts.every((a) => a.words.join() === 'Open' && a.icons.length === (a.inZotero ? 2 : 3) && a.icons.every(([t, l, svg]) => t && t === l && svg) && a.tops === 1 && a.under && a.openWidth <= 72) && await page.evaluate(() => document.scrollingElement.scrollWidth <= innerWidth) && (w < 1280 || await page.evaluate(() => document.querySelector('.sbw-later-page').getBoundingClientRect().width >= 900)), acts);
+      if (w === 360) await page.screenshot({ path: join(outDir, 'web-read-later-360.png') });
+    }
+    await page.setViewportSize({ width: 1280, height: 800 });
+    // spec 031 R5, spec 032: a paper not in the library has a Get PDF icon; this server has no Zotero, so its free copy is
+    // kept in Veritas › Papers and the row says so
+    const pdfButton = await page.evaluate(() => [...document.querySelectorAll('.sbw-page .sbw-later-row')].map((r) => [r.dataset.id, [...r.querySelectorAll('.sbw-later-icon')].map((b) => b.title).find((t) => /PDF/.test(t)) ?? null]));
+    await page.locator('.sbw-page .sbw-later-row[data-id="arxiv:2611.20723"] button[title="Get PDF"]').click();
+    await page.waitForFunction(() => (window.__kept ?? []).length > 0, null, { timeout: 4000 }).catch(() => {});
+    const keptNow = await page.evaluate(() => ({ kept: window.__kept ?? [], notice: document.querySelector('.sbw-toast, .sb-toast, [role="status"]')?.textContent ?? null }));
+    check('1280px spec 032: a Read later paper not in the library has Get PDF, and its free copy is kept in Veritas › Papers (no Zotero here)',
+      JSON.stringify(pdfButton.find(([id]) => id === 'arxiv:2611.20723')) === '["arxiv:2611.20723","Get PDF"]'
+      && JSON.stringify(keptNow.kept) === '[{"title":"Oxirane Ring-Opening Dynamics Using Time-Dependent \\\\textit{GW} Molecular Dynamics","access":"open"}]', keptNow);
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => { location.hash = '#/later'; });
+    await page.waitForSelector('.sbw-page .sbw-later-row');
+    // spec 029 R4: no filter bar for two papers; from ten, a filter box and a sort switch that narrow and order the rows
+    const barBefore = await page.evaluate(() => Boolean(document.querySelector('.sbw-page .sbw-later-bar')));
+    await page.evaluate(async () => {
+      const ai = await window.__host.ai();
+      for (let i = 1; i <= 10; i += 1) await ai.readingList.add({ title: `Invented vole burrow paper ${i}`, authors: ['Ann Chen'], year: 2020, venue: 'Journal of Invented Results', doi: `10.9999/r4.${i}`, source: 'web' });
+      window.dispatchEvent(new Event('focus'));
+    });
+    await page.waitForSelector('.sbw-page .sbw-later-bar');
+    await page.fill('.sbw-page .sbw-later-filter', 'oxirane');
+    await page.waitForTimeout(150);
+    const filtered = await page.evaluate(() => [...document.querySelectorAll('.sbw-page .sbw-later-row')].filter((r) => r.checkVisibility()).map((r) => r.dataset.id));
+    await page.screenshot({ path: join(outDir, 'web-read-later-filter-1280.png') });
+    await page.fill('.sbw-page .sbw-later-filter', '');
+    await page.selectOption('.sbw-page .sbw-later-sort', 'oldest');
+    await page.waitForTimeout(150);
+    const oldestFirst = await page.evaluate(() => document.querySelector('.sbw-page .sbw-later-section .sbw-later-row')?.dataset.id ?? null);
+    check('1280px spec 029 R4: no filter bar for two papers; from ten the filter narrows to "oxirane" and Oldest saved puts the oldest first', !barBefore && JSON.stringify(filtered) === '["arxiv:2611.20723"]' && oldestFirst === 'arxiv:2611.20723', { barBefore, filtered, oldestFirst });
+    await page.evaluate(async () => {
+      const ai = await window.__host.ai();
+      for (let i = 1; i <= 10; i += 1) await ai.readingList.remove(`doi:10.9999/r4.${i}`);
+      window.dispatchEvent(new Event('focus'));
+    });
+    await page.waitForFunction(() => !document.querySelector('.sbw-page .sbw-later-bar'));
+    // spec 029 R11: the paper's TOC picture beside its words, asked for once the row is in view; a paper with none has no box
+    const historyBefore = await page.evaluate(() => history.length); // the detour's steps are taken back after it
+    await page.route('**/paper-figure*', (route) => { const q = new URL(route.request().url()).searchParams; return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ image: q.get('arxiv') === '2611.20723' ? FIGURE_PNG : null }) }); });
+    for (const w of [1280, 390]) {
+      await page.setViewportSize({ width: w, height: 800 });
+      await page.evaluate(() => { location.hash = '#/library'; });
+      await page.waitForTimeout(150);
+      await page.evaluate(() => { location.hash = '#/later'; });
+      await page.waitForSelector('.sbw-page .sbw-later-row.has-figure', { timeout: 5000 }).catch(() => {});
+      const fig = await page.evaluate(() => {
+        const rows = [...document.querySelectorAll('.sbw-page .sbw-later-row')];
+        const box = rows[0]?.querySelector('.sbw-later-figure');
+        const r = box?.getBoundingClientRect(), t = rows[0]?.querySelector('.sbw-later-title')?.getBoundingClientRect(), text = rows[0]?.querySelector('.sbw-later-text')?.getBoundingClientRect();
+        return { shown: Boolean(box && !box.hidden && r.width > 40), beside: Boolean(r && t && r.left > t.left && Math.abs(r.top - t.top) < 12), inText: Boolean(r && text && r.bottom <= text.bottom + 1), others: rows.slice(1).map((x) => Boolean(x.querySelector('.sbw-later-figure:not([hidden])'))), sideways: document.scrollingElement.scrollWidth > innerWidth };
+      });
+      check(`${w}px spec 029 R11: the Read later row has its TOC picture beside the title, no taller than its text; a paper with none shows no box`, fig.shown && fig.beside && fig.inText && fig.others.every((x) => !x) && !fig.sideways, fig);
+      await page.screenshot({ path: join(outDir, `web-read-later-figure-${w}.png`) });
+      // spec 029 R12: the picture opens full screen; wheel zooms at the pointer, a drag pans, keys work, Escape and the
+      // backdrop close it and focus goes back to the picture
+      await page.locator('.sbw-page .sbw-later-figure').first().click();
+      await page.waitForSelector('.sb-iv.is-ready');
+      const iv = async () => page.evaluate(() => { const r = document.querySelector('.sb-iv'); return r ? { level: r.querySelector('.sb-iv-level')?.textContent ?? '', transform: r.querySelector('.sb-iv-img')?.style.transform ?? '', buttons: [...r.querySelectorAll('.sb-iv-btn')].map((b) => b.getAttribute('aria-label')), dialog: r.getAttribute('role') === 'dialog' && r.getAttribute('aria-modal') === 'true', focus: document.activeElement?.getAttribute('aria-label') ?? null, covers: r.getBoundingClientRect().width === innerWidth && r.getBoundingClientRect().height === innerHeight } : null; });
+      const opened = await iv();
+      const pct = (/** @type {string} */ t) => Number.parseInt(t, 10);
+      await page.mouse.move(w / 2 + 40, 400);
+      await page.mouse.wheel(0, -300);
+      await page.waitForTimeout(50);
+      const wheeled = await iv();
+      // larger than the screen, so there is room to pan (a picture smaller than the screen stays centred)
+      await page.mouse.wheel(0, -300); await page.mouse.wheel(0, -300);
+      await page.waitForTimeout(50);
+      const zoomedIn = await iv();
+      await page.mouse.move(w / 2, 400); await page.mouse.down(); await page.mouse.move(w / 2 - 80, 360, { steps: 5 }); await page.mouse.up();
+      const dragged = await iv();
+      await page.keyboard.press('0');
+      const fitted = await iv();
+      await page.keyboard.press('+');
+      const plus = await iv();
+      await page.keyboard.press('Escape');
+      const closedByKey = await page.evaluate(() => ({ gone: !document.querySelector('.sb-iv'), focusOnPicture: document.activeElement?.classList.contains('sbw-later-figure') ?? false, scroll: document.body.style.overflow }));
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('.sb-iv.is-ready');
+      await page.mouse.click(8, 400); // the dark backdrop, off the picture
+      const closedByBackdrop = await page.evaluate(() => !document.querySelector('.sb-iv'));
+      check(`${w}px spec 029 R12: a click on the picture opens it full screen; wheel zooms, a drag pans, 0 fits, + zooms in, Escape closes back to the picture, Enter reopens, the backdrop closes`,
+        opened?.dialog && opened.covers && opened.focus === 'Close' && JSON.stringify(opened.buttons) === JSON.stringify(['Zoom out', 'Zoom in', 'Fit to screen', 'Actual size', 'Open original', 'Close'])
+        && pct(wheeled?.level ?? '') > pct(opened.level) && dragged?.transform !== zoomedIn?.transform && fitted?.level === opened.level && pct(plus?.level ?? '') > pct(fitted.level)
+        && closedByKey.gone && closedByKey.focusOnPicture && closedByKey.scroll === '' && closedByBackdrop,
+        { opened, wheeled: wheeled?.level, dragged: dragged?.transform, fitted: fitted?.level, plus: plus?.level, closedByKey, closedByBackdrop });
+      if (w === 1280) {
+        await page.locator('.sbw-page .sbw-later-figure').first().click();
+        await page.waitForSelector('.sb-iv.is-ready');
+        await page.mouse.move(640, 400); await page.mouse.wheel(0, -200); await page.waitForTimeout(50);
+        await page.screenshot({ path: join(outDir, 'web-read-later-viewer-1280.png') });
+        await page.keyboard.press('Escape');
+      }
+    }
+    await page.unroute('**/paper-figure*');
+    const detour = (await page.evaluate(() => history.length)) - historyBefore;
+    if (detour > 0) { await page.evaluate((n) => history.go(-n), detour); await page.waitForFunction(() => location.hash === '#/later'); }
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.screenshot({ path: join(outDir, 'web-read-later-1280.png') });
+    // back to the collection with its two ticks, as before the detour
+    await page.goBack(); await page.goBack();
+    await page.waitForSelector('.sbw-lib-row');
     await page.locator('.sbw-lib-ask').click();
     await page.waitForFunction(() => location.hash === '#/chat');
     await page.waitForSelector('.sb-ai-context');
@@ -262,13 +404,130 @@ export async function runWebLibraryChecks(browser, port, outDir) {
     await page.close();
   }
 
+  // ------------------------------------------------------------ search states, the crumb and the twist
+  {
+    const page = await open(1280);
+    await go(page, '#/library');
+    await page.waitForSelector('.sbw-tree-row');
+    const twist = page.locator('.sbw-tree-row', { hasText: 'Physics' }).locator('.sbw-tree-twist');
+    const before = await twist.evaluate((b) => [b.tagName, b.getAttribute('aria-expanded')]);
+    await twist.focus();
+    await page.keyboard.press('Enter');
+    const after = await page.locator('.sbw-tree-row', { hasText: 'Physics' }).locator('.sbw-tree-twist').evaluate((b) => [b.getAttribute('aria-expanded'), b === document.activeElement]);
+    check('the twist is a real button: Enter opens it, aria-expanded follows, the focus stays', before[0] === 'BUTTON' && before[1] === 'false' && after[0] === 'true' && after[1], { before, after });
+    await go(page, '#/library?collection=COLC');
+    await page.waitForFunction(() => document.querySelector('.sbw-lib-status').textContent === '250 papers');
+    const crumb = await page.evaluate(() => ({ links: [...document.querySelectorAll('.sbw-lib-crumb a')].map((a) => [a.textContent, a.getAttribute('href')]), placeholder: document.querySelector('.sbw-lib-search').placeholder }));
+    check('the crumb links the ancestors and the box says where it searches', crumb.links.length === 1 && crumb.links[0][0] === 'Physics' && crumb.links[0][1].includes('collection=') && crumb.placeholder === 'Search in Condensed matter', crumb);
+    const relevance = page.locator('.sbw-lib-sortbtn', { hasText: 'Relevance' });
+    check('Relevance is hidden outside a search', await relevance.isHidden());
+
+    await page.route('**/search*', async (route) => { await new Promise((resolve) => setTimeout(resolve, 600)); await route.fallback(); });
+    await page.fill('.sbw-lib-search', 'voles');
+    const searching = await page.evaluate(() => ({ text: document.querySelector('.sbw-lib-status').textContent, spin: Boolean(document.querySelector('.sbw-lib-status svg')) }));
+    check('a running search says where it looks, with a spinner, instead of the old count', searching.text === 'Searching Condensed matter…' && searching.spin, searching);
+    await page.waitForFunction(() => document.querySelector('.sbw-lib-status').textContent.includes('in Condensed matter'));
+    check('during a search Relevance shows and is lit', (await relevance.isVisible()) && (await relevance.getAttribute('aria-pressed')) === 'true');
+    await page.unroute('**/search*');
+
+    await page.route('**/search*', (route) => route.abort('connectionrefused'));
+    await page.fill('.sbw-lib-search', 'broken');
+    await page.waitForFunction(() => document.querySelector('.sbw-lib-status').textContent.includes("Search isn't working"));
+    check('a failed search says so and is not reported as no match', !(await text(page, '.sbw-lib-status')).includes('No papers match') && (await page.locator('.sbw-lib-status button', { hasText: 'Try again' }).count()) === 1);
+    await page.unroute('**/search*');
+    await page.locator('.sbw-lib-status button', { hasText: 'Try again' }).click();
+    await page.waitForFunction(() => !document.querySelector('.sbw-lib-status').textContent.includes("isn't working"));
+    check('Try again runs the search again', true);
+
+    await page.fill('.sbw-lib-search', 'zzzz-nothing');
+    await page.waitForFunction(() => document.querySelector('.sbw-lib-status').textContent.includes('No papers match'));
+    await page.locator('.sbw-lib-status button', { hasText: 'Search all papers' }).click();
+    await page.waitForFunction(() => location.hash === '#/library' && document.querySelector('.sbw-lib-status').textContent === 'No papers match “zzzz-nothing”.');
+    check('no match in a collection offers the whole library, and takes the words along', (await page.inputValue('.sbw-lib-search')) === 'zzzz-nothing');
+    await page.close();
+  }
+
+  // ------------------------------------------------------------ a stored copy, a slow first load, the phone's sheet
+  {
+    const page = await open(1280);
+    await go(page, '#/library?collection=COLC');
+    await page.waitForFunction(() => document.querySelector('.sbw-lib-status').textContent === '250 papers');
+    await page.route('**/zotero/**', (route) => route.abort('connectionrefused'));
+    await page.reload();
+    await page.waitForFunction(() => window.__sbWebReady === true);
+    await go(page, '#/library?collection=COLC');
+    await page.waitForFunction(() => !document.querySelector('.sbw-lib-stale')?.hidden && document.querySelector('.sbw-tree-empty'));
+    const stale = await page.evaluate(() => ({ banner: document.querySelector('.sbw-lib-stale').textContent, rows: document.querySelectorAll('.sbw-lib-row').length, tree: [...document.querySelectorAll('.sbw-tree-name')].map((n) => n.textContent) }));
+    check('with the server gone: rows and tree stay, the banner gives the saved time and Try again', /saved at /.test(stale.banner) && stale.banner.includes('Try again') && stale.rows > 0 && stale.tree.includes('Physics'), stale);
+    // spec 028 R12: the banner speaks for the table, so Library's Read later filter does not show it; back on the
+    // collection it is there again
+    await go(page, '#/library?list=later');
+    await page.waitForFunction(() => document.querySelector('.sbw-lib-later') && !document.querySelector('.sbw-lib-later').hidden);
+    const staleUnderLater = await page.evaluate(() => !document.querySelector('.sbw-lib-stale')?.getClientRects().length);
+    await go(page, '#/library?collection=COLC');
+    await page.waitForFunction(() => !document.querySelector('.sbw-lib-stale')?.hidden);
+    const staleBack = await page.evaluate(() => Boolean(document.querySelector('.sbw-lib-stale')?.getClientRects().length));
+    check('with the server gone: the Read later filter shows no stale banner, and the collection shows it again', staleUnderLater && staleBack, { staleUnderLater, staleBack });
+    await page.unroute('**/zotero/**');
+    await page.locator('.sbw-lib-stale button').click();
+    await page.waitForFunction(() => document.querySelector('.sbw-lib-stale').hidden && !document.querySelector('.sbw-tree-empty'));
+    check('Try again clears the banner and the tree note when the server is back', true);
+    await page.close();
+
+    const slow = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    await useFixtures(slow);
+    await slow.route('**/zotero/items*', async (route) => { await new Promise((resolve) => setTimeout(resolve, 800)); await route.fallback(); });
+    await slow.goto(fakeUrl);
+    await slow.waitForFunction(() => window.__sbWebReady === true);
+    await go(slow, '#/library');
+    await slow.waitForSelector('.sbw-lib-skel');
+    const skeleton = await slow.evaluate(() => ({ n: document.querySelectorAll('.sbw-lib-skel').length, h: document.querySelector('.sbw-lib-skel').getBoundingClientRect().height, hidden: document.querySelector('.sbw-lib-rows').getAttribute('aria-hidden') }));
+    check('a slow first load shows a skeleton of 56 px rows, hidden from screen readers', skeleton.n > 0 && skeleton.h === 56 && skeleton.hidden === 'true', skeleton);
+    await slow.waitForSelector('.sbw-lib-row');
+    check('the real rows replace the skeleton', (await slow.locator('.sbw-lib-skel').count()) === 0);
+    await slow.close();
+
+    const phone = await open(390, 844);
+    await go(phone, '#/library?collection=COLC');
+    await phone.waitForFunction(() => document.querySelector('.sbw-lib-status').textContent === '250 papers');
+    check('390px the chosen collection is a chip in the toolbar', (await text(phone, '.sbw-lib-chip')) === 'Condensed matter' && await phone.locator('.sbw-lib-chip').isVisible());
+    await phone.locator('.sbw-lib-chip').click();
+    const sheet = await phone.evaluate(() => { const r = document.querySelector('.sbw-lib-tree').getBoundingClientRect(); return { position: getComputedStyle(document.querySelector('.sbw-lib-tree')).position, h: r.height, focus: document.activeElement.getAttribute('aria-label') }; });
+    check('390px the chip opens the collections as a sheet over the list, focus on its close button', sheet.position === 'absolute' && sheet.h > 400 && sheet.focus === 'Close collections', sheet);
+    await phone.keyboard.press('Escape');
+    check('390px Escape closes the sheet', (await phone.evaluate(() => getComputedStyle(document.querySelector('.sbw-lib-tree')).display)) === 'none');
+    await phone.close();
+  }
+
   // ------------------------------------------------------------ notes
   {
     const page = await open(1280);
     await go(page, '#/notes');
     await page.waitForSelector('.sbw-note-row');
     const recent = await texts(page, '.sbw-note-row .sbw-card-title');
-    check('Notes lists recent notes and leaves papers out', recent.length === 5 && recent.includes('Winter diet') && !recent.includes('Foraging strategies of voles'), recent);
+    check('Notes lists recent notes and leaves papers out', recent.length === 7 && recent.includes('Winter diet') && !recent.includes('Foraging strategies of voles'), recent);
+    // spec 029 R15: a mark per kind, readable titles, kind · when · folder, the kind filter, day groups, a wide page
+    const r15 = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('.sbw-note-row')];
+      const by = (part) => rows.find((r) => r.getAttribute('href').includes(part));
+      const mark = (r) => r?.querySelector('.sbw-note-mark')?.className;
+      return {
+        marks: [mark(by('Seeds')), mark(by('2026-10-06')), mark(by('chats'))],
+        avatars: document.querySelectorAll('.sbw-notes .sb-avatar').length,
+        chatTitle: by('chats')?.querySelector('.sbw-card-title')?.textContent, dailyTitle: by('2026-10-06')?.querySelector('.sbw-card-title')?.textContent,
+        meta: by('Seeds')?.querySelector('.sbw-card-meta')?.textContent, dailyMeta: by('2026-10-06')?.querySelector('.sbw-card-meta')?.textContent,
+        chips: [...document.querySelectorAll('.sbw-notes-kind')].map((b) => `${b.textContent.trim()}:${b.getAttribute('aria-pressed')}`),
+        days: [...document.querySelectorAll('.sbw-notes-day')].map((d) => d.textContent),
+        width: document.querySelector('.sbw-notes-page').getBoundingClientRect().width,
+      };
+    });
+    check('Notes rows: a mark for each kind (note, daily note, saved chat), no author avatar', JSON.stringify(r15.marks) === JSON.stringify(['sbw-note-mark is-note', 'sbw-note-mark is-daily', 'sbw-note-mark is-chat']) && r15.avatars === 0, r15);
+    check('Notes rows: a chat reads without its date and id, a daily note as its day; the line under is kind · when · folder', r15.chatTitle === 'Vole diets' && r15.dailyTitle === 'Tue, Oct 6, 2026' && r15.meta === 'Note · Oct 2 · Voles' && r15.dailyMeta === 'Daily note · Oct 6', r15);
+    check('Notes: a kind filter (All 7, Notes 5, Daily notes 1, Chats 1), Recent in day groups, the page as wide as Read later', JSON.stringify(r15.chips) === JSON.stringify(['All 7:true', 'Notes 5:false', 'Daily notes 1:false', 'Chats 1:false']) && JSON.stringify(r15.days) === '["Earlier"]' && r15.width >= 900, r15);
+    await page.locator('.sbw-notes-kind[data-kind="chat"]').click();
+    const onlyChats = await page.evaluate(() => ({ rows: [...document.querySelectorAll('.sbw-note-row')].map((r) => r.dataset.kind), pressed: document.querySelector('.sbw-notes-kind[data-kind="chat"]').getAttribute('aria-pressed') }));
+    check('Notes: the Chats filter shows only saved chats', JSON.stringify(onlyChats.rows) === '["chat"]' && onlyChats.pressed === 'true', onlyChats);
+    await page.locator('.sbw-notes-kind[data-kind="all"]').click();
     check('a note title with $U(1)$ draws as math in its row', await page.evaluate(() => [...document.querySelectorAll('.sbw-note-row')].some((r) => r.querySelectorAll('.sbw-card-title math').length === 1 && r.getAttribute('href').includes('Gauge'))));
     await page.fill('.sbw-notes-search', 'seeds');
     await page.waitForFunction(() => document.querySelector('.sbw-notes .sbw-h2').textContent === 'Results');
@@ -658,6 +917,71 @@ export async function runWebLibraryChecks(browser, port, outDir) {
     check('with onTrash and onCompare the panel offers them and calls back (a row to strike through, or a whole batch)', dups.fullInfo.startsWith('Nothing is removed unless you click') && dups.buttons2.includes('Compare side by side') && JSON.stringify(dups.trashed) === '[[["a/x.md"],true],[["a (conflict).md"],false]]' && JSON.stringify(dups.compared) === '[["a/x.md","b/x.md"]]' && dups.callout === 'Remove the 1 identical copies', dups);
     check('Duplicates reads "None found." and reports a failed check', dups.none.includes('None found.') && dups.bad === "Couldn't check for duplicates: offline", dups);
     check('the shared panels logged no errors', errors.length === 0, errors);
+    await page.close();
+  }
+
+  // ------------------------------------------------------------ the Library keeps up: an old answer, an add here, stored copies
+  // The server's whole-library answer gains papers (`added`) as the checks go; the page's clock is moved past the max age
+  // (60 s, library-data.js LIBRARY_MAX_AGE_MS) instead of waiting for it.
+  {
+    const page = await open(1280);
+    /** @type {any[]} */ const added = [];
+    let asked = 0;
+    await page.route('**/zotero/items*', async (route) => {
+      const url = new URL(route.request().url());
+      if (url.searchParams.get('collections')) return route.fallback();
+      asked += 1;
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [...added, ...ITEMS] }) });
+    });
+    const paper = (key, title) => ({ key, title, year: '2026', citekey: key, authors: ['Ann Chen'], venue: 'Nature', doi: `10.1000/${key}`, abstract: '' });
+    const status = () => text(page, '.sbw-lib-status');
+    await go(page, '#/library');
+    await page.waitForFunction(() => document.querySelector('.sbw-lib-status')?.textContent === '3,500 papers');
+    const first = asked;
+    await go(page, '#/notes');
+    await page.waitForSelector('.sbw-note-row');
+    await go(page, '#/library');
+    await page.waitForTimeout(300);
+    check('within the max age, coming back to the Library does not ask the server again', asked === first, { asked, first });
+
+    added.push(paper('KNEW1', 'A paper added from Browse'));
+    await page.evaluate(() => { const real = Date.now.bind(Date); Date.now = () => real() + 61_000; });
+    await go(page, '#/notes');
+    await page.waitForSelector('.sbw-note-row');
+    await go(page, '#/library');
+    const during = await page.evaluate(() => ({ skeleton: document.querySelectorAll('.sbw-lib-skel').length, rows: document.querySelectorAll('.sbw-lib-row').length, status: document.querySelector('.sbw-lib-status').textContent }));
+    await page.waitForFunction(() => document.querySelector('.sbw-lib-status')?.textContent === '3,501 papers', null, { timeout: 5000 }).catch(() => {});
+    const after = { status: await status(), top: (await texts(page, '.sbw-lib-row .sbw-lib-link'))[0], asked: asked - first };
+    check('an answer older than the max age is asked for again on the way back, the old rows stay meanwhile (no skeleton) and the new paper swaps in', during.skeleton === 0 && during.rows > 0 && during.status !== 'Loading…' && after.status === '3,501 papers' && after.top === 'A paper added from Browse' && after.asked === 1, { during, after });
+
+    // an add to Zotero in this app (here through the host, as Browse's reader bar, the radar, a report and Find do)
+    await page.evaluate(() => { document.querySelector('.sbw-lib-scroll').scrollTop = 2800; });
+    await page.waitForTimeout(150);
+    const tickedTitle = await page.evaluate(() => {
+      const row = document.querySelector('.sbw-lib-rows .sbw-lib-row');
+      row.querySelector('input[type=checkbox]').click();
+      return row.querySelector('.sbw-lib-link').textContent;
+    });
+    added.unshift(paper('KNEW2', 'A paper added from the radar'));
+    const before = asked;
+    await page.evaluate(() => window.__host.addToLibrary([{ title: 'A paper added from the radar', doi: '10.1000/KNEW2' }]));
+    await page.waitForFunction(() => document.querySelector('.sbw-lib-status')?.textContent === '3,502 papers', null, { timeout: 5000 }).catch(() => {});
+    const kept = await page.evaluate((title) => ({
+      status: document.querySelector('.sbw-lib-status').textContent, scrollTop: document.querySelector('.sbw-lib-scroll').scrollTop,
+      ask: document.querySelector('.sbw-lib-ask').textContent,
+      ticked: [...document.querySelectorAll('.sbw-lib-row')].find((r) => r.querySelector('.sbw-lib-link').textContent === title)?.querySelector('input').checked ?? null,
+    }), tickedTitle);
+    check('an add to Zotero here makes the Library on screen ask again at once; the scroll and the ticked row stay', kept.status === '3,502 papers' && asked - before === 1 && kept.scrollTop === 2800 && kept.ask === 'Ask about 1' && kept.ticked === true, { ...kept, tickedTitle, asked: asked - before });
+
+    // a stored copy per collection, the 8 used last; "All papers" (the empty key) was used first, so it goes
+    const visits = ['COLA', 'COLB', 'COLC', 'COLD', 'COLX0', 'COLX1', 'COLX2', 'COLX3', 'COLX4', 'COLX5'];
+    for (const key of visits) {
+      await go(page, `#/library?collection=${key}`);
+      await page.waitForFunction((k) => localStorage.getItem(`sbw-library-v1:${k}`) !== null, key, { timeout: 5000 }).catch(() => {});
+    }
+    const stored = await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('sbw-library-v1:')).map((k) => k.slice('sbw-library-v1:'.length)).sort());
+    check('this browser keeps the Library\'s rows for the 8 collections used last and removes the others', JSON.stringify(stored) === JSON.stringify(visits.slice(-8).sort()), stored);
+    check('keeping the Library fresh logged no errors', page.errors.length === 0, page.errors);
     await page.close();
   }
 

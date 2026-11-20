@@ -109,6 +109,7 @@ function mergeLocal(base, patch) {
  *   research: { askFirstRows: number, askFirstCells: number, maxRows: number, concurrency: number },
  *   local: import("./settings").LocalSettings,
  *   openalex: { apiKey: string | null },
+ *   papers: { email: string | null },
  *   sources: import("./settings").SourceSwitches | null,
  * }} Settings
  */
@@ -121,6 +122,8 @@ export function defaultSettings() {
     research: { ...DEFAULT_RESEARCH },
     local: mergeLocal(null, null),
     openalex: { apiKey: null },
+    // spec 031 D3: the contact email Unpaywall asks for with each request (kept on this computer)
+    papers: { email: null },
     sources: null,
   };
 }
@@ -131,6 +134,9 @@ export function defaultSettings() {
 function dropNullRoles(roles) {
   return /** @type {import("./domain").RoleChoices} */ (Object.fromEntries(Object.entries(roles).filter(([, v]) => v !== null)));
 }
+
+/** An email address, or null for anything that is not one. @param {unknown} v */
+export const cleanEmail = (v) => (typeof v === 'string' && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v.trim()) ? v.trim() : null);
 
 /** @param {unknown} key */
 const cleanKey = (key) => (typeof key === 'string' && key.trim() ? key.trim() : null);
@@ -242,6 +248,7 @@ function merge(base, patch) {
     research: { ...DEFAULT_RESEARCH, ...(base.research ?? {}), ...(patch.research ?? {}) },
     local: mergeLocal(base.local, patch.local),
     openalex: { apiKey: patch.openalex?.apiKey !== undefined ? cleanKey(patch.openalex.apiKey) : (base.openalex?.apiKey ?? null) },
+    papers: { email: patch.papers?.email !== undefined ? cleanEmail(patch.papers.email) : (base.papers?.email ?? null) },
     sources: mergeSources(base.sources, patch.sources),
   };
 }

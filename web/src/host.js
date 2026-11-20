@@ -53,7 +53,7 @@ function citationLabel(item) {
  *   `onOpenRef` lets the shell show a paper or note itself; returning true means it did. The default is a deep link
  *   into Zotero or Obsidian. `base` + `token`: a server on another origin (connection.js), reached with
  *   `Authorization: Bearer`; without them the page talks to the server it came from, with its cookie.
- * @returns {UiHost & { ready: Promise<void>, server: { url: string, sameOrigin: boolean }, assets: import('./assets.js').Assets, assetUrl(path: string): string | Promise<string>, openServerFile(route: string, query: Record<string, string>): void, openDocument: ((path: string) => void) | undefined, json(path: string, method?: "GET" | "POST" | "DELETE" | "PATCH", body?: unknown): Promise<any>, setContext(items: ContextItem[]): void, setOpenRef(fn: ((ref: any) => boolean | void) | null): void, setBrowser(fn: ((url: string) => void) | null): void }}
+ * @returns {UiHost & { ready: Promise<void>, server: { url: string, sameOrigin: boolean }, assets: import('./assets.js').Assets, assetUrl(path: string): string | Promise<string>, openServerFile(route: string, query: Record<string, string>): void, openDocument: ((path: string) => void) | undefined, json(path: string, method?: "GET" | "POST" | "DELETE" | "PATCH", body?: unknown): Promise<any>, setContext(items: ContextItem[]): void, setOpenRef(fn: ((ref: any) => boolean | void) | null): void, setBrowser(fn: ((url: string) => void) | null): void, setBrowse(hook: { open(url: string): void, signOut(): Promise<void>, autoUpdate?(on?: boolean): Promise<boolean> } | null): void, readonly browse: { open(url: string): void, signOut(): Promise<void>, autoUpdate?(on?: boolean): Promise<boolean> } | null }}
  */
 export function createWebHost(options = {}) {
   const doc = options.doc ?? document;
@@ -61,7 +61,8 @@ export function createWebHost(options = {}) {
   const base = options.base ?? win.location.origin;
   const token = options.token ?? null;
   let openRefHook = options.onOpenRef ?? null;
-  /** @type {((url: string) => void) | null} */ let browserHook = null;
+  /** @type {((url: string, radar?: import('../../ui/src/host').RadarLink) => void) | null} */ let browserHook = null;
+  /** @type {{ open(url: string): void, signOut(): Promise<void> } | null} */ let browseHook = null;
 
   /** @type {"server" | "offline"} */
   let whereState = 'server';
@@ -258,12 +259,16 @@ export function createWebHost(options = {}) {
     openLink(url, opts) {
       let abs = url;
       try { abs = new URL(url, win.location.href).href; } catch { /* left as given */ }
-      const plan = planOpen(abs, opts, { mode: linkMode(host.prefs), hasBrowser: Boolean(browserHook) });
+      const plan = planOpen(abs, opts, { mode: linkMode(host.prefs), hasBrowser: Boolean(browserHook), hasBrowse: Boolean(browseHook) });
       if (plan === 'scheme') win.location.assign(url);
       else if (plan === 'outside') openTab(abs);
-      else browserHook?.(abs);
+      else if (plan === 'browse') browseHook?.open(abs);
+      else browserHook?.(abs, opts?.radar);
     },
     setBrowser(fn) { browserHook = fn; },
+    /** Spec 027: the desktop app's Browse view (shell.js sets it when the app offers it); paper links then open there. */
+    setBrowse(hook) { browseHook = hook; },
+    get browse() { return browseHook; },
     revealFile(path) { host.notice(`Saved to ${path}`); },
 
     // The page never fetches other origins itself; the sidecar searches the outside sources for it.
@@ -297,8 +302,9 @@ export function createWebHost(options = {}) {
       return label;
     },
 
-    async addToLibrary(papers) {
-      const reply = /** @type {any} */ (await api.call('/zotero/add', 'POST', { papers }));
+    async addToLibrary(papers, options) {
+      const reply = /** @type {any} */ (await api.call('/zotero/add', 'POST', { papers, ...(options?.collection ? { collection: options.collection } : {}),
+        ...(options?.tag ? { tag: options.tag } : {}), ...(options?.collectionName ? { collection_name: options.collectionName } : {}) }));
       const results = /** @type {{ status: string, key?: string, id?: string }[]} */ (reply.results ?? []);
       const queued = results.some((r) => r.status === 'queued');
       if (results.some((r) => r.status === 'added')) host.notice(queued ? 'Some papers were added to Zotero; the rest will be added when Zotero opens.' : 'Added to Zotero');

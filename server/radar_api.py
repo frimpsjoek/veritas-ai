@@ -118,43 +118,118 @@ ARXIV_SPACING = 3.0        # seconds between requests to arxiv.org (its terms of
 PDF_MAX_BYTES = 40_000_000
 _arxiv_lock = threading.Lock()
 _arxiv_last = [0.0]
+# Zotero items in a radar's collections that are not papers: a supplement or a thesis front page saved as an item of its
+# own, a web page or program named in a word or two, an attachment named after its file, a bare link. Their vectors
+# are the whole text, and a thesis covers a field while a supplement is methods and captions, so they were the closest
+# seed of papers they have nothing to do with. An item with a DOI is a paper whatever its title.
+PLACEHOLDER = re.compile(
+    r"^\s*(\d+\s+)?(supplementary|supporting)\s+(information|materials?|data|text)\b"
+    r"|\b(dissertation|thesis)\s+submitted\b|\bin\s+partial\s+(satisfaction|fulfil+ment)\s+of\s+the\s+requirements\b"
+    r"|^\s*(untitled|no title|snapshot|full text|attachment)\b"
+    r"|\.(pdf|nb|docx?|pptx?|html?|txt|tex|ipynb|zip)\s*$"
+    r"|^\s*\[?\s*https?://|^\S+/\S+$"
+    r"|:\s*$", re.I)  # a title cut at its colon is a heading or a half-read PDF ("The quasi-harmonic approximation:")
+SEED_MIN_WORDS = 3  # in one library, 22% of the items titled in one or two words had a DOI, against 80% of the rest
+LONELY_SHARE = 0.2
+MAX_TAUGHT = 30
+TAUGHT_WEIGHT = 0.8
+SEED_THIN_WORDS = 6  # below this, an item with neither DOI nor abstract is too thin to stand for the user's work
 
 
-def seed_matrix(searcher, seeds: dict, lock, hidden: set[str] = frozenset()) -> tuple[np.ndarray, list[str]]:
-    """Unit vectors of the seeds and their labels ("zotero/KEY", or "text:<title>"). `seeds`: {"keys": [Zotero keys],
-    "collections": [collection keys], "texts": [{"title", "text"}]}."""
-    keys = {f"zotero/{k}" for k in seeds.get("keys") or []}
+def placeholder_title(title: str, doi: str = "") -> bool:
+    """True when a library item's title says it is not a paper (see PLACEHOLDER); such items are not used as seeds."""
+    if str(doi or "").strip():
+        return False
+    title = re.sub(r"<[^>]+>", "", str(title or ""))  # Zotero titles can hold markup (<i>GW</i>)
+    return len(re.findall(r"[^\W\d_]{2,}", title)) < SEED_MIN_WORDS or bool(PLACEHOLDER.search(title))
+
+
+def _drop_thin(db, rows: list[tuple[str, str, dict]]) -> list[tuple[str, str, dict]]:
+    """Leaves out collection items with no DOI, no abstract and a short title: a three-word title alone ranks any
+    paper that shares a word with it as close to the user's work (2026-10-29: a nucleation book chapter came in as
+    0.86 to "The quasi-harmonic approximation:")."""
+    thin = [p for p, title, info in rows if not str(info.get("doi") or "").strip()
+            and len(re.findall(r"[^\W\d_]{2,}", re.sub(r"<[^>]+>", "", title))) < SEED_THIN_WORDS]
+    if not thin:
+        return rows
+    known = abstracts(db, thin)
+    drop = {p for p in thin if not known.get(p, "").strip()}
+    return [r for r in rows if r[0] not in drop]
+
+
+def seed_matrix(searcher, seeds: dict, lock, hidden: set[str] = frozenset()) -> tuple[np.ndarray, list[str], int]:
+    """Unit vectors of the seeds, their labels ("zotero/KEY", or "text:<title>") and how many seeds there were before
+    the cap. `seeds`: {"keys": [Zotero keys], "collections": [collection keys], "texts": [{"title", "text"}]}.
+    Items of the collections whose title says they are not papers (placeholder_title), and thin ones (_drop_thin), are
+    left out; papers picked by hand never are.
+
+    At most MAX_SEEDS are used. The papers picked by hand (keys, texts) come first; collections fill the rest, most
+    recently changed in Zotero first: a few large collections easily hold more than the cap, and failing the whole run
+    for that left the radar never running."""
+    texts = [t for t in (seeds.get("texts") or []) if str(t.get("text", "")).strip()]
     collections = seeds.get("collections") or []
-    vectors, labels = [], []
     with lock:
         searcher._refresh()
-        if collections:
-            keys |= {p for p, _, _ in _rows(searcher.db, collections, hidden)}
-        for path in sorted(keys - set(hidden)):
-            if path in searcher.note_index:
-                vectors.append(searcher.note_matrix[searcher.note_index[path]].astype(np.float32))
-                labels.append(path)
-    texts = [t for t in (seeds.get("texts") or []) if str(t.get("text", "")).strip()]
+        known = lambda paths: [p for p in paths if p in searcher.note_index and p not in hidden]  # noqa: E731
+        picked = known(sorted({f"zotero/{k}" for k in seeds.get("keys") or []}))
+        rows = [r for r in _rows(searcher.db, collections, hidden) if not placeholder_title(r[1], r[2].get("doi", ""))] if collections else []
+        rows = _drop_thin(searcher.db, rows)
+        mtime = dict(searcher.db.execute("SELECT path, mtime FROM notes WHERE source='zotero'")) if rows else {}
+        rest = known(sorted({p for p, _, _ in rows} - set(picked), key=lambda p: (-(mtime.get(p) or 0.0), p)))
+        total = len(picked) + len(rest) + len(texts)
+        picked = picked[:MAX_SEEDS]
+        texts = texts[:MAX_SEEDS - len(picked)]
+        paths = picked + rest[:MAX_SEEDS - len(picked) - len(texts)]
+        vectors = [searcher.note_matrix[searcher.note_index[p]].astype(np.float32) for p in paths]
+    labels = list(paths)
     if texts:
         embedded = _embed(searcher, [f"{t.get('title', '')}. {t['text']}"[:TEXT_CHARS] for t in texts], lock)
         vectors.extend(embedded)
         labels.extend(f"text:{t.get('title', '')}" for t in texts)
-    if len(vectors) > MAX_SEEDS:
-        raise ValueError(f"at most {MAX_SEEDS} seed papers")
     matrix = np.array([_unit(v) for v in vectors], dtype=np.float32) if vectors else np.zeros((0, kb.DIM), dtype=np.float32)
-    return matrix, labels
+    return matrix, labels, total
 
 
-def _closest(matrix: np.ndarray, labels: list[str], vector: np.ndarray, base: np.ndarray | None = None) -> tuple[float, str | None, float]:
-    """(margin, label, similarity) of the closest seed. `base` (one value per seed) is subtracted first: a seed that is
-    close to everything in the field (a long methods paper, say) would otherwise be the closest seed of almost every
-    paper. The margin is what thresholds compare; the plain similarity is what people read."""
+def _with_taught(searcher, seeds: dict, matrix: np.ndarray, labels: list[str], base: np.ndarray | None, lock) -> tuple:
+    """The seeds, and the abstracts of papers the user liked or added (`taught`, radar-feedback.js), as (matrix, labels,
+    base, weight). A liked paper has no calibration of its own: it takes the baseline of the chosen seed it sits closest
+    to, and its margin counts TAUGHT_WEIGHT. On the labelled rows an abstract is no closer to another abstract than to a
+    whole seed (0.69 and 0.70 on average), so the two compare. The thresholds and the calibrated baselines do not change."""
+    taught = [t for t in (seeds.get("taught") or []) if str(t.get("text", "")).strip()][:MAX_TAUGHT]
+    if not len(matrix) or not taught:
+        return matrix, labels, base, None
+    vectors = np.array([_unit(v) for v in _embed(searcher, [str(t["text"])[:TEXT_CHARS] for t in taught], lock)], dtype=np.float32)
+    known = base if base is not None else np.zeros(len(labels), dtype=np.float32)
+    inherited = known[(vectors @ matrix.T - known).argmax(axis=1)]
+    return (np.vstack([matrix, vectors]), labels + [f"liked:{t.get('title', '')}" for t in taught], np.concatenate([known, inherited]),
+            np.concatenate([np.ones(len(labels), dtype=np.float32), np.full(len(taught), TAUGHT_WEIGHT, dtype=np.float32)]))
+
+
+def _closest(matrix: np.ndarray, labels: list[str], vector: np.ndarray, base: np.ndarray | None = None, weight: np.ndarray | None = None) -> tuple[float, str | None, float, float | None]:
+    """(margin, label, similarity, next margin) of the closest seed. `base` (one value per seed) is subtracted first: a
+    seed that is close to everything in the field (a long methods paper, say) would otherwise be the closest seed of
+    almost every paper. The margin is what thresholds compare; the plain similarity is what people read; the next seed's
+    margin says whether more than one seed finds the paper close. None with a single seed. `weight`: see _with_taught."""
     if not len(matrix):
-        return 0.0, None, 0.0
+        return 0.0, None, 0.0, None
     raw = matrix @ vector.astype(np.float32)
     sims = raw - base if base is not None else raw
+    if weight is not None:
+        sims = sims * weight
     best = int(sims.argmax())
-    return float(sims[best]), labels[best], float(raw[best])
+    second = float(np.delete(sims, best).max()) if len(sims) > 1 else None
+    return float(sims[best]), labels[best], float(raw[best]), second
+
+
+def _lonely(matrix: np.ndarray) -> np.ndarray:
+    """Per seed, whether it is among the fifth of the seeds furthest from any other: an interest with one paper to stand
+    for it, which no second seed can agree with. Relative, because every seed of a radar has a neighbour above 0.8."""
+    if len(matrix) < 2:
+        return np.ones(len(matrix), dtype=bool)
+    near = matrix @ matrix.T
+    np.fill_diagonal(near, -np.inf)
+    nearest = near.max(axis=1)
+    return nearest < np.quantile(nearest, LONELY_SHARE)
 
 
 def _baseline(body: dict, labels: list[str], kind: str) -> np.ndarray | None:
@@ -186,17 +261,23 @@ def score(searcher, body: dict, lock, hidden: set[str] = frozenset()) -> dict:
         centroid = _unit(mean) if centroid is None else _unit(CENTROID_WEIGHT * centroid + POSITIVE_WEIGHT * mean)
     negative_vectors = _embed(searcher, negatives, lock) if negatives else None
     vectors = _embed(searcher, [str(i.get("text", ""))[:TEXT_CHARS] for i in batch], lock) if batch else np.zeros((0, kb.DIM))
-    seeds = seed_matrix(searcher, body["seeds"], lock, hidden) if body.get("seeds") else None
+    seeds, total = None, 0
+    if body.get("seeds"):
+        *seeds, total = seed_matrix(searcher, body["seeds"], lock, hidden)
     base = _baseline(body, seeds[1], "abstract") if seeds is not None else None
+    lonely = dict(zip(seeds[1], _lonely(seeds[0]).tolist())) if seeds is not None else {}
+    if seeds is not None:
+        seeds[0], seeds[1], base, weight = _with_taught(searcher, body["seeds"], seeds[0], seeds[1], base, lock)
     scores = {}
     for item, vector in zip(batch, vectors):
         similarity = float(vector @ centroid) if centroid is not None else 0.0
         negative = float((negative_vectors @ vector).max()) if negative_vectors is not None else 0.0
         scores[str(item["id"])] = {"similarity": similarity, "negative": negative}
         if seeds is not None:
-            near, label, raw = _closest(*seeds, _unit(vector), base)
-            scores[str(item["id"])].update(seed_max=near, seed_best=label, seed_raw=raw)
-    return {"scores": scores}
+            near, label, raw, second = _closest(*seeds, _unit(vector), base, weight)
+            scores[str(item["id"])].update(seed_max=near, seed_best=label, seed_raw=raw, seed_second=second, seed_lonely=lonely.get(label, True))
+    # How many seeds were compared, of how many the radar names (the rest is over MAX_SEEDS).
+    return {"scores": scores, **({"seeds": {"used": len(seeds[1]), "of": total}} if seeds is not None else {})}
 
 
 # ---------------------------------------------------------------- whole new papers from arXiv (spec 021 G3)
@@ -267,8 +348,10 @@ def fulltext(searcher, body: dict, lock, hidden: set[str] = frozenset(), cache_p
     batch = body.get("items") or []
     if len(batch) > FULLTEXT_MAX:
         raise ValueError(f"at most {FULLTEXT_MAX} papers per call")
-    seeds = seed_matrix(searcher, body.get("seeds") or {}, lock, hidden)
+    *seeds, _ = seed_matrix(searcher, body.get("seeds") or {}, lock, hidden)
     base = _baseline(body, seeds[1], "full")
+    lonely = dict(zip(seeds[1], _lonely(seeds[0]).tolist()))
+    seeds[0], seeds[1], base, weight = _with_taught(searcher, body.get("seeds") or {}, seeds[0], seeds[1], base, lock)
     cache_path = cache_path or kb.data_dir() / "radar-fulltext.sqlite"
     scores = {}
     for item in batch:
@@ -286,8 +369,8 @@ def fulltext(searcher, body: dict, lock, hidden: set[str] = frozenset(), cache_p
         if vector is None:
             scores[key] = {"error": "no text in the PDF"}
             continue
-        near, label, raw = _closest(*seeds, vector, base)
-        scores[key] = {"seed_max": near, "seed_best": label, "seed_raw": raw, "chars": len(text)}
+        near, label, raw, second = _closest(*seeds, vector, base, weight)
+        scores[key] = {"seed_max": near, "seed_best": label, "seed_raw": raw, "seed_second": second, "seed_lonely": lonely.get(label, True), "chars": len(text)}
     return {"scores": scores}
 
 
@@ -307,6 +390,7 @@ def _threshold(positive: list[float], negative: list[float]) -> dict:
 
 # Of a day's papers in the user's own field, about this share should pass: the closest tenth.
 FIELD_KEEP = 0.90
+FULL_PER_CATEGORY = 6      # field papers read whole per arXiv category, for its seeds' whole-paper baselines
 
 
 def _whole_vectors(searcher, papers: list[dict], limit: int, lock, cache_path: Path, fetch) -> list[np.ndarray]:
@@ -331,21 +415,47 @@ def _abstract_vectors(searcher, papers: list[dict], lock) -> list[np.ndarray]:
     return [_unit(v) for v in _embed(searcher, texts, lock)] if texts else []
 
 
+def _apply_field_cut(stats: dict, field_cut: float) -> None:
+    """The closest tenth of the field raises the bar, but only as far as the median seed: above it, half of the user's
+    own abstracts would not pass against their other seeds (2026-11-03: 0.119 against a separation of 0.07)."""
+    raised = min(field_cut, stats["related"]["p50"])
+    stats.update(field_cut=round(field_cut, 3), threshold=round(max(stats["threshold"], raised), 3))
+
+
+def _by_category(field: list[dict]) -> dict:
+    """The field's papers per arXiv category."""
+    groups: dict = {}
+    for paper in field:
+        groups.setdefault(paper.get("category"), []).append(paper)
+    return groups
+
+
+def _field_base(matrix: np.ndarray, labels: list[str], vectors: dict) -> np.ndarray:
+    """Each seed's baseline: its mean similarity to the category it is closest to, of those read. Measured against one
+    mean of a materials radar's first two categories, a seed on agents scored against papers far from it and was the
+    closest seed of 35 of 54 rows (2026-11-03). `vectors`: category -> vectors."""
+    means = [np.mean([matrix @ v for v in vs], axis=0) for vs in vectors.values() if vs]
+    return np.max(means, axis=0).astype(np.float32) if means else np.zeros(len(labels), dtype=np.float32)
+
+
 def calibrate(searcher, body: dict, lock, hidden: set[str] = frozenset(), cache_path: Path | None = None, fetch=None) -> dict:
-    """POST /radar/calibrate {"seeds", "unrelated": [...], "field": [...]}; each paper {"title", "abstract", "arxiv"?}.
+    """POST /radar/calibrate {"seeds", "unrelated": [...], "field": [...]}; each paper {"title", "abstract", "arxiv"?},
+    a field paper also its "category".
 
     `field`: recent papers from the seeds' own arXiv categories. Their mean similarity to each seed is that seed's
-    baseline, subtracted before taking the closest seed, so a seed close to the whole field stops winning by default.
-    Related: each library seed (abstract, and whole paper) against the other seeds; unrelated: papers from far fields.
-    The threshold sits where related and unrelated separate, and never below the closest tenth of the field."""
+    baseline (_field_base), subtracted before taking the closest seed, so a seed close to the whole field stops winning
+    by default. Related: each library seed (abstract, and whole paper) against the other seeds; unrelated: papers from
+    far fields. The threshold sits where related and unrelated separate, raised towards the closest tenth of the field
+    as far as the median seed (_apply_field_cut)."""
     seeds_body = body.get("seeds") or {}
-    matrix, labels = seed_matrix(searcher, seeds_body, lock, hidden)
+    matrix, labels, total = seed_matrix(searcher, seeds_body, lock, hidden)
     if len(labels) < 3:
         raise ValueError("calibration needs at least 3 seed papers")
     cache_path = cache_path or kb.data_dir() / "radar-fulltext.sqlite"
     field, unrelated = body.get("field") or [], body.get("unrelated") or []
+    groups = _by_category(field)
     full_n = int(body.get("full_papers", 8))
-    zero = np.zeros(len(labels), dtype=np.float32)
+    full_each = max(FULL_PER_CATEGORY, math.ceil(full_n / max(len(groups), 1)))
 
     def adjusted(vectors, base, skip=None):
         out = []
@@ -357,8 +467,9 @@ def calibrate(searcher, body: dict, lock, hidden: set[str] = frozenset(), cache_
         return out
 
     # abstracts
-    field_abs = _abstract_vectors(searcher, field, lock)
-    base_abs = np.mean([matrix @ v for v in field_abs], axis=0).astype(np.float32) if field_abs else zero
+    by_abs = {c: _abstract_vectors(searcher, papers, lock) for c, papers in groups.items()}
+    field_abs = [v for vs in by_abs.values() for v in vs]
+    base_abs = _field_base(matrix, labels, by_abs)
     library = [i for i, label in enumerate(labels) if label.startswith("zotero/")]
     with lock:
         notes = abstracts(searcher.db, [labels[i] for i in library])
@@ -366,20 +477,19 @@ def calibrate(searcher, body: dict, lock, hidden: set[str] = frozenset(), cache_
     seed_abs = [_unit(v) for v in _embed(searcher, [notes[labels[i]][:TEXT_CHARS] for i in with_abstract], lock)] if with_abstract else []
     abstract = _threshold(adjusted(seed_abs, base_abs, with_abstract), adjusted(_abstract_vectors(searcher, unrelated, lock), base_abs))
     if field_abs:
-        field_cut = float(np.quantile(adjusted(field_abs, base_abs), FIELD_KEEP))
-        abstract.update(field_cut=round(field_cut, 3), threshold=round(max(abstract["threshold"], field_cut), 3))
+        _apply_field_cut(abstract, float(np.quantile(adjusted(field_abs, base_abs), FIELD_KEEP)))
 
     # whole papers
-    field_full = _whole_vectors(searcher, field, full_n, lock, cache_path, fetch)
-    base_full = np.mean([matrix @ v for v in field_full], axis=0).astype(np.float32) if field_full else zero
+    by_full = {c: _whole_vectors(searcher, papers, full_each, lock, cache_path, fetch) for c, papers in groups.items()}
+    field_full = [v for vs in by_full.values() for v in vs]
+    base_full = _field_base(matrix, labels, by_full)
     un_full = _whole_vectors(searcher, unrelated, full_n, lock, cache_path, fetch)
     full = None
     if un_full:
         full = _threshold(adjusted([matrix[i] for i in library], base_full, library), adjusted(un_full, base_full))
         if field_full:
-            field_cut = float(np.quantile(adjusted(field_full, base_full), FIELD_KEEP))
-            full.update(field_cut=round(field_cut, 3), threshold=round(max(full["threshold"], field_cut), 3))
-    return {"abstract": abstract, "full": full, "seeds": len(labels), "at": time.time(),
+            _apply_field_cut(full, float(np.quantile(adjusted(field_full, base_full), FIELD_KEEP)))
+    return {"abstract": abstract, "full": full, "seeds": len(labels), "seeds_of": total, "at": time.time(),
             "baseline": {"labels": labels, "abstract": [round(float(x), 4) for x in base_abs],
                          "full": [round(float(x), 4) for x in base_full]},
             "field": {"abstracts": len(field_abs), "whole": len(field_full)}}

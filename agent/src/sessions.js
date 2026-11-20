@@ -145,19 +145,54 @@ export function isLegacy(records) {
 
 /**
  * Papers routine runs added since the user last opened the session (spec 011 U4 follow-up). A `routine_run` record is
- * news when it is newer than the last `seen` record; a session with neither (every older chat) has none. Omitted
- * when 0. @param {any[]} records @returns {{ papers: number, at: string } | undefined}
+ * news when it is newer than the last `seen` record; a session with neither (every older chat) has none. Each paper
+ * of that news viewed since then (a `viewed` record: opened from Home's issue or the digest table) counts one less, so
+ * the count drops per paper read. A run that names its rows counts only those; an older run without them counts any
+ * viewed row, up to what it added. Omitted when 0. @param {any[]} records @returns {{ papers: number, at: string } | undefined}
  */
 export function newsOf(records) {
-  let seen = '';
-  for (const r of records) if (r.type === 'seen' && r.at > seen) seen = r.at;
-  let papers = 0, at = '';
+  const seen = lastSeen(records);
+  let papers = 0, at = '', unnamed = 0;
+  const named = new Set();
   for (const r of records) {
     if (r.type !== 'routine_run' || r.at <= seen) continue;
-    papers += Math.max(0, Number(r.added) || 0);
+    const added = Math.max(0, Number(r.added) || 0);
+    papers += added;
+    if (Array.isArray(r.rows)) for (const row of r.rows) named.add(String(row));
+    else unnamed += added;
     if (r.at > at) at = r.at;
   }
+  let other = 0;
+  for (const row of viewedSince(records, seen)) {
+    if (named.has(row)) papers -= 1;
+    else other += 1;
+  }
+  papers -= Math.min(other, unnamed);
   return papers > 0 ? { papers, at } : undefined;
+}
+
+/** When the session was last opened ('' for never). @param {any[]} records */
+function lastSeen(records) {
+  let seen = '';
+  for (const r of records) if (r.type === 'seen' && r.at > seen) seen = r.at;
+  return seen;
+}
+
+/** The rows viewed since the session was last opened; opening it (`seen`) clears them with the rest of the news.
+ *  @param {any[]} records @param {string} [seen] @returns {Set<string>} */
+export function viewedSince(records, seen = lastSeen(records)) {
+  const rows = new Set();
+  for (const r of records) if (r.type === 'viewed' && r.at > seen) for (const row of r.rows ?? []) rows.add(String(row));
+  return rows;
+}
+
+/** Spec 030 R10: a thread whose first record is a plain chat question (not the line of a step) began as a chat, so it
+ *  stays a chat in the history and on its cover whatever steps (a Find search, a report) followed.
+ *  @param {any[]} records @returns {boolean} */
+export function chatFirst(records) {
+  const question = records.findIndex((r) => r.type === 'user' && !r.step);
+  const step = records.findIndex((r) => r.type === 'step');
+  return question >= 0 && (step < 0 || question < step);
 }
 
 /**
@@ -173,7 +208,7 @@ export function summaryExtras(records) {
   const first = steps[0];
   /** @type {"chat" | "find" | "report" | "systematic"} */
   let kind = 'chat';
-  if (first) {
+  if (first && !chatFirst(records)) {
     // A `report` step whose request is a systematic review reads as "systematic" (spec 007 E8).
     if (first.input.kind === 'find' || first.input.kind === 'import') kind = 'find';
     else if (first.input.kind === 'report') kind = first.input.request?.systematic ? 'systematic' : 'report';
@@ -228,7 +263,7 @@ export function coverOf(records) {
   if (steps[0]?.input?.kind === 'radar') {
     return { kind: 'radar', ...(run ? { quote: firstSentence(run.top.title), ...(run.top.by ? { by: run.top.by } : {}) } : {}), ...(papers ? { count: plural(papers, 'new paper') } : {}) };
   }
-  if (steps[0]?.input?.kind === 'find') {
+  if (steps[0]?.input?.kind === 'find' && !chatFirst(records)) {
     return { kind: 'find', quote: firstSentence(steps[0].input.query ?? ''), ...(papers ? { by: plural(papers, 'paper') } : {}) };
   }
   const first = records.find((r) => r.type === 'user');

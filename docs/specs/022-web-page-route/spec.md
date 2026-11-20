@@ -124,3 +124,118 @@ No other client change: the four modes already work in the harness.
       arxiv.org/pdf/2301.06171, source: open access, version: submitted}`; `/web/pdf` 200 application/pdf 6.1 MB,
       Range 0-1023 → 206; `arxiv.org/abs/2301.06171` → reader (arXiv refuses frames); Wikipedia → frame
 - [ ] The user opens the DOI in the web app's panel and confirms (no screenshot taken by the agent)
+
+## 2026-10-29: arXiv paper view and cleaner reader
+
+The user (2026-10-28): the reader view for web pages, arXiv in particular, "is terrible"; keep the app's look. Seen
+on `arxiv.org/abs/2607.25690` (`evidence/arxiv-before.png`): the title twice in two fonts ("Title:" glued on), the
+byline "Zhumagulov, Yaroslav, Félisaz, Johan, …" (citation_author is "Last, First"), the whole page body (arXiv's
+`<main>` holds every sidebar: breadcrumb, "View PDF", submission history, "Full-text links", browse context,
+"Loading…", the arXivLabs toggles, "Disable MathJax"), raw TeX (`F\'elisaz`, `PtSe$_2$`), the abstract as a grey quote.
+
+What changed:
+
+- **arXiv links answer a paper** (`web_page.arxiv_of`, `arxiv_paper`, `_arxiv`). `arxiv.org/abs|pdf|html/<id>`, any
+  version, old-style ids (`radar_api.arxiv_id`), and the arXiv DOI `10.48550/arXiv.<id>`: `{mode: reader, source:
+  arxiv, title, byline, abstract, math: true, paper: {arxiv, version, submitted, revised, subjects [{code, name,
+  primary}], doi, comment}, links: [PDF, Full text]}`. Metadata from the arXiv API (Atom, stdlib XML), subject names
+  and the "HTML (experimental)" address from the abstract page, which is also the fallback (citation_* tags,
+  dateline); kept a day in `data/web-pages/arxiv/`. TeX accents become letters on the server; `$…$` is left for the
+  panel. A `/pdf/` link stays the PDF reader unless the reader is asked for. `/html/<id>` is the LaTeXML article
+  under the same header (`<math>` → `$alttext$`, figure captions kept, author block, dates and footer dropped), with
+  PDF and Abstract buttons. A DOI's abstract-only answer (OpenAlex) has the same shape (abstract, Publisher's page).
+- **The generic reader is cleaner for every site** (`reader()`): text outside any kept block becomes a paragraph, so
+  each piece of the page can be weighed; hidden and screen-reader-only text is skipped. Without an `<article>`
+  (`<main>` is pruned too): empty and link-heavy blocks, breadcrumb headings, short lines printed twice or more,
+  sections that are mostly furniture with little text left, and short blocks matching a few phrases ("Toggle",
+  "(What is …?)", "Loading...", "Cite as", "Submission history", cookie banners …) go; a section under a furniture
+  heading goes with it. Every page: the block(s) repeating the title near the top go, a site suffix ("| Quanta
+  Magazine") leaves the title, glued "Title:/Authors:/Abstract:" labels go, "Abstract" becomes a small label
+  (`h2.sbw-reader-label`) over plain text, "Last, First" bylines flip, six names then "et al.".
+- **Panel** (`browser-panel.js`, `readerPlan`/`mathParts` in `browser-state.js`): one font family (the note's prose
+  font) for title, byline and text; abstract under the small label; subject chips small and muted; PDF / Full text /
+  Publisher's page as quiet header buttons (in the panel; "Original page" of a paper opens outside, since the paper
+  answer comes back for its own address); KaTeX (the chat's `mathNode`) only for answers marked `math`, so "$5 and
+  $10" on an ordinary page stays money.
+- **← in the panel** always does something: the page before, or on the first page it closes the panel (focus back
+  to the link). The panel keeps its own history, so the desktop app's web view behaves the same.
+
+Evidence (2026-10-29):
+
+- Tests first: `tests/test_web_arxiv.py` (10: id forms, accents, API answer, abstract-page fallback, no HTML version,
+  pdf vs reader, LaTeXML full text, unknown id, old-style id, arXiv DOI), `tests/test_web_page.py` +6 (the real abs
+  page as a fixture, `fixtures/web_page/arxiv-abs-2607.25690.html`, fetched once: no chrome phrase left, title once,
+  byline flipped, abstract label; an `<article>` blog keeps every paragraph; a div page keeps its paragraphs and drops
+  link lists and repeated labels; "$5 and $10" not math, MathML is; byline flip; site-suffixed title). Web unit
+  tests: `readerPlan` (one font class, abstract label, math only when marked, chips/meta/links), `mathParts`
+  (PtSe$_2$, money), `stepBack`. Harness (`dev/browser-checks.mjs`, system Chrome): title once in the same computed
+  font family as the text, abstract label with TeX drawn, chips and header buttons, prices not math, ← on the first
+  page closes; 81 browser checks pass at 1280/700/360 px.
+- Live (scratch server from the worktree, scratch `VERITAS_DATA`): `/web/page?url=https://arxiv.org/abs/2607.25690
+  &prefer=reader` → `source: arxiv`, byline "Yaroslav Zhumagulov, Johan Félisaz, Stepan S. Tsirkin, Denis Kochan,
+  Oleg V. Yazyev", v2, submitted 28 Jul 2026, revised 25 Oct 2026, three subjects, PDF + Full text
+  (`arxiv.org/html/2607.25690v2`); the HTML full text reads with 227 formulas as `$…$` and 3 figure captions; a Quanta
+  article keeps its text and loses "Read Later" and the related-story list. Screenshots (gitignored, local):
+  `evidence/arxiv-after.png`, `evidence/arxiv-html-after.png`, `evidence/quanta-after.png`.
+- Open: in-page anchors of the full text (`#bib.bib7`, `#S1`) reload the page in the panel instead of scrolling (the
+  reader drops ids); `Read Later`-like lines that appear once and site-specific promos ("Click to tell Google …")
+  stay; the user's own look at the panel.
+
+## 2026-10-29 (later): a closed paper's landing page, the publisher outside, ← from Home
+
+The user, with a screenshot of `doi.org/10.1021/acs.jctc.6c01423` (JCTC, closed) in the panel: header "Abstract only",
+title, authors, then the abstract as one plain block starting with a literal "Abstract", then "Only the abstract is
+open. Open the publisher's page."; "Back does not work at all"; the publisher link does not work well (ACS, Elsevier
+and Wiley answer the panel with a Cloudflare check); the page is bland.
+
+What changed:
+
+- **← from Home works (no code change needed).** The screenshot's build predates `3a41cff` (← on the first page closed
+  nothing and was greyed out until then). Reproduced on this branch in the harness for the exact flow: Home's radar
+  list → a paper's title (`host.openLink` → `browserHook`, the abstract-only answer) → ← closes the panel, the hash
+  stays `#/home`, and nothing opens it again (the "viewed" call and count refresh after the click do not repaint or
+  re-open); the same paper again → ← closes again; a second paper opened from the first → ← returns to the first. New
+  checks in `ui/dev/browser-checks.mjs`.
+- **A closed paper is a landing page** (`web_page._landing`, `crossref`, `jats_html`, `journal_of`, `published_of`,
+  `citation_of`). Asked only when there is no library or open-access PDF: OpenAlex (now also `publication_date`,
+  `biblio`, `open_access`) and the Crossref record (kept a day in `data/web-pages/crossref/`, like OpenAlex). The answer
+  keeps the reader shape and adds `abstract_html` (Crossref's JATS as `<p>` paragraphs, `<h3>` for a structured
+  abstract's section titles, lists; `sub`, `sup`, italic and bold kept; every other tag dropped, no attributes; the
+  `<jats:title>Abstract</jats:title>` and a leading capitalised "Abstract" word gone, "Abstract reasoning …" kept;
+  OpenAlex's words as one paragraph when Crossref has none) and `paper: {doi, journal, published, volume, issue,
+  pages, citation}`: journal on one line (Crossref's "Journal of Chemical Theory\nand Computation" collapsed),
+  "28 Oct 2026". `abstract` stays plain text, `html` is empty (the client draws the access note).
+- **The publisher's page opens outside.** Links carry `kind: "outside"` and point at `https://doi.org/<doi>` (not
+  OpenAlex's landing URL); the header button, the DOI line and the access note all call
+  `host.openLink(url, {outside: true})` (system browser), with Lucide's external-link line icon. A free copy OpenAlex
+  knows (`open_access.oa_url`) is a "PDF" / "Free copy" button that opens in the panel; for this DOI OpenAlex says
+  closed, so there is none. The bar's "Original page" is hidden on a landing page (the button and ↗ already go there).
+- **Panel** (`readerPlan` `landing`, `abstractHtml`, `doi`, `citation`; `browser-panel.js` `landingFoot`, `figureOf`,
+  `copyText`): the same order and font family as the arXiv view: title, authors, a quiet line "Journal · date ·
+  volume (issue), pages", buttons (Publisher's page ↗, Copy citation with a quote icon, copies through the clipboard
+  with a notice), "Abstract" label over the paragraphs, then a rule, "DOI 10.x/…" and "Only the abstract is open
+  here. Read it on the publisher's page ↗". A graphical abstract only when Home's figure finder (`/paper-figure`,
+  `paper_figures.py`: the publisher page's preview image only when that page answers, or a figure at a known address)
+  has one; the image stays hidden until it loads and goes on an error, so nothing is faked and the page stands
+  without one (this DOI has none: ACS answers 403/410).
+
+Evidence (2026-10-29):
+
+- Server tests: `tests/test_web_page.py` (closed paper → `kind: outside` at doi.org, `abstract_html`; the JCTC
+  OpenAlex + Crossref answers stored as `fixtures/web_page/jctc-6c01423.json` → journal, date, one paragraph, no
+  "jats"/"Abstract", no PDF, the citation, the publisher never asked, both answers cached; without Crossref the
+  OpenAlex words lose their "Abstract"; eight JATS cases (sub/sup/italic, structured sections, an `onclick`, "Abstract
+  reasoning", MathML text, lists, escaped `<script>`, empty); volume/pages/free PDF; Crossref fallbacks for journal and
+  date). 59 passed with `test_web_arxiv.py`.
+- Web unit: `readerPlan` landing (meta line, html abstract, DOI, citation, only the publisher outside, arXiv
+  unchanged). Harness (`SB_ONLY=browser`, system Chrome): 102 browser checks pass at 1280/700/360 px, including the
+  Home → ← flow above and the landing page (journal · date, paragraphs under one label, sub and italic kept, the three
+  outside links all `{outside: true}` to doi.org with the panel still open, no PDF, no "Original page", one computed
+  font family for title, authors, abstract and footer, the figure only for the fixture that has one, no sideways
+  scroll). Screenshots (gitignored): `ui/dev/out/browser-landing-{1280,700,360}.png`.
+- Live (this Mac, scratch data folder, real network): `web_page.page("https://doi.org/10.1021/acs.jctc.6c01423")` in
+  0.7 s → `source: openalex`, journal "Journal of Chemical Theory and Computation", "28 Oct 2026", three authors, one
+  abstract paragraph starting "We develop", links = [Publisher's page (outside)]. That answer drawn in the harness:
+  `evidence/jctc-landing-1280-light.png`, `evidence/jctc-landing-1280-dark.png`, `evidence/jctc-landing-390-light.png`.
+- Open: the user's own look in the desktop app (rebuilt from this branch); no publisher page is fetched just for its
+  og:image (it would add seconds and is refused by ACS/Elsevier/Wiley anyway).

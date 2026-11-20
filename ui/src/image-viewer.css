@@ -1,0 +1,18 @@
+/* ui/src/image-viewer.css. The full-screen picture viewer (image-viewer.js, spec 029 R12/R13), in every host:
+   the web app's sheet and Home's sheet in the Zotero and Obsidian panes. It is dark in every theme, like a photo
+   viewer, so its colours are its own and not the host's tokens. */
+.sb-iv { position: fixed; inset: 0; z-index: 2147483000; background: rgba(8, 10, 12, 0.94); color: #f3f4f6; outline: none; font: 13px/1.3 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.sb-iv-stage { position: absolute; inset: 0; overflow: hidden; touch-action: none; cursor: zoom-out; }
+.sb-iv.is-pannable .sb-iv-img { cursor: grab; }
+.sb-iv.is-dragging .sb-iv-img { cursor: grabbing; }
+.sb-iv-img { position: absolute; left: 50%; top: 50%; max-width: none; max-height: none; transform-origin: center; user-select: none; -webkit-user-drag: none; background: #fff; box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5); opacity: 0; cursor: zoom-in; }
+.sb-iv.is-ready .sb-iv-img { opacity: 1; }
+.sb-iv-bar { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 2px; padding: 4px; border-radius: 10px; background: rgba(30, 33, 38, 0.92); box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4); max-width: calc(100vw - 24px); box-sizing: border-box; }
+.sb-iv-btn { display: inline-flex; align-items: center; justify-content: center; min-width: 32px; height: 32px; padding: 0 8px; margin: 0; border: 0; border-radius: 7px; background: transparent; color: inherit; font: inherit; font-size: 15px; cursor: pointer; }
+.sb-iv-btn:hover, .sb-iv-btn:focus-visible { background: rgba(255, 255, 255, 0.14); outline: none; }
+.sb-iv-btn:focus-visible { box-shadow: 0 0 0 2px #7cc4b8; }
+.sb-iv-btn .sb-p-icon { width: 16px; height: 16px; stroke: currentColor; }
+.sb-iv-fit, .sb-iv-actual { font-size: 12.5px; }
+.sb-iv-level { min-width: 46px; text-align: center; font-variant-numeric: tabular-nums; font-size: 12.5px; opacity: 0.85; }
+.sb-iv-error { position: absolute; top: 50%; left: 0; right: 0; text-align: center; opacity: 0.8; }
+@media (max-width: 420px) { .sb-iv-actual { display: none; } }

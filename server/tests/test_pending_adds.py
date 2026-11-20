@@ -245,3 +245,16 @@ def test_the_annotate_route_queues_and_refuses(api):
     assert status == 400 and "colour" in body["error"]
     assert api("POST", "/zotero/annotate", {"key": "ABCD2345", "annotation": HIGHLIGHT}, {"Sec-Fetch-Site": "cross-site"})[0] == 403
     assert "/zotero/annotate" not in http_api.AGENT_ROUTES
+
+
+def test_an_add_can_name_its_collection_for_the_plugin_to_find_or_make(env):
+    [result] = pending_adds.add_papers([PAPER], None, "Liked", collection_name="To classify")
+    assert result["status"] == "queued"
+    queued = json.loads(pending_adds._path().read_text())[0]
+    assert queued["collection_name"] == "To classify" and queued["tag"] == "Liked" and queued["collection"] is None
+
+
+def test_the_add_route_passes_a_collection_name(api):
+    status, body = api("POST", "/zotero/add", {"papers": [PAPER], "tag": "Liked", "collection_name": "To classify"})
+    assert status == 200 and body["results"][0]["status"] == "queued"
+    assert json.loads(pending_adds._path().read_text())[0]["collection_name"] == "To classify"

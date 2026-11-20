@@ -76,6 +76,10 @@
 .sbw-today-sources { margin-left: var(--sbw-s3); }
 .sbw-today-chat[hidden] + .sbw-today-sources { margin-left: auto; }
 .sbw-today-sources + .sbw-layout { margin-left: var(--sbw-s3); }
+/* Run now follows Sources at the same spacing; while it runs (disabled) it reads as text, not a button. */
+.sbw-today-run { margin-left: var(--sbw-s3); }
+.sbw-today-run + .sbw-layout { margin-left: var(--sbw-s3); }
+.sbw-today-run:disabled { cursor: default; background: none; }
 
 @media (max-width: 699px) {
   .sbw-src-hero { flex-direction: column; align-items: flex-start; gap: var(--sbw-s3); }

@@ -4,10 +4,12 @@
 import { spawn as nodeSpawn } from 'node:child_process';
 import { promises as fsp, constants as fsConstants } from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import http from 'node:http';
 import readline from 'node:readline';
 import { randomBytes } from 'node:crypto';
 import { errorMessage, errorField } from '../errors.js';
+import { resolveWindowsCommand } from './windows-command.mjs';
 
 function wrapChild(child) {
   let stderrTail = '';
@@ -44,12 +46,28 @@ function wrapChild(child) {
   };
 }
 
+/** A command that was not started (a refused Windows shim): it reads like any child that died at once. */
+function failedChild(message) {
+  return {
+    pid: undefined,
+    lines() { return { async *[Symbol.asyncIterator]() {} }; },
+    async write() {},
+    async closeInput() {},
+    stderrTail() { return `${message}\n`; },
+    async kill() {},
+    exited: Promise.resolve(127),
+  };
+}
+
 async function exists(filePath) {
   try { await fsp.access(filePath, fsConstants.F_OK); return true; } catch { return false; }
 }
 
 /** @returns {import("../platform").Platform} */
-export function createNodePlatform({ homeDir = process.env.HOME ?? '' } = {}) {
+/** `system` and `env` stand in for process.platform and process.env in tests (spec 024 G2: Windows and Linux too). */
+export function createNodePlatform({ homeDir = os.homedir(), system = process.platform, env = process.env } = {}) {
+  // Windows finds `claude` as claude.cmd and `node` as node.exe: a bare name is tried with each PATHEXT extension.
+  const extensions = system === 'win32' ? ['', ...(env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean).map((e) => e.toLowerCase())] : [''];
   let server = null;
   let serverPort = null;
   const routes = new Map();
@@ -83,28 +101,43 @@ export function createNodePlatform({ homeDir = process.env.HOME ?? '' } = {}) {
     serverPort = address.port;
   }
 
+  /** @param {string[]} candidates */
+  async function which(candidates) {
+    for (const candidate of candidates) {
+      if (!candidate) continue;
+      if (path.isAbsolute(candidate) || candidate.includes('/') || candidate.includes(path.sep)) {
+        if (await exists(candidate)) return candidate;
+        continue;
+      }
+      const named = path.extname(candidate) ? [''] : extensions;
+      for (const dir of (env.PATH ?? env.Path ?? '').split(system === 'win32' ? ';' : ':')) {
+        for (const ext of named) {
+          const full = path.join(dir, candidate + ext);
+          if (dir && await exists(full)) return full;
+        }
+      }
+    }
+    return null;
+  }
+
   return {
     async spawn(spec) {
+      if (system === 'win32') {
+        // claude.cmd, codex.cmd, npx.cmd: Node will not start these without a shell (windows-command.mjs)
+        const launch = await resolveWindowsCommand(spec, { which });
+        if ('refused' in launch) return failedChild(launch.refused);
+        const child = nodeSpawn(launch.cmd, launch.args, { cwd: spec.cwd, env: { ...process.env, ...spec.env }, shell: launch.shell });
+        return wrapChild(child);
+      }
       const child = nodeSpawn(spec.cmd, spec.args, { cwd: spec.cwd, env: { ...process.env, ...spec.env } });
       return wrapChild(child);
     },
 
-    async which(candidates) {
-      for (const candidate of candidates) {
-        if (!candidate) continue;
-        if (candidate.includes(path.sep) || candidate.startsWith('/')) {
-          if (await exists(candidate)) return candidate;
-          continue;
-        }
-        for (const dir of (process.env.PATH ?? '').split(path.delimiter)) {
-          const full = path.join(dir, candidate);
-          if (await exists(full)) return full;
-        }
-      }
-      return null;
-    },
+    which,
 
     fetch,
+
+    slowFetch,
 
     fs: {
       async read(filePath) {
@@ -139,7 +172,11 @@ export function createNodePlatform({ homeDir = process.env.HOME ?? '' } = {}) {
       async symlink(target, filePath) {
         await fsp.mkdir(path.dirname(filePath), { recursive: true });
         try { await fsp.symlink(target, filePath); }
-        catch (error) { if (errorField(error, 'code') !== 'EEXIST') throw error; }
+        catch (error) {
+          // Windows makes symlinks only in Developer Mode or as admin: a copy of the file then stands in for the link.
+          if (errorField(error, 'code') === 'EPERM' && system === 'win32') await fsp.copyFile(target, filePath);
+          else if (errorField(error, 'code') !== 'EEXIST') throw error;
+        }
       },
     },
 
@@ -153,5 +190,33 @@ export function createNodePlatform({ homeDir = process.env.HOME ?? '' } = {}) {
     },
 
     homeDir,
+    os: system,
   };
+}
+
+/**
+ * A fetch for one long request to the library server: Node's fetch fails with "fetch failed" when a reply's headers
+ * take over 300 s, and a radar calibration (or reading 40 papers whole) takes longer while the server reads PDFs. Only
+ * what library-http.js uses: method, headers, a string body, signal; ok, status, json(), text().
+ * @param {string | URL} url @param {{ method?: string, headers?: Record<string, string>, body?: string, signal?: AbortSignal }} [init]
+ * @returns {Promise<any>}
+ */
+export function slowFetch(url, init = {}) {
+  return new Promise((resolve, reject) => {
+    if (init.signal?.aborted) { reject(new Error('The request was aborted')); return; }
+    const req = http.request(new URL(String(url)), { method: init.method ?? 'GET', headers: init.headers ?? {} }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('error', reject);
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        const status = res.statusCode ?? 0;
+        resolve({ ok: status >= 200 && status < 300, status, text: async () => text, json: async () => JSON.parse(text) });
+      });
+    });
+    req.setTimeout(0); // no idle limit: the caller's own timer (library-http.js) decides when to give up
+    init.signal?.addEventListener('abort', () => req.destroy(new Error('The request was aborted')), { once: true });
+    req.on('error', reject);
+    req.end(init.body);
+  });
 }

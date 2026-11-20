@@ -63,6 +63,23 @@ export function scopeKey(ref) {
 }
 
 /**
+ * Spec 030 R11: in a thread, a web link the answer cites is not made up when the thread already holds it: a row of one
+ * of its paper sets (a Find search, a report's papers) or a link an earlier answer of the thread resolved. Such an
+ * `unknown` web citation is resolved (not as retrieved this turn); everything else is left as the validator said.
+ * @param {import("./domain").Citation[]} citations
+ * @param {Map<string, string>} known scopeKey → title, from the thread
+ * @returns {import("./domain").Citation[]}
+ */
+export function rescueFromThread(citations, known) {
+  if (!known.size) return citations;
+  return citations.map((c) => {
+    if (c.status !== 'unknown' || c.ref.kind !== 'web') return c;
+    const title = known.get(scopeKey(c.ref));
+    return title === undefined ? c : { ref: c.ref, status: 'resolved', title, retrievedThisTurn: false };
+  });
+}
+
+/**
  * spec 007 §6: a `chat_papers` answer may only cite the papers of its subset. A citation inside the subset resolves
  * (a library paper through the library, an outside paper by its DOI link, both without needing a tool call this
  * turn); any other citation is flagged `unknown`, the validator's existing "unresolved" path, whatever the library says.

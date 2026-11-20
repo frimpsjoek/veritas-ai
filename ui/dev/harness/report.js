@@ -55,7 +55,9 @@ const REPORT = {
   themes: [{ heading: 'Diet', body: 'Voles rely on bark [@vole2020].' }],
   evidence: [
     { claim: 'Voles eat mostly bark in winter', sources: ['vole2020'], strength: 'strong', cells: [{ row: 'p:vole2020', column: 'main_findings' }, { row: 'p:vole2020', column: 'sample_size' }] },
-    { claim: 'Snow depth matters', sources: ['snow2018'], strength: 'moderate', cells: [{ row: 'p:snow2018', column: 'sample_size' }] },
+    { claim: 'Snow depth matters', sources: ['snow2018'], strength: 'moderate', cells: [{ row: 'p:snow2018', column: 'sample_size' }],
+      // spec 030 R9: a paper outside the library, cited by its link
+      links: [{ url: 'https://doi.org/10.9999/burrows', title: 'Burrows under deep snow', year: 2019 }] },
   ],
   disagreements: 'None found.', gaps: 'Few long-term studies.',
   references: [{ citekey: 'vole2020', doi: null, url: null, title: 'Winter diets of field voles', year: 2020, inLibrary: true }, { citekey: 'snow2018', doi: null, url: null, title: 'Snow cover and burrowing', year: 2018, inLibrary: true }],
@@ -93,7 +95,11 @@ export const STATES = {
   planning: { ...base, status: { state: 'awaiting_approval', plan: PLAN }, lines: [LINES.clarify], counts: null },
   searching: { ...base, status: { state: 'running', stage: 'search', agents: [{ subQuestion: 'sq1', state: 'done' }, { subQuestion: 'sq2', state: 'running' }] }, lines: [LINES.clarify, LINES.plan], counts: null },
   extracting: { ...base, status: { state: 'running', stage: 'extract', agents: [] }, lines: [LINES.clarify, LINES.plan, LINES.search], counts: { candidates: 12, included: 9, excluded: 3, extracted: 0 } },
-  done: { ...base, status: { state: 'done', notePath: 'ai_notes/Winter foraging.md' }, lines: [], counts: { candidates: 12, included: 2, excluded: 10, extracted: 2 }, report: REPORT, table: TABLE },
+  done: { ...base, status: { state: 'done', notePath: 'ai_notes/Winter foraging.md' }, lines: [], counts: { candidates: 12, included: 2, excluded: 10, extracted: 2 }, report: REPORT, table: TABLE,
+    // spec 031 R5/R6: outside papers, one with a free copy, one behind a paywall, one with no DOI
+    outside: [{ citekey: null, doi: '10.9999/open.burrows', url: null, title: 'Burrows under deep snow', year: 2019, inLibrary: false },
+      { citekey: null, doi: '10.9999/paywall.vole', url: null, title: 'Vole teeth and bark', year: 2016, inLibrary: false },
+      { citekey: null, doi: null, url: 'https://zoo.example/notes', title: 'Field notes on voles', year: 2001, inLibrary: false }] },
   sysPlanning: { ...base, systematic: true, status: { state: 'awaiting_approval', plan: SYS_PLAN }, lines: [LINES.clarify], counts: null },
   searchLive: { ...base, status: { state: 'running', stage: 'search', agents: [{ subQuestion: 'sq1', state: 'running' }] }, lines: [LINES.clarify, LINES.plan, {
     id: 'search', icon: 'scholarly', title: 'Searching', detail: '2 searches · 1 read', state: 'running', reasoning: null,

@@ -1,0 +1,22 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "browse",
+  "description": "The web app from the local server (main webview only) drives Browse's tabs and hears their events (spec 027 G5).",
+  "webviews": ["main"],
+  "remote": { "urls": ["http://127.0.0.1:*/app/*", "http://127.0.0.1:*/app"] },
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-browse-available",
+    "allow-browse-open",
+    "allow-browse-show",
+    "allow-browse-hide",
+    "allow-browse-back",
+    "allow-browse-forward",
+    "allow-browse-reload",
+    "allow-browse-close",
+    "allow-browse-sign-out",
+    "allow-browse-save-pdf",
+    "allow-app-auto-update"
+  ]
+}

@@ -28,7 +28,7 @@ export interface PaperRow {
   title: string; authors: string[]; year: number | null; venue: string;
   doi: string | null; url: string | null; abstract: string;
   /** spec 012: set on a reading radar's rows, so "why is this here" has an answer. */
-  radar?: { key: string; score: number; why: import("./radar-types").RadarWhy; links: string[]; sources: string[]; date: string | null; reason?: string; /** One model line from the abstract (R4); absent when the model failed or there was no abstract. */ why_line?: string };
+  radar?: { key: string; score: number; why: import("./radar-types").RadarWhy; links: string[]; sources: string[]; date: string | null; reason?: string; /** Under the bar, shown to fill a short day. */ nearBar?: boolean; /** One model line from the abstract (R4); absent when the model failed or there was no abstract. */ why_line?: string };
   /** Where `abstract` came from, set by a review's search stage: "library" = read from the library itself; "unverified" =
    *  an outside paper's abstract as the researcher model transcribed it, never checked; "none" = nothing was returned.
    *  Missing on rows older than this field and on rows built elsewhere (Find papers, chat tables). */
@@ -38,6 +38,14 @@ export interface PaperRow {
   pdfUrl: string | null;
   studyType: StudyType | null;
   foundBy: string[];
+  /** Spec 031 R2: where a paper outside the library can be read, set when a report looked: a free PDF (`pdfUrl`), only
+   *  the publisher's page, or nothing found. */
+  access?: "open" | "publisher" | "none";
+  /** Spec 031 R3: other free copies, tried when `pdfUrl` refuses an automated download. */
+  pdfAlternates?: string[];
+  /** Spec 031 R4: what a report's extraction read this paper from: the library's text, a free copy's text, the
+   *  abstract, or nothing. */
+  readFrom?: "library" | "open_access" | "abstract" | "none";
 }
 
 export interface ColumnSpec {
@@ -284,8 +292,16 @@ export type ConversationRecord =
   | { type: "project"; project: ProjectId | null; at: string }
   /** The user opened the chat. Routine news older than this is not news. Written by `conversations.markSeen`, only when there is some. */
   | { type: "seen"; at: string }
+  /** These rows of a routine's papers were opened (from Home's issue or the digest table): each is one less paper of
+   *  news. Written by `conversations.markViewed`, only for rows not already viewed and only while there is news. */
+  | { type: "viewed"; rows: RowId[]; at: string }
+  /** A radar issue redone: `by` is the session that replaced it; the store lists this one nowhere. */
+  | { type: "replaced"; by: string; at: string }
   /** A routine run put `added` papers into this session (a new version of its table, or the report a new session holds). */
   | { type: "routine_run"; routine: string; added: number; at: string;
+      /** The rows it added, when they are rows of a papers result (not a digest's report): viewing any other row (a
+       *  radar's "Worth reading") is not news read. Runs written before this field count any viewed row. */
+      rows?: RowId[];
       /** A radar run's top paper, for its Home cover: the title and "first author, venue". */
       top?: { title: string; by?: string } }
   | { type: "user"; text: string; attachments: Attachment[]; web: WebMode; sources?: Sources;
@@ -361,6 +377,8 @@ export type RoutineTarget = { kind: "artifact"; session: string; result: { id: s
 export interface RoutineRun {
   at: string; slot: string | null; status: "done" | "failed" | "skipped"; reason?: string; added?: number;
   session?: string; review?: string; writes?: ResultRef[]; summary?: string;
+  /** Which try at its slot a scheduled run was; a run the user started has none. */
+  tries?: number;
 }
 export interface Routine {
   /** The project a new session each run starts in. Unknown or deleted means none. Artifact routines use their session's. */
@@ -374,6 +392,8 @@ export interface Routine {
   /** ISO of the last run that finished "done"; the next watch run searches from the day before it. */
   lastDone?: string | null;
   lastRun: RoutineRun | null; notify: boolean;
+  /** Redo today (radar): the window of the issue being rebuilt and that issue's session; cleared when the run ends. */
+  redo?: { since: string; replaces: string };
   /** spec 012: missing means today's behaviour (a watch when `target` is an artifact, else a digest). */
   kind?: "watch" | "digest" | "radar";
   /** Present when `kind` is "radar". */
@@ -472,9 +492,12 @@ export interface Screened { findings: Finding[]; sources: Source[]; outside: Sou
 
 /** A pipeline-2 evidence entry points at the table cells it rests on (spec 007 §2.1). */
 export interface CellRef { row: RowId; column: ColumnId }
+export interface EvidenceLink { url: string; title: string; year: number | null }
 export interface Report {                                        // writer output, schema-validated
   title: string; scope: string; method: string; themes: { heading: string; body: string }[];
-  evidence: { claim: string; sources: Citekey[]; strength: "weak" | "moderate" | "strong"; cells?: CellRef[]; unverified?: boolean }[];
+  evidence: { claim: string; sources: Citekey[]; strength: "weak" | "moderate" | "strong"; cells?: CellRef[]; unverified?: boolean;
+    /** Spec 030 R9: the papers outside the library the claim rests on, by link (they have no citekey). */
+    links?: EvidenceLink[] }[];
   disagreements: string; gaps: string; references: Source[];
   /** Set when a skill shaped the report: markdown in the skill's own form, citing papers as [@citekey]. themes/evidence are then empty. */
   body?: string;
@@ -500,6 +523,8 @@ export interface ReviewProgress {
   systematic?: boolean;
   /** spec 011 U5, from request.json: the project this report belongs to. */
   project?: ProjectId;
+  /** spec 030 R6, from request.json: the session this review is a step of (it is listed as that session). */
+  session?: SessionId;
   /** spec 011 U3, from request.json: the skills this review runs with and the hash of each SKILL.md; `notice` when one was cut. */
   skills?: { name: string; hash: string; notice?: string }[];
   /** spec 011 U1: the latest provider rate-limit notice seen while this review ran ("Codex: 63% of the 5h window used"), for one quiet line in the report. */

@@ -56,6 +56,9 @@ SecondBrain.AgentHost = class {
 			const pref = Zotero.Prefs.get("extensions.secondbrain.openalexKey", true) || null;
 			if (pref && !engine) await runtime.settings.update({ openalex: { apiKey: pref } });
 			else if (engine && !pref) Zotero.Prefs.set("extensions.secondbrain.openalexKey", engine, true);
+			// spec 031 D3: the email Unpaywall asks for, set once here, is what the engine's free-copy finder uses too
+			const email = Zotero.Prefs.get("extensions.secondbrain.email", true) || null;
+			if (email && !(await runtime.settings.get()).papers?.email) await runtime.settings.update({ papers: { email } });
 		} catch (error) { /* the server is not running; next time */ }
 	}
 

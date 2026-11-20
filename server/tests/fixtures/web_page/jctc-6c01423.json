@@ -1,0 +1,473 @@
+{
+ "_note": "OpenAlex and Crossref answers for 10.1021/acs.jctc.6c01423, fetched 2026-10-29, trimmed to the fields web_page reads",
+ "openalex": {
+  "title": "Multipolar Polarizabilities in Materials: Ab Initio Calculations with Wannier Functions",
+  "display_name": "Multipolar Polarizabilities in Materials: Ab Initio Calculations with Wannier Functions",
+  "authorships": [
+   {
+    "author": {
+     "display_name": "Diem Thi-Xuan Dang"
+    }
+   },
+   {
+    "author": {
+     "display_name": "Dai-Nam Le"
+    }
+   },
+   {
+    "author": {
+     "display_name": "Lilia M. Woods"
+    }
+   }
+  ],
+  "abstract_inverted_index": {
+   "Abstract": [
+    0
+   ],
+   "We": [
+    1
+   ],
+   "develop": [
+    2
+   ],
+   "a": [
+    3
+   ],
+   "first-principles": [
+    4
+   ],
+   "approach": [
+    5,
+    78
+   ],
+   "based": [
+    6,
+    32
+   ],
+   "on": [
+    7,
+    33
+   ],
+   "maximally": [
+    8
+   ],
+   "localized": [
+    9
+   ],
+   "Wannier": [
+    10
+   ],
+   "functions": [
+    11
+   ],
+   "for": [
+    12,
+    142
+   ],
+   "the": [
+    13,
+    38,
+    70,
+    85,
+    143
+   ],
+   "calculation": [
+    14
+   ],
+   "of": [
+    15,
+    37,
+    41,
+    88,
+    145
+   ],
+   "higher": [
+    16
+   ],
+   "order": [
+    17
+   ],
+   "multipolar": [
+    18,
+    146
+   ],
+   "response": [
+    19,
+    147
+   ],
+   "properties": [
+    20
+   ],
+   "in": [
+    21,
+    74,
+    148
+   ],
+   "crystals": [
+    22
+   ],
+   "including": [
+    23,
+    92,
+    132
+   ],
+   "dipole–quadrupole,": [
+    24
+   ],
+   "quadrupole–quadrupole,": [
+    25
+   ],
+   "and": [
+    26,
+    43,
+    66,
+    83,
+    99,
+    102,
+    107,
+    124,
+    137
+   ],
+   "dipole-octupole": [
+    27
+   ],
+   "polarizabilities.": [
+    28
+   ],
+   "The": [
+    29,
+    77,
+    110,
+    126
+   ],
+   "method": [
+    30
+   ],
+   "is": [
+    31,
+    45,
+    79
+   ],
+   "an": [
+    34
+   ],
+   "interpolation": [
+    35
+   ],
+   "procedure": [
+    36
+   ],
+   "electronic": [
+    39
+   ],
+   "structure": [
+    40
+   ],
+   "materials,": [
+    42,
+    91
+   ],
+   "it": [
+    44
+   ],
+   "formulated": [
+    46
+   ],
+   "by": [
+    47
+   ],
+   "extending": [
+    48
+   ],
+   "molecular": [
+    49
+   ],
+   "perturbation": [
+    50
+   ],
+   "theory": [
+    51
+   ],
+   "to": [
+    52,
+    60,
+    67,
+    81,
+    116,
+    122
+   ],
+   "periodic": [
+    53
+   ],
+   "crystals.": [
+    54
+   ],
+   "General": [
+    55
+   ],
+   "symmetry": [
+    56
+   ],
+   "considerations": [
+    57
+   ],
+   "are": [
+    58,
+    113
+   ],
+   "used": [
+    59
+   ],
+   "determine": [
+    61
+   ],
+   "relations": [
+    62
+   ],
+   "between": [
+    63
+   ],
+   "different": [
+    64
+   ],
+   "components": [
+    65
+   ],
+   "prove": [
+    68
+   ],
+   "that": [
+    69
+   ],
+   "dipole–quadrupole": [
+    71
+   ],
+   "polarizability": [
+    72
+   ],
+   "vanishes": [
+    73
+   ],
+   "centrosymmetric": [
+    75,
+    93
+   ],
+   "systems.": [
+    76
+   ],
+   "applied": [
+    80
+   ],
+   "compute": [
+    82
+   ],
+   "analyze": [
+    84
+   ],
+   "multipole–multipole": [
+    86,
+    111
+   ],
+   "polarizabilities": [
+    87,
+    112
+   ],
+   "several": [
+    89,
+    130
+   ],
+   "representative": [
+    90
+   ],
+   "systems": [
+    94
+   ],
+   "(bulk": [
+    95,
+    105
+   ],
+   "graphite,": [
+    96
+   ],
+   "h-BN,": [
+    97
+   ],
+   "MoS2,": [
+    98
+   ],
+   "2H-phase": [
+    100
+   ],
+   "WTe2)": [
+    101
+   ],
+   "noncentrosymmetric": [
+    103
+   ],
+   "ones": [
+    104
+   ],
+   "Td–WTe2": [
+    106
+   ],
+   "bulk": [
+    108
+   ],
+   "Te).": [
+    109
+   ],
+   "further": [
+    114
+   ],
+   "related": [
+    115
+   ],
+   "optical": [
+    117
+   ],
+   "gyration": [
+    118
+   ],
+   "with": [
+    119
+   ],
+   "specific": [
+    120
+   ],
+   "application": [
+    121
+   ],
+   "Te": [
+    123
+   ],
+   "Td–WTe2.": [
+    125
+   ],
+   "proposed": [
+    127
+   ],
+   "algorithm": [
+    128
+   ],
+   "possesses": [
+    129
+   ],
+   "advantages,": [
+    131
+   ],
+   "conceptual": [
+    133
+   ],
+   "simplicity,": [
+    134
+   ],
+   "computational": [
+    135,
+    140
+   ],
+   "efficiency,": [
+    136
+   ],
+   "relatively": [
+    138
+   ],
+   "low": [
+    139
+   ],
+   "cost": [
+    141
+   ],
+   "computation": [
+    144
+   ],
+   "materials.": [
+    149
+   ]
+  },
+  "best_oa_location": null,
+  "locations": [
+   {
+    "is_oa": false,
+    "pdf_url": null,
+    "landing_page_url": "https://doi.org/10.1021/acs.jctc.6c01423",
+    "version": "publishedVersion"
+   }
+  ],
+  "primary_location": {
+   "is_oa": false,
+   "landing_page_url": "https://doi.org/10.1021/acs.jctc.6c01423",
+   "pdf_url": null,
+   "source": {
+    "display_name": "Journal of Chemical Theory and Computation"
+   }
+  },
+  "publication_date": "2026-10-28",
+  "publication_year": 2026,
+  "biblio": {
+   "volume": null,
+   "issue": null,
+   "first_page": null,
+   "last_page": null
+  },
+  "open_access": {
+   "is_oa": false,
+   "oa_status": "closed",
+   "oa_url": null,
+   "any_repository_has_fulltext": false
+  }
+ },
+ "crossref": {
+  "status": "ok",
+  "message": {
+   "DOI": "10.1021/acs.jctc.6c01423",
+   "title": [
+    "Multipolar Polarizabilities\nin Materials:\n                    <i>Ab Initio</i>\n                    Calculations with Wannier\nFunctions"
+   ],
+   "container-title": [
+    "Journal of Chemical Theory\nand Computation"
+   ],
+   "published": {
+    "date-parts": [
+     [
+      2026,
+      10,
+      28
+     ]
+    ]
+   },
+   "published-online": {
+    "date-parts": [
+     [
+      2026,
+      10,
+      28
+     ]
+    ]
+   },
+   "issued": {
+    "date-parts": [
+     [
+      2026,
+      10,
+      28
+     ]
+    ]
+   },
+   "abstract": "<jats:title>Abstract</jats:title>\n                  <jats:p>We develop a first-principles approach based on maximally localized Wannier functions for the calculation of higher order multipolar response properties in crystals including dipole–quadrupole, quadrupole–quadrupole, and dipole-octupole polarizabilities. The method is based on an interpolation procedure of the electronic structure of materials, and it is formulated by extending molecular perturbation theory to periodic crystals. General symmetry considerations are used to determine relations between different components and to prove that the dipole–quadrupole polarizability vanishes in centrosymmetric systems. The approach is applied to compute and analyze the multipole–multipole polarizabilities of several representative materials, including centrosymmetric systems (bulk graphite, h-BN, MoS2, and 2H-phase WTe2) and noncentrosymmetric ones (bulk Td–WTe2 and bulk Te). The multipole–multipole polarizabilities are further related to optical gyration with specific application to Te and Td–WTe2. The proposed algorithm possesses several advantages, including conceptual simplicity, computational efficiency, and relatively low computational cost for the computation of multipolar response in materials.</jats:p>",
+   "author": [
+    {
+     "given": "Diem Thi-Xuan",
+     "family": "Dang"
+    },
+    {
+     "given": "Dai-Nam",
+     "family": "Le"
+    },
+    {
+     "given": "Lilia M.",
+     "family": "Woods"
+    }
+   ]
+  }
+ }
+}

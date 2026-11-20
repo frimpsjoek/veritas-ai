@@ -234,12 +234,17 @@ SecondBrain.createZoteroHost = function createZoteroHost(sb, win, opts = {}) {
 				failed: results.failed ?? [],
 			};
 		},
-		async addToLibrary(papers) {
+		async addToLibrary(papers, options) {
 			const discover = new SecondBrain.Discover(sb);
 			const items = [];
+			// a liked paper (Settings > Reading radar): tagged, and in a top-level collection found or made by name
+			const named = options?.collectionName ? await SecondBrain.PendingAdds.collectionNamed(options.collectionName) : null;
 			for (const paper of papers) {
 				try {
-					const item = await discover.add(paper);
+					const item = await discover.add(paper, named ? { collections: [named.id] } : undefined);
+					if (named && !item.inCollection(named.id)) item.addToCollection(named.id);
+					if (options?.tag && !item.hasTag(options.tag)) item.addTag(options.tag);
+					if (named || options?.tag) await item.saveTx();
 					items.push({ key: item.key, citekey: item.getField("citationKey") || item.key });
 				} catch (error) {
 					Zotero.logError(error);

@@ -5,6 +5,11 @@
 set -e
 cd "$(dirname "$0")"
 step() { printf '\n== %s\n' "$1"; }
+# The server's Python: its venv (bin/ on macOS and Linux, Scripts/ on Windows), else the system's.
+if [ -x server/.venv/bin/python ]; then PY="$PWD/server/.venv/bin/python"
+elif [ -x server/.venv/Scripts/python.exe ]; then PY="$PWD/server/.venv/Scripts/python.exe"
+elif command -v python3 >/dev/null && python3 -c '' 2>/dev/null; then PY=python3
+else PY=python; fi
 
 step "tools: boundary check tests + repo scan"
 node --test tools/*.test.mjs
@@ -19,31 +24,51 @@ step "ui: tests + typecheck"
 step "web: tests + typecheck + build"
 (cd web && npm ci --silent && npm test && npm run typecheck && npm run build)
 
+step "obsidian: typecheck + tests + build"
+# styles.css is generated from ui's CSS but committed (Obsidian loads it as is): build it to a temp file and
+# compare, so the check never rewrites the tracked copy.
+styles=$(mktemp)
+(cd obsidian && npm ci --silent && npx tsc -p . && npm test && STYLES_OUT="$styles" node esbuild.config.mjs)
+if ! cmp -s "$styles" obsidian/styles.css; then
+  rm -f "$styles"
+  echo "check.sh: obsidian/styles.css is out of date; rebuild it (cd obsidian && node esbuild.config.mjs) and commit it" >&2
+  exit 1
+fi
+rm -f "$styles"
+
+step "zotero: build + tests + package checks"
+(cd zotero && ./build.sh && node --test test/*.test.mjs)
+# Zotero loads these with loadSubScript, as classic scripts; `node --check` would parse them as modules
+# (package.json "type": "module") and let a stray import/export through.
+(cd zotero && for f in bootstrap.js content/*.js; do
+  node -e 'new (require("vm").Script)(require("fs").readFileSync(process.argv[1], "utf8"), { filename: process.argv[1] })' "$f"
+done)
+"$PY" -c "import xml.dom.minidom as m; m.parse('zotero/content/preferences.xhtml')"
+(cd zotero && version=$(node -p 'require("./manifest.json").version') && node -e 'const u = require("./dist/update.json"); const v = Object.values(u.addons)[0].updates[0].version; if (v !== process.argv[1]) { console.error(`update.json says ${v}`); process.exit(1); }' "$version")
+
+# After the Zotero build: the harness's digest and steps pages load zotero/content/sb-ui.js, which that build writes,
+# and the web pages load web/dist-web, which the web step builds.
 if [ -n "$VERITAS_BROWSER" ]; then
   step "ui: browser harness"
   (cd ui && node dev/run.mjs)
 fi
 
-step "obsidian: typecheck + tests + build"
-(cd obsidian && npm ci --silent && npx tsc -p . && npm test && node esbuild.config.mjs)
-# styles.css is generated from ui's CSS but committed (Obsidian loads it as is): the committed copy must be current.
-if git rev-parse --git-dir >/dev/null 2>&1 && ! git diff --quiet -- obsidian/styles.css; then
-  echo "check.sh: obsidian/styles.css is out of date; commit the rebuilt file" >&2
-  exit 1
-fi
-
-step "zotero: build + tests + package checks"
-(cd zotero && ./build.sh && node --test test/*.test.mjs)
-(cd zotero && for f in bootstrap.js content/*.js; do node --check "$f"; done)
-python3 -c "import xml.dom.minidom as m; m.parse('zotero/content/preferences.xhtml')"
-(cd zotero && version=$(node -p 'require("./manifest.json").version') && node -e 'const u = require("./dist/update.json"); const v = Object.values(u.addons)[0].updates[0].version; if (v !== process.argv[1]) { console.error(`update.json says ${v}`); process.exit(1); }' "$version")
-
 step "server: tests"
-if [ -x server/.venv/bin/python ]; then PY="$PWD/server/.venv/bin/python"; else PY=python3; fi
 if "$PY" -c "import pytest" 2>/dev/null; then
   (cd server && KB_BACKEND=onnx "$PY" -m pytest tests -q -p no:cacheprovider)
 else
   echo "check.sh: pytest not available (create server/.venv from server/requirements.txt); server tests skipped" >&2
+fi
+
+step "app: cargo check"
+# Only where the desktop app is built: it needs Rust and the sidecars (packaging/pyinstaller, packaging/sea), which
+# tauri-build looks for even to type-check.
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "check.sh: no cargo; app check skipped" >&2
+elif ! ls app/src-tauri/binaries/veritas-server-* app/src-tauri/binaries/agentd-* >/dev/null 2>&1; then
+  echo "check.sh: app sidecars not built (packaging/pyinstaller/build.sh, packaging/sea/build.mjs); app check skipped" >&2
+else
+  (cd app/src-tauri && cargo check --quiet)
 fi
 
 printf '\ncheck.sh: all parts passed\n'

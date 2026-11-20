@@ -3,29 +3,33 @@
 // -> validate) and the composition root, createLocalRuntime. One runtime per machine (module-map.md), so the
 // slot pool here is the only cross-host cap; it needs no cross-process locking.
 import { columnChangeUserText, columnChangeReply, gapFillUserText, gapFillReply } from './column-change.js';
-import { abstractsByDoi, searchSource } from './scholarly.js';
+import { abstractsByDoi, fillAbstracts, searchSource } from './scholarly.js';
+import { findOpenAccess, findOpenAccessAll, bareDoi, arxivIdOf } from './open-access.js';
 import { openAlexFetch } from './openalex.js';
 import { seedProfile, checkSource as checkRadarSource } from './radar-setup.js';
 import { estimateReport } from './estimate.js';
-import { validateCitations, extractCitationRefs, citationKey, restrictToRows } from './citations.js';
+import { validateCitations, extractCitationRefs, citationKey, restrictToRows, rescueFromThread, scopeKey } from './citations.js';
 import { conversationStore, ulid } from './store.js';
 import { eventLog } from './eventlog.js';
 import { runReview, reviewProgress, deriveStatus } from './review.js';
 import { papersResultFromReview, seedFromResult, screeningResult, SCREENING_RESULT_ID } from './review-session.js';
-import { countsOf, mergeCandidates, verifyCandidates, withIndexAbstracts } from './review2.js';
+import { countsOf, mergeCandidates, seededRows, verifyCandidates, withIndexAbstracts } from './review2.js';
 import { createRoutineScheduler } from './routine-scheduler.js';
 import { createRoutineStore } from './routine-store.js';
 import { createRadarStore, learningOf } from './radar-state.js';
 import { applyFeedback, forgetLearned, mergeLearned } from './radar-feedback.js';
 import { whyLines } from './radar-why.js';
+import { judgeFit } from './radar-judge.js';
 import { summaryLine, digestMarkdown, digestFile, sourceLabel } from './radar-digest.js';
-import { collectRadar } from './radar-run.js';
+import { collectRadar, abstractNet } from './radar-run.js';
 import { createProjectStore } from './project-store.js';
 import { validateDraft, dueSlot, nextRun as nextRunAt, planSince, newRows, changeLine as routineChangeLine, quotaAllows } from './routines.js';
 import { CANDIDATES_SCHEMA, candidatesPrompt, REPORT_CAPS } from './prompts.js';
 
 /** How much of a library paper's start a pipeline-2 screening or extraction turn reads (its abstract sits near the top). */
 const REVIEW_HEAD_CHARS = 4000;
+/** The cache key of a paper's free copy (spec 031): its DOI, else its arXiv id, else the copy's address. @param {import("./domain").PaperRow} row */
+const paperKey = (row) => (bareDoi(row.doi) ? `doi:${bareDoi(row.doi)}` : arxivIdOf(row) ? `arxiv:${arxivIdOf(row)}` : String(row.pdfUrl));
 import { renderReport } from './report.js';
 import { exportReport } from './export.js';
 import { mergeHostEvents, dedupeHostTools } from './merge.js';
@@ -33,11 +37,12 @@ import { syncEndpointProviders } from './providers/index.js';
 import { createSettingsStore, DEFAULT_TURN_WALL_CLOCK_MS, DEFAULT_TOOL_CALL_BUDGET, localRoleRefusal, viewSettings, viewMcpConfig } from './settings.js';
 import { createSecretStore } from './secrets.js';
 import { myPapers as findMyPapers, seedCategories, calibrateRadar } from './radar-seeds.js';
-import { rowIdFor, manifest, legacyView, isLegacy, nextStepId, nextResultId, manifestBlock, partialStepPath, subsetRows, chatPapersBlock, newsOf } from './sessions.js';
+import { rowIdFor, manifest, legacyView, isLegacy, nextStepId, nextResultId, manifestBlock, partialStepPath, subsetRows, chatPapersBlock, newsOf, viewedSince } from './sessions.js';
 import { CHAT_PAPERS_INSTRUCTIONS, LOCAL_INSTRUCTIONS, LOCAL_SMALL_TALK } from './prompts.js';
 import { retrievePassages, passagesFromSet, queryFor, passageBlock, notFoundAnswer, questionOf, isSmallTalk } from './local/retrieve.js';
-import { selectTargets, estimateStep, extractBatches, textFor, versionCells, changeLine, cellKey, errorText } from './extract.js';
+import { selectTargets, estimateStep, extractBatches, textFor, versionCells, changeLine, cellKey, errorText, FULL_TEXT_CHARS } from './extract.js';
 import { compactActivities } from './activity.js';
+import { createReadingListStore, addEntry, removeEntry, markEntry, newestFirst, addLiked, likedPapers, removeLiked, shownPaper } from './reading-list.js';
 import { createSkillStore, createFolderSkillSource, DRAFT_SCHEMA, draftPrompt, draftFromOutput } from './skills.js';
 import { TABLE_INSTRUCTIONS, TABLE_NOTICE, extractTableBlock, parseTable, buildTableResult, tableJsonToMarkdown } from './table.js';
 
@@ -526,6 +531,26 @@ export async function createLocalRuntime(deps) {
     return store.readResult(id, ref.id, version);
   }
 
+  /** Spec 030 R11: what a thread already holds that an answer may cite by link: the rows of its paper sets (newest
+   *  version of each) and the links its earlier answers resolved. scopeKey → title.
+   *  @param {string} id @param {{ results: any[] }} view @param {any[]} records @returns {Promise<Map<string, string>>} */
+  async function threadLinks(id, view, records) {
+    /** @type {Map<string, string>} */
+    const known = new Map();
+    for (const r of records) {
+      if (r.type !== 'assistant') continue;
+      for (const c of r.answer?.citations ?? []) if (c.status === 'resolved' && c.ref?.kind === 'web') known.set(scopeKey(c.ref), c.title ?? c.ref.url);
+    }
+    for (const summary of view.results.filter((r) => r.kind === 'papers')) {
+      const body = /** @type {any} */ (await readResultVersion(id, summary.ref).catch(() => null));
+      for (const row of body?.rows ?? []) {
+        if (row.ref) known.set(scopeKey(row.ref), row.title ?? '');
+        if (row.doi) known.set(`doi:${String(row.doi).toLowerCase()}`, row.title ?? '');
+      }
+    }
+    return known;
+  }
+
   // ---------- spec 007 E4: columns steps (extract.js) ----------
 
   // One event log per step (key "<session>/<step>"), so a chat can keep going in the same session while it runs.
@@ -877,7 +902,7 @@ export async function createLocalRuntime(deps) {
       return;
     }
     if (body?.kind !== 'papers') throw new Error(`${request.on.id} is not a paper set, so a report cannot start from it.`);
-    await deps.platform.fs.writeAtomic(reviewPath(id, 'candidates.json'), JSON.stringify({ rows: body.rows, searchLog: [] }));
+    await deps.platform.fs.writeAtomic(reviewPath(id, 'candidates.json'), JSON.stringify({ rows: seededRows(body.rows), searchLog: [] }));
   }
 
   function launchReview(id, request) {
@@ -910,6 +935,9 @@ export async function createLocalRuntime(deps) {
       settings: { autoApprove: Boolean(request.autoApprove) },
       library: deps.library,
       abstractsByDoi: (dois) => abstractsByDoi(net, dois),
+      // spec 031 R1, R2: abstracts for outside papers that came without one; a free copy of each kept outside paper
+      fillAbstracts: (papers) => fillAbstracts(net, papers, { lookups: 40 }),
+      openAccess: async (rows) => findOpenAccessAll(net, rows, { email: (await settingsStore.get()).papers?.email ?? null, signal: controller.signal }),
       extract: {
         workers: 3,
         // A library paper is read from the library itself, never from an abstract a researcher model copied (it may be
@@ -923,6 +951,16 @@ export async function createLocalRuntime(deps) {
               const text = got?.text?.trim();
               if (text) return { text: text.slice(0, REVIEW_HEAD_CHARS), from: /** @type {const} */ ('full_text') };
             } catch { /* falls back to the abstract the search returned */ }
+          }
+          // spec 031 R3: an outside paper with a free copy is read from it, as much of it as a library paper would be
+          if (mode !== 'abstract' && !row.inLibrary && row.access === 'open' && row.pdfUrl && deps.library.paperText) {
+            // the first copy a publisher refuses to a program (403), the next one is tried
+            for (const url of [row.pdfUrl, ...(row.pdfAlternates ?? [])]) {
+              try {
+                const text = (await deps.library.paperText({ url, key: paperKey(row) }))?.trim();
+                if (text) return { text: text.slice(0, mode === 'head' ? REVIEW_HEAD_CHARS : FULL_TEXT_CHARS), from: /** @type {const} */ ('full_text') };
+              } catch { /* the next copy, then the abstract */ }
+            }
           }
           return textFor(row, mode === 'head' ? 'abstract' : mode, read);
         },
@@ -1095,7 +1133,7 @@ export async function createLocalRuntime(deps) {
     /** @type {import("./domain").ActivityLine} */
     const line = { id: stepId, icon: 'scholarly', title: `Routine found ${rows.length} new ${rows.length === 1 ? 'paper' : 'papers'}`, detail: skipped ? `${skipped} already here` : null, state: 'done', items: [], reasoning: null };
     await store.append(session, { type: 'step_end', id: stepId, status: 'done', writes: [ref], line, at: now });
-    await store.append(session, { type: 'routine_run', routine: routine.id, added: rows.length, at: now });
+    await store.append(session, { type: 'routine_run', routine: routine.id, added: rows.length, rows: rows.map((r) => r.id), at: now });
     return withNote({ status: /** @type {const} */ ('done'), added: rows.length, writes: [ref], summary: change });
   }
 
@@ -1153,40 +1191,130 @@ export async function createLocalRuntime(deps) {
       phrases: { ...fresh.phrases, rotation: next.phrases.rotation, announce: fresh.phrases.announce.filter((a) => !announced.includes(a)) } });
   });
 
+  /** A redo asks every feed afresh: a feed answers "not modified" to the conditional request the last run's cache
+   *  makes, and the redo would read nothing. @param {import("./domain").Routine} routine */
+  async function radarState(routine) {
+    const state = await radarStore.read(routine.id);
+    return routine.redo ? { ...state, feedCache: {} } : state;
+  }
+
+  /** The calendar day of an ISO time on this computer's clock: "2026-10-29". @param {string} iso */
+  const localDay = (iso) => { const d = new Date(iso); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+
+  /** This radar's newest issue (a redone one is listed nowhere), or null. A chat about an issue carries the routine
+   *  too, so an issue is a session whose steps include a radar run. @param {string} routineId */
+  async function latestIssue(routineId) {
+    for (const c of await store.list()) {
+      if (c.routine !== routineId) continue;
+      const records = await store.load(c.id);
+      if (records.some((r) => r.type === 'step' && /** @type {any} */ (r).input?.kind === 'radar')) return { id: c.id, records };
+    }
+    return null;
+  }
+
+  /** This radar's issue begun today, when there is one; a redo starts a new issue instead.
+   *  @param {import("./domain").Routine} routine @param {string} now */
+  async function todaysIssue(routine, now) {
+    if (routine.redo) return null;
+    const issue = await latestIssue(routine.id);
+    const meta = /** @type {any} */ (issue?.records.find((r) => r.type === 'meta'));
+    return issue && meta?.created && localDay(meta.created) === localDay(now) ? issue.id : null;
+  }
+
+  /** After a redo: the old issue is hidden behind the new one (kept on disk, out of every list), and the routine
+   *  forgets the redo. A redo that found nothing keeps the old issue.
+   *  @param {import("./domain").Routine} routine @param {string | null} replacedBy @param {string} now */
+  async function finishRedo(routine, replacedBy, now) {
+    const redo = routine.redo;
+    if (!redo) return;
+    if (replacedBy && redo.replaces !== replacedBy) await store.append(/** @type {any} */ (redo.replaces), /** @type {any} */ ({ type: 'replaced', by: replacedBy, at: now }));
+    const current = await routineStore.read(routine.id);
+    if (current?.redo) { const { redo: _done, ...rest } = current; await routineStore.write(rest); }
+  }
+
+  /** Redo today's issue: forget the papers that issue showed (and those the profile check left out of it), keeping
+   *  every paper the user rated, then run again over the same window. @param {string} id */
+  async function redoRadar(id) {
+    const routine = await routineStore.read(id);
+    if (!routine || routine.kind !== 'radar') return { started: false, reason: 'Only a reading radar can redo its issue.' };
+    // The newest issue, not the last run's: a run that found nothing has no session of its own.
+    const issue = await latestIssue(id);
+    const session = issue?.id;
+    const records = issue?.records ?? [];
+    const meta = records.find((r) => r.type === 'meta');
+    const steps = /** @type {any[]} */ (records.filter((r) => r.type === 'step' && /** @type {any} */ (r).input?.kind === 'radar'));
+    const step = steps[0];
+    if (!session || !meta || !step?.input?.since) return { started: false, reason: 'There is no issue to redo yet.' };
+    if (routineScheduler.runningId()) return { started: false, reason: 'Another routine is running.' };
+    // Every run that added to the issue marked its papers seen at its own time (one issue a day can hold several).
+    const runs = new Set([/** @type {any} */ (meta).created, ...steps.map((s) => s.at)]);
+    await radarSerial(async () => {
+      const state = await radarStore.read(id);
+      const seen = Object.fromEntries(Object.entries(state.seen).filter(([, v]) => !(runs.has(v.at) && (v.verdict === 'shown' || v.verdict === 'off'))));
+      await radarStore.write(id, { ...state, seen });
+    });
+    await routineStore.write({ ...routine, redo: { since: step.input.since, replaces: session } });
+    const { started, reason } = await routineScheduler.runNow(id);
+    if (!started) { const { redo: _drop, ...rest } = routine; await routineStore.write(rest); }
+    return { started, ...(reason ? { reason } : {}) };
+  }
+
   /** A radar's digest: a new session holding a papers result titled "New" and, when the citation graph has any, one titled "Worth reading". The only model call writes the why lines.
    *  @returns {Promise<import("./routine-scheduler.js").RunResult>} */
   async function runRadar(/** @type {import("./domain").Routine} */ routine, /** @type {AbortSignal} */ signal) {
     const config = routine.radar;
     if (!config) return { status: /** @type {const} */ ('failed'), reason: 'This radar has no settings.' };
-    const since = planSince(routine, clock());
+    // Redo today: the same window as the issue it replaces, so the same papers are read again with today's rules.
+    const since = routine.redo?.since ?? planSince(routine, clock());
     const now = new Date(clock()).toISOString();
     let out;
+    const noTools = { scope: { kind: /** @type {const} */ ('library') }, web: /** @type {const} */ ('off'), sources: { papers: false, notes: false, scholarly: false, web: false }, audit: `radar-why:${routine.id}`, none: true };
+    // The profile check reads the best-ranked candidates and drops those outside the user's field before New is picked.
+    const judge = (/** @type {import("./radar-types").RadarItem[]} */ pool, /** @type {{ topics: string[], seeds: string[], rejected: string[], liked?: string[] }} */ profile) =>
+      judgeFit(pool, { ...profile, turn: (prompt, schema) => runner.structured('writer', prompt, schema, { ...noTools, audit: `radar-judge:${routine.id}` }, signal) });
     try {
-      out = await collectRadar({ config, since, now, fetch: net, library: deps.library, hub: deps.gateway.mcpServers, state: await radarStore.read(routine.id), signal, keyed: Boolean((await settingsStore.get()).openalex.apiKey?.trim()) });
+      out = await collectRadar({ config, since, now, fetch: net, library: deps.library, hub: deps.gateway.mcpServers, state: await radarState(routine), signal, keyed: Boolean((await settingsStore.get()).openalex.apiKey?.trim()), abstractFetch: abstractNet(net), judge });
     } catch (e) { return { status: /** @type {const} */ ('failed'), reason: `${errorText(e).replace(/\.$/, '')}.` }; }
-    const failures = out.failed.length ? ` (${out.failed.map((f) => `${f.source} failed: ${f.error}`).join('; ')})` : '';
+    // A calibration the run made is kept on the radar, read fresh: the scheduler re-reads the record after the run too.
+    if (out.threshold) {
+      const current = await routineStore.read(routine.id);
+      if (current?.radar) await routineStore.write({ ...current, radar: { ...current.radar, threshold: out.threshold } });
+    }
+    // a source that read less than its window is said too ("journal X: 300 of 812 fetched (its cap)")
+    const notes = [...out.failed.map((f) => `${f.source} failed: ${f.error}`), ...out.truncated];
+    const failures = notes.length ? ` (${notes.join('; ')})` : '';
     if (!out.picked.length) {
       await settleRadarState(routine.id, out.state, out.announced);
+      await finishRedo(routine, null, now);
       return { status: /** @type {const} */ ('done'), added: 0, summary: `Radar: nothing new above the bar${failures}` };
     }
 
     // One model call writes the "why read this" lines; without one the rows just have none.
-    const noTools = { scope: { kind: /** @type {const} */ ('library') }, web: /** @type {const} */ ('off'), sources: { papers: false, notes: false, scholarly: false, web: false }, audit: `radar-why:${routine.id}`, none: true };
     const why = await whyLines(out.picked, {
       topics: config.profile.topics.map((t) => t.text).slice(0, 12),
       turn: (prompt, schema) => runner.structured('writer', prompt, schema, noTools, signal),
     });
     const digest = summaryLine({ news: out.picked.length, older: out.older.length, discover: out.discover.length, learned: out.announced, skipped: out.discoverNote, answered: out.sourcesAnswered, failed: out.failed }, config);
 
-    const sessionId = /** @type {import("./domain").ConversationId} */ (ulid());
-    const project = routine.project && (await projectStore.read(routine.project)) ? routine.project : undefined;
-    await store.append(sessionId, { type: 'meta', id: sessionId, mode: 'chat', title: routine.name, created: now, routine: routine.id, ...(project ? { project } : {}) });
+    // One issue a day (2026-10-29): a later run the same day (Run now, a catch-up) adds its papers to today's issue
+    // as new versions of its results, rather than starting an issue of its own that hides the first behind it.
+    const today = await todaysIssue(routine, now);
+    const sessionId = today ?? /** @type {import("./domain").ConversationId} */ (ulid());
+    if (!today) {
+      const project = routine.project && (await projectStore.read(routine.project)) ? routine.project : undefined;
+      await store.append(sessionId, { type: 'meta', id: sessionId, mode: 'chat', title: routine.name, created: now, routine: routine.id, ...(project ? { project } : {}) });
+    }
     const records = await store.load(sessionId);
     const stepId = /** @type {import("./domain").StepId} */ (nextStepId(records));
-    const resultId = /** @type {import("./domain").ResultId} */ (nextResultId(records));
-    const ref = { id: resultId, version: 1 };
-    const change = `Radar: ${out.picked.length} new ${out.picked.length === 1 ? 'paper' : 'papers'} from ${out.sourcesAnswered} ${out.sourcesAnswered === 1 ? 'source' : 'sources'}${failures}`;
-    const taken = new Set();
+    const before = new Map(manifest(records).results.filter((r) => r.kind === 'papers').map((r) => [r.title, r]));
+    /** @type {Map<string, import("./domain").PaperRow[]>} */
+    const earlier = new Map();
+    for (const [title, r] of before) earlier.set(title, /** @type {any} */ (await store.readResult(sessionId, r.ref.id, r.ref.version))?.rows ?? []);
+    const screened = out.offProfile ? `; ${out.offProfile} outside your field left out` : out.judgeProblem ? `; profile check skipped (${out.judgeProblem})` : '';
+    const under = out.picked.filter((it) => it.nearBar).length;
+    const filled = under ? `; ${under} just under the bar` : '';
+    const change = `Radar: ${out.picked.length} new ${out.picked.length === 1 ? 'paper' : 'papers'} from ${out.sourcesAnswered} ${out.sourcesAnswered === 1 ? 'source' : 'sources'}${filled}${screened}${failures}`;
+    const taken = new Set([...earlier.values()].flat().map((r) => r.id));
     const rowsOf = (/** @type {import("./radar-types").RadarItem[]} */ items) => items.map((it, i) => {
       let id = rowIdFor(it, i);
       for (let n = 2; taken.has(id); n++) id = /** @type {any} */ (`${rowIdFor(it, i)}~${n}`);
@@ -1195,52 +1323,54 @@ export async function createLocalRuntime(deps) {
         id, ref: { kind: 'web', url: it.url }, inLibrary: false, title: it.title, authors: it.authors, year: it.year, venue: it.venue,
         doi: it.doi, url: it.url, abstract: it.abstract, abstractStatus: it.abstract ? 'source' : 'none', citations: it.cites ?? null, fullText: false,
         pdfUrl: it.arxiv ? `https://arxiv.org/pdf/${it.arxiv}` : null, studyType: null, foundBy: it.sources.map((id) => sourceLabel(id, config)),
-        radar: { key: it.id, score: it.score ?? 0, why: /** @type {any} */ (it.why), links: it.links, sources: it.sources, date: it.date, ...(it.reason ? { reason: it.reason } : {}), ...(why.lines.get(it.id) ? { why_line: why.lines.get(it.id) } : {}) },
+        radar: { key: it.id, score: it.score ?? 0, why: /** @type {any} */ (it.why), links: it.links, sources: it.sources, date: it.date, ...(it.reason ? { reason: it.reason } : {}), ...(it.nearBar ? { nearBar: true } : {}), ...(it.afield ? { afield: it.afield } : {}), ...(why.lines.get(it.id) ? { why_line: why.lines.get(it.id) } : {}) },
       });
     });
-    const rows = rowsOf(out.picked);
-    /** @type {import("./domain").PapersResult} */
-    const body = { kind: 'papers', ref, title: 'New', created: now, madeBy: stepId, from: [], change, query: null, rows, columns: [], cells: {}, screening: null, summary: null, addedRows: rows.map((r) => r.id), radar: { routine: routine.id, summary: digest } };
-    /** @type {import("./domain").ResultSummary} */
-    const summary = { ref, kind: 'papers', title: 'New', versions: 1, rows: rows.length, columns: [], updated: now };
-    await store.append(sessionId, { type: 'step', id: stepId, input: { kind: 'radar', routine: routine.id, since }, reads: [], at: now });
-    await store.writeResult(sessionId, ref.id, 1, body);
-    await store.append(sessionId, { type: 'result', summary, at: now });
-    const writes = [ref];
-    if (out.older.length) {
-      const olderRef = { id: /** @type {import("./domain").ResultId} */ (nextResultId(await store.load(sessionId))), version: 1 };
-      const olderRows = rowsOf(out.older);
-      const olderChange = `Worth reading: ${out.older.length} older ${out.older.length === 1 ? 'paper' : 'papers'} your library keeps citing${out.olderNote ? ` (${out.olderNote})` : ''}`;
+    /** @type {import("./domain").ResultRef[]} */
+    const writes = [];
+    /** Writes one group: a new result, or the next version of today's, its earlier rows first and this run's added.
+     *  @param {string} title @param {import("./domain").PaperRow[]} added @param {string} groupChange @returns {Promise<import("./domain").PaperRow[]>} */
+    const writeGroup = async (title, added, groupChange) => {
+      const prior = before.get(title);
+      const rows = [...(earlier.get(title) ?? []), ...added];
+      const ref = prior ? { id: prior.ref.id, version: prior.versions + 1 } : { id: /** @type {import("./domain").ResultId} */ (nextResultId(await store.load(sessionId))), version: 1 };
       /** @type {import("./domain").PapersResult} */
-      const olderBody = { kind: 'papers', ref: olderRef, title: 'Worth reading', created: now, madeBy: stepId, from: [], change: olderChange, query: null, rows: olderRows, columns: [], cells: {}, screening: null, summary: null, addedRows: olderRows.map((r) => r.id), radar: { routine: routine.id, summary: digest } };
-      await store.writeResult(sessionId, olderRef.id, 1, olderBody);
-      await store.append(sessionId, { type: 'result', summary: { ref: olderRef, kind: 'papers', title: 'Worth reading', versions: 1, rows: olderRows.length, columns: [], updated: now }, at: now });
-      writes.push(olderRef);
-    }
-    if (out.discover.length) {
-      const ref = { id: /** @type {import("./domain").ResultId} */ (nextResultId(await store.load(sessionId))), version: 1 };
-      const found = rowsOf(out.discover);
-      const change = `Might interest you: ${out.discover.length} ${out.discover.length === 1 ? 'paper' : 'papers'} no source you follow published${out.discoverNote ? ` (${out.discoverNote})` : ''}`;
-      /** @type {import("./domain").PapersResult} */
-      const foundBody = { kind: 'papers', ref, title: 'Might interest you', created: now, madeBy: stepId, from: [], change, query: null, rows: found, columns: [], cells: {}, screening: null, summary: null, addedRows: found.map((r) => r.id), radar: { routine: routine.id, summary: digest } };
-      await store.writeResult(sessionId, ref.id, 1, foundBody);
-      await store.append(sessionId, { type: 'result', summary: { ref, kind: 'papers', title: 'Might interest you', versions: 1, rows: found.length, columns: [], updated: now }, at: now });
+      const body = { kind: 'papers', ref, title, created: now, madeBy: stepId, from: [], change: groupChange, query: null, rows, columns: [], cells: {}, screening: null, summary: null, addedRows: added.map((r) => r.id), radar: { routine: routine.id, summary: digest } };
+      await store.writeResult(sessionId, ref.id, ref.version, body);
+      await store.append(sessionId, { type: 'result', summary: { ref, kind: 'papers', title, versions: ref.version, rows: rows.length, columns: [], updated: now }, at: now });
       writes.push(ref);
-    }
+      return rows;
+    };
+    await store.append(sessionId, { type: 'step', id: stepId, input: { kind: 'radar', routine: routine.id, since }, reads: [], at: now });
+    const rows = rowsOf(out.picked);
+    const issueRows = await writeGroup('New', rows, change);
+    const olderRows = rowsOf(out.older);
+    const issueOlder = out.older.length
+      ? await writeGroup('Worth reading', olderRows, `Worth reading: ${out.older.length} older ${out.older.length === 1 ? 'paper' : 'papers'} your library keeps citing${out.olderNote ? ` (${out.olderNote})` : ''}`)
+      : earlier.get('Worth reading') ?? [];
+    const found = rowsOf(out.discover);
+    const issueFound = out.discover.length
+      ? await writeGroup('Might interest you', found, `Might interest you: ${out.discover.length} ${out.discover.length === 1 ? 'paper' : 'papers'} no source you follow published${out.discoverNote ? ` (${out.discoverNote})` : ''}`)
+      : earlier.get('Might interest you') ?? [];
     /** @type {import("./domain").ActivityLine} */
     const line = { id: stepId, icon: 'scholarly', title: `Radar found ${rows.length} new ${rows.length === 1 ? 'paper' : 'papers'}${out.older.length ? ` and ${out.older.length} worth reading` : ''}${out.discover.length ? `${out.older.length ? ', ' : ' and '}${out.discover.length} that might interest you` : ''}`, detail: out.failed.length ? `${out.failed.length} source${out.failed.length === 1 ? '' : 's'} failed` : null, state: 'done', items: [], reasoning: null };
     await store.append(sessionId, { type: 'step_end', id: stepId, status: 'done', writes, line, at: now });
-    const lead = out.picked[0];
+    // The cover quotes the issue's best paper, whichever run found it.
+    const lead = [...issueRows].sort((a, b) => (b.radar?.score ?? 0) - (a.radar?.score ?? 0))[0];
     const by = [lead.authors?.[0], lead.venue].filter(Boolean).join(', ');
-    await store.append(sessionId, { type: 'routine_run', routine: routine.id, added: rows.length, top: { title: lead.title, ...(by ? { by } : {}) }, at: now });
+    await store.append(sessionId, { type: 'routine_run', routine: routine.id, added: rows.length, rows: rows.map((r) => r.id), top: { title: lead.title, ...(by ? { by } : {}) }, at: now });
     await settleRadarState(routine.id, out.state, out.announced);
+    await finishRedo(routine, sessionId, now);
     // The vault note is a copy for reading in Obsidian: failing to write it is reported on the run, never fatal.
     let noteProblem = null;
     if (config.note && deps.library.writeDigest) {
       try {
         const day = new Date(clock());
         const date = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
-        await deps.library.writeDigest(digestFile(date, routine.name), digestMarkdown({ name: routine.name, date, summary: digest, news: out.picked, older: out.older, discover: out.discover, lines: why.lines }));
+        // The note is the whole day's issue, so a second run rewrites it with the first run's papers kept.
+        const items = (/** @type {import("./domain").PaperRow[]} */ list) => list.map((r) => /** @type {import("./radar-types").RadarItem} */ (/** @type {any} */ ({ id: r.radar?.key ?? r.id, title: r.title, authors: r.authors, venue: r.venue, date: r.radar?.date ?? null, year: r.year, doi: r.doi, url: r.url, abstract: r.abstract, reason: r.radar?.reason })));
+        const lines = new Map([...issueRows, ...issueOlder, ...issueFound].flatMap((r) => (r.radar?.why_line ? [[r.radar?.key ?? r.id, r.radar.why_line]] : [])));
+        await deps.library.writeDigest(digestFile(date, routine.name), digestMarkdown({ name: routine.name, date, summary: digest, news: items(issueRows), older: items(issueOlder), discover: items(issueFound), lines: /** @type {Map<string, string>} */ (lines) }));
       } catch (e) { noteProblem = `The vault note was not written (${errorText(e).replace(/\.$/, '')}).`; }
     }
     return { status: /** @type {const} */ ('done'), added: rows.length, session: sessionId, writes, summary: [change, out.older.length ? `${out.older.length} worth reading` : '', out.discover.length ? `${out.discover.length} might interest you` : ''].filter(Boolean).join(', '), ...(noteProblem ? { reason: noteProblem } : {}) };
@@ -1313,7 +1443,11 @@ export async function createLocalRuntime(deps) {
       const slot = dueSlot(fields.schedule, at.getTime());
       const startOfToday = new Date(at.getFullYear(), at.getMonth(), at.getDate()).getTime();
       const lastSlot = slot != null && slot < startOfToday ? new Date(slot).toISOString() : null;
-      return routineStore.write({ id: ulid(), ...fields, created: now, updated: now, lastSlot, lastDone: null, lastRun: null, notify: false });
+      const routine = await routineStore.write({ id: ulid(), ...fields, created: now, updated: now, lastSlot, lastDone: null, lastRun: null, notify: false });
+      // A new radar is due at once (routine-scheduler dueNow): tick now rather than up to a minute later. The tick keeps
+      // every guard (grace, owner, one run at a time) and logs its own failures, so nothing waits on it here.
+      if (routine.kind === 'radar') void routineScheduler.tick();
+      return routine;
     },
     update: (id, patch) => radarSerial(async () => {
       const r = await routineOrThrow(id);
@@ -1331,6 +1465,7 @@ export async function createLocalRuntime(deps) {
       const { started, reason } = await routineScheduler.runNow(id);
       return { started, ...(reason ? { reason } : {}) };
     },
+    redo: (id) => redoRadar(id),
     pause: (id) => setRoutineStatus(id, 'paused'),
     resume: (id) => setRoutineStatus(id, 'active'),
     archive: (id) => setRoutineStatus(id, 'archived'),
@@ -1340,7 +1475,46 @@ export async function createLocalRuntime(deps) {
   // ---------- spec 011 U5: projects ----------
 
   const projectStore = createProjectStore(deps.platform.fs, deps.dataDir);
+  // Spec 028 R8: the Read later list. Every change reads the file fresh and writes it whole, one at a time.
+  const readingStore = createReadingListStore(deps.platform.fs, deps.dataDir, clock);
+  let readingQueue = Promise.resolve();
+  const readingSerial = (/** @type {() => Promise<any>} */ fn) => { const next = readingQueue.then(fn, fn); readingQueue = next.then(() => {}, () => {}); return next; };
+  /** @param {(list: import("./service").ReadingListEntry[], now: string) => { list: import("./service").ReadingListEntry[], changed: boolean }} change */
+  const changeReading = (change) => readingSerial(async () => {
+    const out = change(await readingStore.read(), new Date(clock()).toISOString());
+    if (out.changed) await readingStore.write(out.list);
+    return out;
+  });
   const SAFE_REVIEW_ID = /^[A-Za-z0-9_-]+$/;
+
+  // Spec 029 R9: a Like puts the paper on Read later; taking the Like back takes off what the Like put on. The verdict
+  // stands when the list could not be changed.
+  const verdictIn = (/** @type {import("./radar-types").RadarState} */ st, /** @type {string} */ key) =>
+    (st.shown[key]?.keys ?? [key]).map((k) => st.seen[k]?.verdict).find(Boolean) ?? null;
+  /** @param {import("./radar-types").RadarState} before @param {import("./radar-types").RadarState} after @param {string} key @param {string} now */
+  async function likeToReading(before, after, key, now) {
+    const shown = after.shown[key] ?? before.shown[key];
+    if (!shown) return;
+    const was = verdictIn(before, key), is = verdictIn(after, key);
+    try {
+      if (is === 'liked' && was !== 'liked') await changeReading((list) => addLiked(list, [{ paper: shownPaper(shown), at: now }]));
+      else if (was === 'liked' && is !== 'liked') await changeReading((list) => removeLiked(list, shownPaper(shown)));
+    } catch (error) { console.warn(`reading list: a Like could not change it (${/** @type {any} */ (error)?.message ?? error})`); }
+  }
+
+  // Spec 029 R10: the papers liked before Like did this go on the list once, the first time this engine reads it (a
+  // marker file beside the list says it was done, so a paper taken off by hand is not put back).
+  const LIKED_MARK = `${deps.dataDir}/reading-list-liked-imported.json`;
+  let likedImport = /** @type {Promise<void> | null} */ (null);
+  const importLikedOnce = () => (likedImport ??= (async () => {
+    try {
+      if ((await deps.platform.fs.read(LIKED_MARK)) != null) return;
+      const liked = [];
+      for (const r of await routineStore.list()) if (r.kind === 'radar') liked.push(...likedPapers(await radarStore.read(r.id)));
+      const out = await changeReading((list) => addLiked(list, liked));
+      await deps.platform.fs.writeAtomic(LIKED_MARK, JSON.stringify({ at: new Date(clock()).toISOString(), liked: liked.length, added: out.added }));
+    } catch (error) { likedImport = null; console.warn(`reading list: liked papers could not be added (${/** @type {any} */ (error)?.message ?? error})`); }
+  })());
 
   const projects = {
     list: () => projectStore.list(),
@@ -1386,6 +1560,21 @@ export async function createLocalRuntime(deps) {
         // Never earlier than the news itself, so a clock that runs behind cannot leave it unread.
         const now = new Date(clock()).toISOString();
         await store.append(id, { type: 'seen', at: now > news.at ? now : news.at });
+      },
+      async markViewed(id, rowIds) {
+        const records = await store.load(id);
+        const news = newsOf(records);
+        if (!news) return; // nothing unread: viewing a paper changes no count, so nothing is written
+        const viewed = viewedSince(records);
+        const rows = [...new Set((rowIds ?? []).map(String))].filter((row) => row && !viewed.has(row));
+        if (!rows.length) return;
+        // After the news it counts against (and after the last `seen`), even with a clock that runs behind.
+        const now = new Date(clock()).toISOString();
+        /** @type {import("./domain").ConversationRecord} */
+        const record = { type: 'viewed', rows: /** @type {import("./domain").RowId[]} */ (rows), at: now > news.at ? now : news.at };
+        // Rows that were never news (a radar's "Worth reading") change no count, so they are not written either.
+        if ((newsOf([...records, record])?.papers ?? 0) === news.papers) return;
+        await store.append(id, record);
       },
       remove: (id) => store.remove(id),
       adopt: (files) => store.adopt(files),
@@ -1513,7 +1702,8 @@ export async function createLocalRuntime(deps) {
               // spec 007 §1.6: an sb-table block becomes a `table` result before `done`, so a remote client (which
               // stops reading at `done`) still sees the `result` event.
               // The answer may cite only the papers of the subset; the rest is flagged before anything reads it.
-              const scoped = on ? { ...ev.answer, citations: restrictToRows(ev.answer.citations, scopeRows) } : ev.answer;
+              const scoped = on ? { ...ev.answer, citations: restrictToRows(ev.answer.citations, scopeRows) }
+                : { ...ev.answer, citations: rescueFromThread(ev.answer.citations, await threadLinks(id, view, priorRecords)) };
               const made = await finishTable(id, view, input, scoped, chat);
               if (made.summary) yield log.push(id, { type: 'result', summary: made.summary, step: made.stepId });
               const notice = [made.notice ?? ev.notice, skillNotice].filter(Boolean).join(' ') || undefined;
@@ -1736,10 +1926,13 @@ export async function createLocalRuntime(deps) {
       feedback: (routineId, paperKey, verdict) => radarSerial(async () => {
         const routine = await routineOrThrow(routineId);
         if (routine.kind !== 'radar' || !routine.radar) throw new Error('That routine is not a reading radar.');
-        const out = applyFeedback({ state: await radarStore.read(routineId), profile: routine.radar.profile, key: String(paperKey), verdict, now: new Date(clock()).toISOString() });
+        const before = await radarStore.read(routineId);
+        const now = new Date(clock()).toISOString();
+        const out = applyFeedback({ state: before, profile: routine.radar.profile, key: String(paperKey), verdict, now });
         if (out.changed) {
           await radarStore.write(routineId, out.state);
           if (out.profile !== routine.radar.profile) await routineStore.write({ ...routine, radar: { ...routine.radar, profile: out.profile } });
+          await likeToReading(before, out.state, String(paperKey), now);
         }
         return { verdict: out.verdict, changed: out.changed };
       }),
@@ -1774,6 +1967,30 @@ export async function createLocalRuntime(deps) {
           : await seedCategories(net, [...seeds.mine.map((m) => m.title), ...seeds.papers.map((k) => titles.get(k) ?? '')].filter(Boolean));
         const { threshold, problem } = await calibrateRadar({ fetch: net, library: deps.library, seeds: { ...seeds, categories } });
         return { categories, threshold, problem };
+      },
+    },
+
+    readingList: {
+      list: async () => { await importLikedOnce(); return newestFirst(await readingStore.read()); },
+      add: async (paper) => (await changeReading((list, now) => addEntry(list, paper, now))).entry,
+      remove: async (id) => ({ removed: (await changeReading((list) => removeEntry(list, String(id)))).changed }),
+      markRead: async (id, read = true) => (await changeReading((list, now) => markEntry(list, String(id), read !== false, now))).entry,
+    },
+
+    // spec 031 R5, R6, D4: where each paper can be read, for Get PDF; the server's paper-text cache
+    papers: {
+      access: async (papers) => findOpenAccessAll(net, (Array.isArray(papers) ? papers : []).slice(0, 50), { email: (await settingsStore.get()).papers?.email ?? null }),
+      textCache: async (opts) => {
+        if (!deps.library.paperTextCache) return { papers: 0, bytes: 0 };
+        return deps.library.paperTextCache({ clear: Boolean(opts?.clear) });
+      },
+      keep: async (paper) => {
+        if (!deps.library.paperKeep) throw new Error('This server cannot keep PDFs (update Veritas).');
+        const access = await findOpenAccess(net, paper, { email: (await settingsStore.get()).papers?.email ?? null });
+        const urls = access.access === 'open' ? [access.pdfUrl, ...(access.alternates ?? [])] : [];
+        const { pdfUrl: _, ...rest } = paper;
+        const kept = await deps.library.paperKeep({ paper: rest, urls });
+        return { ...kept, access };
       },
     },
 
@@ -1823,7 +2040,7 @@ export async function createLocalRuntime(deps) {
     },
 
     async dispose() {
-      await routineScheduler.dispose(); // first: a running routine ends as "stopped" before the things it uses go away
+      await routineScheduler.dispose(); // first: a running routine ends as "app closed" before the things it uses go away
       // A running columns step writes its version (unfinished cells pending) before the runtime goes away.
       for (const run of stepRuns.values()) { run.reason = 'stopped'; run.controller.abort(); }
       await Promise.allSettled([...stepRuns.values()].map((run) => run.done));

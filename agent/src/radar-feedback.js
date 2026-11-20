@@ -3,7 +3,7 @@
 // in a radar, and how Undo puts it back exactly. Pure: it takes the RadarState and the profile and returns new ones; core.js
 // does the reading and writing. A paper's last verdict keeps an UndoRecord of every field it touched, so undo never guesses.
 
-import { WEIGHTS, nameKey, venueKey } from './radar-score.js';
+import { WEIGHTS, nameKey, venueKey, sameAuthor } from './radar-score.js';
 import { extractPhrases, phraseKey, carries, LEARN_AFTER, MAX_LEARNED, LEARNED_WEIGHT, LEARNED_STEP } from './radar-phrases.js';
 
 /** @typedef {import("./radar-types").RadarState} RadarState */
@@ -18,6 +18,11 @@ import { extractPhrases, phraseKey, carries, LEARN_AFTER, MAX_LEARNED, LEARNED_W
 
 /** Weight an added paper's authors and venue gain in the profile. */
 export const PROFILE_STEP = 0.05;
+/** And a liked one's: half an Add's. A Like is a lighter signal (one click, nothing saved), but it said the paper fits,
+ *  and its people and venue learned nothing before. Read later still learns no one. */
+export const LIKE_STEP = 0.025;
+/** What each verdict adds to the paper's authors and venue. */
+const PEOPLE_STEP = /** @type {Record<string, number>} */ ({ added: PROFILE_STEP, liked: LIKE_STEP });
 /** Dismissals in a row from one source before it is quietly suggested for removal. */
 export const DISMISS_STREAK = 3;
 const MAX_WEIGHT = 10;
@@ -26,6 +31,20 @@ const MAX_AUTHORS = 4;
 const TOPIC_FLOOR = 0.1;
 
 const round = (/** @type {number} */ n) => Math.round(n * 1000) / 1000;
+
+/** Liked or added papers a seed radar compares new ones with, newest kept. */
+export const MAX_TAUGHT = 30;
+
+/**
+ * What Like and Add to Zotero teach a seed radar: each such paper's stored text becomes a seed of lower weight for that
+ * radar's next run (radar_api._with_taught). It is read from the examples and the verdicts, so a cap, a change of mind and
+ * Undo all hold without a list of its own, and the seeds that were calibrated stay as they are.
+ * @param {RadarState} state @returns {{ title: string, text: string }[]}
+ */
+export function taughtSeeds(state) {
+  return state.examples.positive.filter((e) => ['liked', 'added'].includes(state.seen[e.id]?.verdict ?? '')).slice(-MAX_TAUGHT)
+    .map((e) => ({ title: state.shown[e.id]?.title ?? e.text.split('. ')[0].slice(0, 200), text: e.text }));
+}
 
 /** @param {RadarState} state @param {string} key */
 const keysFor = (state, key) => state.shown[key]?.keys ?? [key];
@@ -36,11 +55,21 @@ function currentVerdict(state, key) {
   return null;
 }
 
-/** The first authors and the last one: a 50-author paper does not put 50 people in the profile. @param {string[]} authors */
-function followedAuthors(authors) {
-  const picked = authors.length > MAX_AUTHORS ? [...authors.slice(0, MAX_AUTHORS - 1), authors[authors.length - 1]] : authors;
+/** The first authors and the last one: a 50-author paper does not put 50 people in the profile. Each with its OpenAlex
+ *  id when the paper carried one. @param {string[]} authors @param {(string | null)[]} [ids] */
+function followedAuthors(authors, ids = []) {
+  const all = authors.map((name, i) => ({ name, id: ids[i] ?? null }));
+  const picked = all.length > MAX_AUTHORS ? [...all.slice(0, MAX_AUTHORS - 1), all[all.length - 1]] : all;
   const seen = new Set();
-  return picked.filter((a) => { const k = nameKey(a); if (!k || seen.has(k)) return false; seen.add(k); return true; });
+  return picked.filter((a) => { const k = nameKey(a.name); if (!k || seen.has(k)) return false; seen.add(k); return true; });
+}
+
+/** Where a learned name sits in a profile list: an author by OpenAlex id when both have one, else by name key.
+ *  @param {Followed[]} list @param {'author' | 'venue'} kind @param {string} name @param {string | null | undefined} id */
+function placeOf(list, kind, name, id) {
+  if (kind === 'venue') return list.findIndex((f) => venueKey(f.name) === venueKey(name));
+  if (id) { const byId = list.findIndex((f) => f.openalexId && sameAuthor(f, name, id)); if (byId >= 0) return byId; }
+  return list.findIndex((f) => !(id && f.openalexId) && nameKey(f.name) === nameKey(name));
 }
 
 /** @param {RadarState} state @returns {RadarState} */
@@ -194,10 +223,9 @@ function revert(before, profile, key, rec) {
     if (!entry) continue;
     state.learned = state.learned.filter((l) => l.id !== id);
     const field = entry.kind === 'author' ? 'authors' : 'journals';
-    const same = entry.kind === 'author' ? nameKey : venueKey;
-    const at = next[field].findIndex((f) => same(f.name) === same(entry.name));
+    const at = placeOf(next[field], entry.kind, entry.name, entry.openalexId);
     if (at < 0) continue;
-    const weight = round(next[field][at].weight - PROFILE_STEP);
+    const weight = round(next[field][at].weight - (entry.step ?? PROFILE_STEP));
     // An entry the radar made itself goes once its last supporting paper is undone; one the user made keeps at least its own weight.
     const gone = next[field][at].origin === 'learned' && weight <= 0;
     const list = gone ? next[field].filter((_, i) => i !== at) : next[field].map((f, i) => (i === at ? { ...f, weight } : f));
@@ -245,19 +273,21 @@ function apply(before, profile, key, verdict, replaced, now) {
       }
     }
 
-    if (verdict === 'added') {
-      /** @param {'author' | 'venue'} kind @param {string} name */
-      const learn = (kind, name) => {
+    // Add and Like raise the paper's people and venue, Like by less (PEOPLE_STEP); Read later and Not relevant do not.
+    const step = PEOPLE_STEP[verdict];
+    if (step) {
+      /** @param {'author' | 'venue'} kind @param {string} name @param {string | null} [openalexId] */
+      const learn = (kind, name, openalexId = null) => {
         const field = kind === 'author' ? 'authors' : 'journals';
         const same = kind === 'author' ? nameKey : venueKey;
-        const at = next[field].findIndex((f) => same(f.name) === same(name));
-        if (at >= 0) next = { ...next, [field]: next[field].map((f, i) => (i === at ? { ...f, weight: round(Math.min(MAX_WEIGHT, f.weight + PROFILE_STEP)) } : f)) };
-        else next = { ...next, [field]: [...next[field], /** @type {Followed} */ ({ name, openalexId: null, weight: PROFILE_STEP, origin: 'learned' })] };
+        const at = placeOf(next[field], kind, name, openalexId);
+        if (at >= 0) next = { ...next, [field]: next[field].map((f, i) => (i === at ? { ...f, weight: round(Math.min(MAX_WEIGHT, f.weight + step)) } : f)) };
+        else next = { ...next, [field]: [...next[field], /** @type {Followed} */ ({ name, openalexId, weight: step, origin: 'learned' })] };
         const id = `${key}|${kind}|${same(name)}`;
-        state.learned.push({ id, paper: key, title: paper.title, kind, name, created: at < 0, at: now });
+        state.learned.push({ id, paper: key, title: paper.title, kind, name, created: at < 0, at: now, step, ...(openalexId ? { openalexId } : {}) });
         rec.learned.push(id);
       };
-      for (const name of followedAuthors(paper.authors)) learn('author', name);
+      for (const a of followedAuthors(paper.authors, paper.authorIds)) learn('author', a.name, a.id);
       if (paper.venue && venueKey(paper.venue)) learn('venue', paper.venue);
     }
   }
@@ -304,7 +334,8 @@ export function mergeLearned(current, saved, blocked) {
  */
 export function applyFeedback({ state, profile, key, verdict, now }) {
   const current = currentVerdict(state, key);
-  if (current == null) throw new Error('That paper is not one this radar has shown.');
+  // A paper the profile check left out was never shown, so there is nothing to rate.
+  if (current == null || current === 'off') throw new Error('That paper is not one this radar has shown.');
   /** @type {Outcome} */
   const unchanged = { state, profile, changed: false, verdict: current };
   const done = (/** @type {{ state: RadarState, profile: RadarProfile }} */ r) => /** @type {Outcome} */ ({ ...r, changed: true, verdict: currentVerdict(r.state, key) });

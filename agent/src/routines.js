@@ -11,13 +11,14 @@ import { dueSlot } from './schedule.js';
 
 /** @typedef {import('./schedule.js').Schedule} Schedule */
 /** @typedef {{ kind: 'artifact', session: string, result: { id: string } } | { kind: 'session' }} RoutineTarget */
-/** @typedef {{ at: string, slot: string | null, status: 'done' | 'failed' | 'skipped', reason?: string, added?: number, session?: string, writes?: any[], review?: string, summary?: string }} RoutineRun */
+/** @typedef {{ at: string, slot: string | null, status: 'done' | 'failed' | 'skipped', reason?: string, tries?: number, added?: number, session?: string, writes?: any[], review?: string, summary?: string }} RoutineRun */
 /**
  * @typedef {{
  *   id: string, name: string, prompt: string, skills: string[], depth: 'fastest' | 'quick' | 'standard' | 'deep', schedule: Schedule,
  *   target: RoutineTarget, sources: any, scope: any, status: 'active' | 'paused' | 'archived', created: string, updated: string,
  *   lastSlot: string | null, lastDone?: string | null, lastRun: RoutineRun | null, notify: boolean, project?: string,
- *   kind?: 'watch' | 'digest' | 'radar', radar?: import("./radar-types").RadarConfig
+ *   kind?: 'watch' | 'digest' | 'radar', radar?: import("./radar-types").RadarConfig,
+ *   redo?: { since: string, replaces: string }
  * }} Routine
  */
 /** @typedef {{ percentUsed: number, at: number | string, windowMinutes: number, provider?: string, resetsAt?: string }} Usage */

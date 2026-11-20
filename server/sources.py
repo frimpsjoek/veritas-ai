@@ -4,8 +4,10 @@
                                 "enabled": true, "skip": []}, ...]}
 
 A folder holding zotero.sqlite is a Zotero library, one holding .obsidian/ is an Obsidian vault, anything else is a
-plain folder of notes, PDFs and images (connectors.py). The kind is detected on every read and never stored, so a folder that gains
-.obsidian/ later simply becomes a vault.
+plain folder of notes, PDFs and images (connectors.py). The kind is detected when first asked for and never stored
+(connectors keeps it until the folder changes), so a folder that gains .obsidian/ later simply becomes a vault.
+Resolving the layout asks nothing that lists a folder, and nothing at all about a disabled one: the server imports
+kb before it listens, and a listing that hangs (a stuck macOS permission prompt, 2026-11-03) must not hold it there.
 
 The main folder is the output folder: the listed folder marked "main": true (set_output, or KB_VAULT when seeding),
 else ~/Documents/Veritas, created when first written. It keeps bare relative paths in the index and is what kb.VAULT
@@ -21,8 +23,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from pathlib import Path
 
 import connectors
@@ -31,7 +34,26 @@ import paths
 ROOT = Path(__file__).resolve().parent
 FILE = Path(os.environ.get("KB_SOURCES", paths.data_dir() / "sources.json"))
 OUTPUT_DEFAULT = Path.home() / "Documents" / "Veritas"  # where notes go unless a listed vault is chosen
-ZOTERO_PROFILES = Path.home() / "Library" / "Application Support" / "Zotero" / "Profiles"
+
+
+def zotero_app_dir(system: str | None = None, env=None, home: Path | None = None) -> Path:
+    """The folder that holds Zotero's profiles.ini, per system: macOS ~/Library/Application Support/Zotero,
+    Windows %APPDATA%\\Zotero\\Zotero, Linux ~/.zotero/zotero."""
+    system, env, home = system or sys.platform, os.environ if env is None else env, home or Path.home()
+    if system == "darwin":
+        return home / "Library" / "Application Support" / "Zotero"
+    if system == "win32":
+        return (Path(env["APPDATA"]) if env.get("APPDATA") else home / "AppData" / "Roaming") / "Zotero" / "Zotero"
+    return home / ".zotero" / "zotero"
+
+
+def zotero_profiles_dir(system: str | None = None, env=None, home: Path | None = None) -> Path:
+    """The folder whose subfolders are Zotero profiles: Profiles/ beside profiles.ini, except on Linux."""
+    app = zotero_app_dir(system, env, home)
+    return app if (system or sys.platform) not in ("darwin", "win32") else app / "Profiles"
+
+
+ZOTERO_PROFILES = zotero_profiles_dir()
 
 NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 # Names become source labels and path prefixes: none may read as a label the index already gives.
@@ -52,9 +74,20 @@ class Folder:
     path: Path
     enabled: bool = True
     skip: list[str] = field(default_factory=list)
-    kind: str = "plain"  # detected through connectors.REGISTRY: zotero | obsidian | pdf | plain | ... | missing
+    detected: InitVar[str | None] = None  # the kind when already known (add); else found when `kind` is first read
     main: bool = False  # the output folder: notes are written here
     default_library: bool = False  # the Zotero library "+ Add" goes to
+
+    def __post_init__(self, detected: str | None) -> None:
+        self._kind = detected
+
+    @property
+    def kind(self) -> str:
+        """Detected through connectors.REGISTRY: zotero | obsidian | pdf | plain | ... | missing. Asking may list the
+        folder (a PDF folder is told from a notes folder by its files), so nothing asks until it needs the answer."""
+        if self._kind is None:
+            self._kind = detect(self.path)
+        return self._kind
 
     @property
     def prefix(self) -> str:
@@ -92,9 +125,15 @@ def detect(path: Path) -> str:
     return connectors.detect(path)
 
 
-def _notes(f: Folder) -> bool:
+def _quick_kind(f: Folder) -> str:
+    """Enough of the kind to place a folder in the layout (missing, zotero, or read as notes), without a listing: a
+    PDF folder reads as plain here, which is the same index stage. The folder's own `kind` still says "pdf"."""
+    return connectors.detect(f.path, scan=False)
+
+
+def _notes(kind: str) -> bool:
     """Read by the notes stages (an Obsidian vault, a notes folder, a PDF folder, or a registered kind like them)."""
-    return connectors.indexed_as(f.kind) in ("obsidian", "plain")
+    return connectors.indexed_as(kind) in ("obsidian", "plain")
 
 
 def zotero_prefs() -> Path | None:
@@ -187,7 +226,7 @@ def folders() -> list[Folder]:
         if "path" not in e:
             continue  # an online account (accounts())
         path = Path(e["path"]).expanduser()
-        out.append(Folder(e["name"], path, bool(e.get("enabled", True)), list(e.get("skip") or []), detect(path),
+        out.append(Folder(e["name"], path, bool(e.get("enabled", True)), list(e.get("skip") or []), None,
                           bool(e.get("main")), bool(e.get("default_library"))))
     return out
 
@@ -199,7 +238,7 @@ def accounts() -> list[Account]:
 
 
 def add_account(kind: str, user_id: str, *, key: str | None = None, name: str | None = None) -> dict:
-    """Adds an online source; its API key (when given) goes to the Keychain, never to sources.json."""
+    """Adds an online source; its API key (when given) goes to the key store (zotero_web.py), never to sources.json."""
     if kind != "zotero-web":
         raise SourceError(f"unknown kind of online source {kind!r}")
     if not re.fullmatch(r"\d{1,12}", str(user_id)):
@@ -223,16 +262,19 @@ def add_account(kind: str, user_id: str, *, key: str | None = None, name: str | 
 
 
 def resolved() -> Layout:
+    """The layout from the list. Only the enabled folders are looked at, and only as far as a stat goes (_quick_kind):
+    kb resolves this at import, while the server is still starting (listen_first.py)."""
     listed = folders()
     enabled = [f for f in listed if f.enabled]
-    ignored = [f for f in enabled if f.kind == "missing"]
-    libraries = [f for f in enabled if f.kind == "zotero"]
+    kinds = {f.name: _quick_kind(f) for f in enabled}
+    ignored = [f for f in enabled if kinds[f.name] == "missing"]
+    libraries = [f for f in enabled if kinds[f.name] == "zotero"]
     libraries.sort(key=lambda f: not f.default_library)  # stable: the marked one first, else list order
     # The folder marked main stays the output even without .obsidian/ (a vault never opened on this machine), so its
     # paths never change; otherwise ~/Documents/Veritas.
-    vaults = [f for f in enabled if f.main and _notes(f)]
+    vaults = [f for f in enabled if f.main and _notes(kinds[f.name])]
     main = vaults[0].path if vaults else OUTPUT_DEFAULT
-    others = [f for f in enabled if _notes(f) and f.path.resolve() != main.resolve()]
+    others = [f for f in enabled if _notes(kinds[f.name]) and f.path.resolve() != main.resolve()]
     return Layout(main, bool(vaults), libraries[0].path if libraries else None, others, ignored, listed, libraries,
                   [a for a in accounts() if a.enabled])
 

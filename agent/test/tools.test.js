@@ -355,3 +355,30 @@ test('read_digest is not offered by a library that cannot list digests', async (
   const gateway = await createToolGateway(fetch, fakeLibrary(), {});
   assert.ok(!gateway.open(CTX).specs.some((s) => s.name === 'read_digest'));
 });
+
+test('spec 031 R7: read_paper reads a free copy by DOI (cite it by its DOI link); without one, the abstract; offered only with Scholarly on and a reader', async () => {
+  const fetchFn = async (input) => {
+    const url = new URL(String(input));
+    if (url.host === 'api.unpaywall.org') return new Response(JSON.stringify(url.searchParams.get('email') === 'me@uni.edu' && url.pathname.includes('10.1%2Fopen') ? { best_oa_location: { url_for_pdf: 'https://repo.example/open.pdf' } } : {}), { status: 200 });
+    if (url.host === 'api.openalex.org' && url.searchParams.get('filter')?.startsWith('doi:')) return new Response(JSON.stringify({ results: [{ doi: 'https://doi.org/10.1/closed', abstract_inverted_index: Object.fromEntries('Core holes shift the edge of copper oxides by about one electronvolt in these careful measurements'.split(' ').map((w, i) => [w, [i]])) }] }), { status: 200 });
+    return new Response('{}', { status: 404 });
+  };
+  const reads = [];
+  const library = { ...fakeLibrary(), async paperText(q) { reads.push(q); return 'Full text: core holes matter.'; } };
+  const gateway = await createToolGateway(fetchFn, library, { paperEmail: async () => 'me@uni.edu' });
+  const session = gateway.open(CTX);
+  assert.ok(session.specs.some((s) => s.name === 'read_paper'));
+  const open = await session.call('read_paper', { doi: 'https://doi.org/10.1/OPEN' });
+  assert.equal(open.ok, true);
+  assert.match(open.text, /^The full text of a free copy \(found through Unpaywall; cite it as https:\/\/doi\.org\/10\.1\/open\):\n\nFull text: core holes matter\./);
+  assert.deepEqual(reads, [{ url: 'https://repo.example/open.pdf', key: 'doi:10.1/open' }]);
+  assert.deepEqual(session.seen().at(-1), { kind: 'web', url: 'https://doi.org/10.1/open' });
+  const closed = await session.call('read_paper', { doi: '10.1/closed' });
+  assert.match(closed.text, /^No free copy could be read; this is its abstract only \(cite it as https:\/\/doi\.org\/10\.1\/closed\)\. The paper is at https:\/\/doi\.org\/10\.1\/closed/);
+  assert.match(closed.text, /Core holes shift the edge/);
+  assert.match((await session.call('read_paper', {})).text, /Give the paper's DOI or arXiv id/);
+  // not offered with Scholarly off, nor in a chat about a paper set, nor without a reader
+  assert.ok(!gateway.open({ ...CTX, sources: { ...CTX.sources, scholarly: false } }).specs.some((s) => s.name === 'read_paper'));
+  const noReader = await createToolGateway(fetchFn, fakeLibrary(), {});
+  assert.ok(!noReader.open(CTX).specs.some((s) => s.name === 'read_paper'));
+});

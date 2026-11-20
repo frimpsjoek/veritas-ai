@@ -26,7 +26,13 @@
   const answer = (text) => ({ text, citations: [], structured: null, usage: {} });
   const host = createFakeHost({
     kind: 'web', calls, sessionStore: store,
-    reply: (input) => (async function* () { yield { type: 'done', answer: answer(`Echo: ${input.text}`) }; })(),
+    // ?picker=1: the `+` picker the real web host has (Skills behind it); without it the older "+ Add papers…" controls show
+    ...(params.has('picker') ? { candidates: [{ category: 'paper', label: 'Seed caching under snow', attachment: { kind: 'zoteroItem', citekey: 'shrew2026' } }] } : {}),
+    reply: (input) => (async function* () {
+      // checks can make the next turn fail
+      if (window.__failNext) { window.__failNext = false; yield { type: 'failed', error: { kind: 'network', message: 'The server stopped answering.' } }; return; }
+      yield { type: 'done', answer: answer(`Echo: ${input.text}`) };
+    })(),
   });
   // The web host's own server call, so Library, Notes and the readers make real requests (dev/web-fixtures.mjs answers them).
   const stubbed = host.json;

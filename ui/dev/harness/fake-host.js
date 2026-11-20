@@ -4,6 +4,7 @@
 // Used by the shared Playwright harness (dev/run.mjs) and can be reused by node tests that want a UiHost without
 // a browser.
 
+import { isPaperUrl } from '../../src/links.js';
 /** A small tree (two roots, one with two children) — enough to exercise tri-state ticking and the filter box.
  * @type {import("../../src/host").CollectionNode[]} */
 const COLLECTIONS = [
@@ -154,8 +155,30 @@ function fakeSessions(store) {
   };
 }
 
+/** spec 028 R9, simplified: a reading list kept in memory for the page (ai() builds a new service each call), two papers
+ *  to start with (one already in the fake Zotero). */
+const READING_LIST = (() => {
+  /** @type {any[]} */ const entries = [
+    { id: 'arxiv:2611.20723', title: 'Oxirane Ring-Opening Dynamics Using Time-Dependent \\textit{GW} Molecular Dynamics', authors: ['Aaditya Manjanath', 'Kaoru Ohno'], year: 2026, venue: 'arXiv', arxiv: '2611.20723', url: 'https://arxiv.org/abs/2611.20723', abstract: 'We follow the ring opening of oxirane (\\ce{C2H4O}) after excitation to the \\ce{S1} and \\ce{S2} states with time-dependent $GW$ molecular dynamics, and find the \\ce{C-O} bond breaks within 40 fs, much faster than earlier surface-hopping work suggested for this and related small rings.', source: 'arxiv', added: '2026-11-17T07:00:00Z' },
+    { id: 'url:https://example.org/burrow', title: 'burrow lattice study 112', authors: ['Ann Chen'], year: 2014, venue: 'Journal of Invented Results', url: 'https://example.org/burrow', source: 'radar', added: '2026-11-16T07:00:00Z', read: '2026-11-16T09:00:00Z' },
+  ];
+  const find = (/** @type {string} */ id) => entries.find((e) => e.id === id);
+  return {
+    list: async () => entries.map((e) => ({ ...e })),
+    add: async (/** @type {any} */ paper) => { const id = paper.doi ? `doi:${paper.doi}` : paper.arxiv ? `arxiv:${paper.arxiv}` : `url:${paper.url}`; let e = find(id); if (!e) { e = { ...paper, id, added: new Date().toISOString() }; entries.unshift(e); } return { ...e }; },
+    remove: async (/** @type {string} */ id) => { const i = entries.findIndex((e) => e.id === id); if (i >= 0) entries.splice(i, 1); return { removed: i >= 0 }; },
+    markRead: async (/** @type {string} */ id, read = true) => { const e = find(id); if (!e) throw new Error(`Not on the list: ${id}`); if (read) e.read = new Date().toISOString(); else delete e.read; return { ...e }; },
+  };
+})();
+
 /** Outside sources saved in this page: ai() builds a new service each call, so the list lives here. */
 const MCP_SAVED = new Map();
+
+/** spec 031: an arXiv id or a DOI with "open" in it has a free PDF, any other DOI only its publisher's page, no DOI nothing. */
+async function scriptedPapersAccess(papers) {
+  return papers.map((p) => (p.arxiv ? { access: 'open', pdfUrl: `https://arxiv.org/pdf/${p.arxiv}`, via: 'arXiv' } : /open/i.test(String(p.doi ?? '')) ? { access: 'open', pdfUrl: `https://oa.example/${encodeURIComponent(String(p.doi))}.pdf`, via: 'OpenAlex' }
+    : p.doi ? { access: 'publisher', page: `https://doi.org/${p.doi}` } : { access: 'none' }));
+}
 
 /** A scripted AgentService: records every SendInput/ask() call (spec 005 §7) and answers with a canned "done".
  * @returns {any} loosely typed on purpose — ConversationId/ReviewId are branded strings (domain.d.ts) and this
@@ -164,8 +187,22 @@ function scriptedAgentService(calls, reply, store, providers) {
   const answer = { text: 'ok', citations: [], structured: null, usage: {} };
   return {
     where: /** @type {"local"} */ ('local'),
+    readingList: READING_LIST,
+    // spec 031: a DOI with "open" in it has a free PDF, any other DOI only its publisher's page, no DOI nothing
+    papers: {
+      access: async (papers) => scriptedPapersAccess(papers),
+      textCache: async (o) => (o?.clear ? { papers: 0, bytes: 0 } : { papers: 3, bytes: 120000 }),
+      // spec 032: no Zotero in the harness's web server, so a free copy goes to Veritas › Papers; the keeps are recorded
+      keep: async (paper) => {
+        const [access] = await scriptedPapersAccess([paper]);
+        (globalThis.__kept ??= []).push({ title: paper.title, access: access.access });
+        return access.access === 'open'
+          ? { status: 'kept', where: 'folder', path: `Papers/${paper.title}.pdf`, downloaded: true, access }
+          : { status: 'failed', where: 'folder', downloaded: false, message: 'No PDF to keep', access };
+      },
+    },
     conversations: {
-      list: async () => (store?.conversations ? store.conversations.map((c) => ({ ...c })) : []),
+      list: async () => { if (store?.listFail) throw new Error('HTTP 503'); return store?.conversations ? store.conversations.map((c) => ({ ...c })) : []; },
       load: async (id) => store?.recordsBy?.[id] ?? store?.records ?? [],
       create: async () => {
         if (!store?.conversations) return 'conv1';
@@ -174,6 +211,13 @@ function scriptedAgentService(calls, reply, store, providers) {
         return id;
       },
       rename: async (id, title) => { const c = store?.conversations?.find((x) => x.id === id); if (c) c.title = title; },
+      // as the engine does, simplified: each row opened is one paper less of news (the UI tells each row once)
+      markViewed: async (id, rows) => {
+        const c = store?.conversations?.find((x) => x.id === id);
+        if (!c?.news) return;
+        c.news = { ...c.news, papers: c.news.papers - rows.length };
+        if (c.news.papers <= 0) delete c.news;
+      },
       remove: async (id) => { if (store?.conversations) store.conversations = store.conversations.filter((c) => c.id !== id); },
       adopt: async () => [],
       send(id, input) {
@@ -290,7 +334,8 @@ export const LOCAL_MODELS = [
  * leaves the host without `saveFile` (the Download fallbacks), whose calls are otherwise recorded in `_saved`.
  * @returns {import("../../src/host").UiHost & { _saved: { name: string, text: string, mime: string }[], _setWhere(next: "server" | "local" | "offline"): void,
  *           _setContext(items: import("../../src/host").ContextItem[]): void,
- *           ready: Promise<void>, json(): Promise<any>, setContext(items: import("../../src/host").ContextItem[]): void, setOpenRef(): void, setBrowser(fn: ((url: string) => void) | null): void }}
+ *           ready: Promise<void>, json(): Promise<any>, setContext(items: import("../../src/host").ContextItem[]): void, setOpenRef(): void, setBrowser(fn: ((url: string, radar?: any) => void) | null): void, setBrowse(hook: { open(url: string): void, signOut(): Promise<void> } | null): void, readonly browse: { open(url: string): void, signOut(): Promise<void> } | null,
+ *           server: { url: string, sameOrigin: boolean }, assets: { sameOrigin: boolean, url(path: string): Promise<string>, bytes(path: string): Promise<ArrayBuffer>, frame(route: string, query: Record<string, string>): Promise<string>, revokeAll(): void } }}
  */
 export function createFakeHost(opts = {}) {
   const prefsData = {};
@@ -301,7 +346,8 @@ export function createFakeHost(opts = {}) {
   let contextItems = opts.context ?? [];
   const candidates = opts.candidates;
   const saved = [];
-  /** @type {((url: string) => void) | null} */ let browserHook = null;
+  /** @type {((url: string, radar?: any) => void) | null} */ let browserHook = null;
+  /** @type {{ open(url: string): void, signOut(): Promise<void> } | null} */ let browseHook = null;
 
   return {
     kind: opts.kind ?? 'zotero',
@@ -353,16 +399,20 @@ export function createFakeHost(opts = {}) {
 
     openRef() {},
     openLink(url, o) {
-      // mirrors the web host (src/web/host.js): inside goes to the shell's browser panel, outside is recorded
-      if (opts.kind === 'web' && !o?.outside && browserHook) browserHook(url);
+      // mirrors the web host (src/web/host.js): a paper goes to Browse when the desktop app offers it (spec 027),
+      // inside goes to the shell's browser panel, outside is recorded
+      if (opts.kind === 'web' && !o?.outside && !o?.reader && browseHook && isPaperUrl(url)) browseHook.open(url);
+      else if (opts.kind === 'web' && !o?.outside && browserHook) browserHook(url, o?.radar);
       else (globalThis.__opened ??= []).push({ kind: 'url', url, outside: true });
     },
     setBrowser(fn) { browserHook = fn; },
+    setBrowse(hook) { browseHook = hook; },
+    get browse() { return browseHook; },
     revealFile() {},
     ...(opts.kind === 'web' ? {} : { openInTab() {} }),
 
     async searchOutside() { return { papers: OUTSIDE_PAPERS, failed: [] }; },
-    async addToLibrary(papers) { opts.calls?.push({ kind: 'add-to-library', titles: papers.map((p) => p.title), dois: papers.map((p) => p.doi) }); return { items: papers.map((_, i) => ({ key: `fake-${i}`, citekey: `fake${i}2026` })) }; },
+    async addToLibrary(papers, options) { opts.calls?.push({ kind: 'add-to-library', titles: papers.map((p) => p.title), dois: papers.map((p) => p.doi), collection: options?.collection ?? null, tag: options?.tag ?? null, collectionName: options?.collectionName ?? null, pdfs: papers.map((p) => p.pdf ?? null) }); return { items: papers.map((_, i) => ({ key: `fake-${i}`, citekey: `fake${i}2026` })) }; },
 
     notice(text) { opts.calls?.push({ kind: 'notice', text }); },
     // the web host's extras (src/web/host.js), used by the shell
@@ -372,6 +422,10 @@ export function createFakeHost(opts = {}) {
     setOpenRef() {},
     logError() {},
     mount(root) { document.body.appendChild(root); },
+    // the web host's server and its same-origin assets (src/web/assets.js): the harness serves everything itself
+    server: { url: globalThis.location?.origin ?? '', sameOrigin: true },
+    assets: { sameOrigin: true, async url(path) { return path; }, async bytes(path) { return (await fetch(path)).arrayBuffer(); },
+      async frame(route, query) { return `${route}?${new URLSearchParams(query)}`; }, revokeAll() {} },
 
     // ---------- unit C1 additions (host.d.ts)
     async confirm() { return true; },

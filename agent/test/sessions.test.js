@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  manifest, legacyView, isLegacy, summaryExtras, nextStepId, nextResultId, rowIdFor,
+  manifest, legacyView, isLegacy, summaryExtras, coverOf, chatFirst, nextStepId, nextResultId, rowIdFor,
   papersFromFind, papersFromReview, renderResult, manifestBlock,
 } from '../src/sessions.js';
 
@@ -111,6 +111,31 @@ test('summaryExtras: a legacy chat has 0 artifacts and kind "chat"; a find sessi
     { type: 'step_end', id: 'S1', status: 'done', writes: [{ id: 'R1', version: 1 }], at: 't1' },
   ];
   assert.deepEqual(summaryExtras(findSession), { artifacts: 1, kind: 'find' });
+});
+
+test('spec 030 R10: a thread that began with a chat question stays a chat (history kind and cover) after a Find search and a report', () => {
+  const find = [
+    { type: 'step', id: 'S1', input: { kind: 'find', query: 'widgets', sources: {}, scope: { kind: 'library' } }, reads: [], at: 't2' },
+    { type: 'result', summary: { ref: { id: 'R1', version: 1 }, kind: 'papers', title: 'Widgets', versions: 1, rows: 5, columns: [], updated: 't2' }, at: 't2' },
+    { type: 'step_end', id: 'S1', status: 'done', writes: [{ id: 'R1', version: 1 }], at: 't2' },
+  ];
+  const chat = [
+    { type: 'meta', id: 'c1', mode: 'chat', title: 'x', created: 't0' },
+    { type: 'user', text: 'How are widgets made?', attachments: [], at: 't1' },
+    { type: 'assistant', answer: { text: 'From parts.', citations: [] }, at: 't1' },
+  ];
+  const chatThenFind = [...chat, ...find];
+  assert.equal(chatFirst(chatThenFind), true);
+  assert.equal(summaryExtras(chatThenFind).kind, 'chat');
+  assert.equal(coverOf(chatThenFind)?.kind, 'chat');
+  // a session that began as the search is still a find, a chat question after it changes nothing
+  const findThenChat = [chat[0], ...find, { type: 'user', text: 'Which are recent?', attachments: [], at: 't3' }];
+  assert.equal(chatFirst(findThenChat), false);
+  assert.equal(summaryExtras(findThenChat).kind, 'find');
+  assert.equal(coverOf(findThenChat)?.kind, 'find');
+  // a question that is a step's own line (chat_papers) does not count as the thread's opening chat
+  const stepLine = [chat[0], { type: 'user', text: 'About these', attachments: [], step: 'S2', at: 't1' }, ...find];
+  assert.equal(chatFirst(stepLine), false);
 });
 
 // ---------- ids ----------

@@ -186,10 +186,69 @@ async function withDigest(ctx, { routine = 'radX', only = null } = {}) {
   chat.renderAddStep();
 }
 
+/**
+ * Spec 030: an engine that keeps each session's records, as the real one does, so a thread of several workflows can be
+ * reopened: chat turns (user, assistant), `put` steps (step, result, step_end), and a review started on a session (its
+ * `report` step; the review itself runs no further than "Make a plan"). `ctx.calls` records sends, asks and reviews.
+ */
+function chainEngine(ctx) {
+  const { host, store, calls } = ctx;
+  const by = (store.recordsBy = {});
+  const reviews = [];
+  const log = (id) => (by[id] ??= []);
+  const at = () => new Date().toISOString();
+  const base = host.ai.bind(host);
+  host.ai = async () => {
+    const ai = await base();
+    const sessions = ai.sessions;
+    return {
+      ...ai,
+      conversations: {
+        ...ai.conversations,
+        load: async (id) => structuredClone(log(id)),
+        send(id, input) {
+          calls.push({ kind: 'send', id, input });
+          log(id).push({ type: 'user', text: input.text, attachments: [], web: 'off', at: at() });
+          return (async function* () {
+            const answer = { text: `Answer to: ${input.text}`, citations: [], structured: null, usage: {} };
+            log(id).push({ type: 'assistant', answer, model: { provider: 'x', model: 'y' }, activities: [], at: at() });
+            yield { type: 'done', answer };
+          })();
+        },
+      },
+      sessions: {
+        ...sessions,
+        async view(id) {
+          const results = log(id).filter((r) => r.type === 'result').map((r) => r.summary);
+          return { steps: [], results, current: null };
+        },
+        async put(id, input, draft) {
+          const summary = await sessions.put(id, input, draft);
+          const step = `S${log(id).filter((r) => r.type === 'step').length + 1}`;
+          log(id).push({ type: 'step', id: step, input, reads: [], at: at() }, { type: 'result', summary, at: at() }, { type: 'step_end', id: step, status: 'done', writes: [summary.ref], at: at() });
+          return summary;
+        },
+      },
+      reviews: {
+        ...ai.reviews,
+        list: async () => reviews.map((r) => ({ id: r.id, status: { state: 'running', stage: 'plan', agents: [] }, papersFound: 0, outside: [], question: r.req.question, started: at(), ...(r.req.session ? { session: r.req.session } : {}) })),
+        async start(req) {
+          calls.push({ kind: 'review', req });
+          const id = `review${reviews.length + 1}`;
+          reviews.push({ id, req });
+          if (req.session) log(req.session).push({ type: 'step', id: `S${log(req.session).filter((r) => r.type === 'step').length + 1}`, input: { kind: 'report', on: req.on ?? null, request: req, review: id }, reads: [], at: at() });
+          return id;
+        },
+        watch: async function* (id) { yield { id, status: { state: 'running', stage: 'plan', agents: [] }, papersFound: 0, outside: [], question: reviews.find((r) => r.id === id)?.req.question }; },
+      },
+    };
+  };
+}
+
 const classTree = (node) => {
   if (node.nodeType !== 1) return null;
   return { tag: node.tagName.toLowerCase(), cls: [...node.classList].sort(), kids: [...node.childNodes].map(classTree).filter(Boolean) };
 };
 
-window.__sbS = { make, withResults, withDigest, savedSearch, classTree, frame, ROWS };
+window.__sbS = { make, withResults, withDigest, savedSearch, classTree, frame, ROWS, chainEngine };
 window.__sbHarnessReady = true;

@@ -14,5 +14,6 @@ published="dist-versions/$version"
 mkdir -p "$published"
 cp main.js manifest.json styles.css "$published/"
 echo "published to $published"
+sh ../packaging/publish-plugins.sh || true
 # The web app (spec 013) ships with every release: build it and swap it into the server's data/web.
 KB="$(cd ../server && pwd)" ../web/install.sh

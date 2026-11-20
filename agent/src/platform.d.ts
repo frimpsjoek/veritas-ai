@@ -40,4 +40,6 @@ export interface Platform {
   };
   serve(path: string, handler: HttpHandler): Promise<Mount>;
   homeDir: string;
+  /** process.platform ("darwin", "win32", "linux"): which system store keeps keys (secrets.js). Absent means macOS. */
+  os?: string;
 }

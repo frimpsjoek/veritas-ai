@@ -61,7 +61,7 @@ export async function runRadarChecks(browser, port, outDir) {
   check('journals show their match', (await texts(page, '[data-list="journals"] .sb-ra-main'))[0].includes('Journal of Invented Zoology, Invented Press, 1,200 works'));
   const dbs = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll('input[data-source^="database:"]')].map((i) => [i.dataset.source.slice(9), i.checked])));
   check('arXiv, chemRxiv and OpenAlex are on by default, the other databases off', JSON.stringify(Object.entries(dbs).filter(([, on]) => on).map(([k]) => k)) === '["arxiv","chemrxiv","openalex"]' && Object.keys(dbs).length === 7, dbs);
-  check('size starts at 8 + 1 for the daily default', await page.inputValue('.sb-ra-fresh') === '8' && await page.inputValue('.sb-ra-older') === '1');
+  check('size starts at 30 + 3 for the daily default (SIZE_DEFAULTS in radar-data.js)', await page.inputValue('.sb-ra-fresh') === '30' && await page.inputValue('.sb-ra-older') === '3');
   check('When defaults to daily at 07:00 with a preview', await page.inputValue('.sb-rt-time') === '07:00' && /^Next: /.test(await page.locator('.sb-rt-preview').innerText()), await page.locator('.sb-rt-preview').innerText());
   check('the Hugging Face preset is offered because the server is connected', (await texts(page, 'input[data-source="mcp:huggingface/hf_fs"] ~ .sb-ra-main .sb-ra-title')).join() === 'Hugging Face papers');
   await page.screenshot({ path: join(shots, 'r2-sheet-top.png') });

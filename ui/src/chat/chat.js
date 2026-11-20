@@ -14,7 +14,7 @@ import { CollectionTree } from './collection-tree.js';
 // import: ui-src takes small pure helpers straight from agent-src rather than re-implementing them.
 import { compactActivities, linesFromLabels, entriesFromLabels, pastTense } from '../../../agent/src/activity.js';
 import { visibleText, hasTableBlock, formatElapsed } from './stream.js';
-import { ScrollFollower } from './scroll-follow.js';
+import { ScrollFollower, showJump } from './scroll-follow.js';
 import { ContextPicker } from './picker.js';
 import { LocalMenu } from './local-menu.js';
 import { offerSwitch, NOT_INSTALLED } from './provider-switch.js';
@@ -28,18 +28,20 @@ import { ArtifactCard } from './artifact-card.js';
 import { ArtifactPanel, downloadResult } from './artifact-panel.js';
 import { openPopover, menuItem } from './popover.js';
 import { buildSwitcher, paintSwitcher, openRowMenu } from './projects-menu.js';
-import { filterEntries, emptyLine } from './projects-data.js';
+import { filterEntries, emptyLine, projectOf } from './projects-data.js';
+import { whereLabel, groupEntries, findEntries, noMatchLine, entryTitle, whenLabel, panelFoldsList, chatTitle, countPill, kindTitle } from './history-data.js';
 import { newsLabel, newsTitle } from './routines-data.js';
 import { KIND_NAME, KIND_ICON, hasGaps } from './artifact-data.js';
 import { describeOn, turnsOn } from './papers-chat-data.js';
 import { canSave } from '../export/save.js';
 import { sourceHint, modeEmpty } from '../host-words.js';
 import { pillsFrom, migrationPatch, togglePatch, webFor } from './sources-sync.js';
+import { sourcesLabel, menuStep } from './sources-menu-data.js';
 import {
   MODE_GROUPS, PICKER_MODES, VIEW_MODES, isReviewMode, normalizeMode, modeIconName, stepChoices, onLabel, currentResult, SESSION_KIND_ICON, sessionMeta,
-  artifactsWord, historyEntries, cardSplit, paperRowFromLibrary, paperRowFromContext, importDraft, uniqueRows,
+  artifactsWord, historyEntries, sessionlessReviews, reportStepLabel, startPageRecent, paperRowFromLibrary, paperRowFromContext, importDraft, uniqueRows,
 } from './steps-data.js';
-import { personAvatar, aiAvatar } from '../avatars.js';
+import { aiAvatar } from '../avatars.js';
 
 /** spec 007 §3.1's ActivityLine.icon values, mapped onto the existing icon set (no new pixel art for E2): search
  *  kinds reuse the source-pill icons, `read`/`mcp`/`thinking`/`result` reuse the closest existing shape. */
@@ -201,20 +203,40 @@ export class ChatView {
     this.projectId = this.host.prefs.get('chatProject') || null;
     this.switcher = buildSwitcher(this);
     this.switcher.hidden = true; // shown once the engine says it has projects (an older server has none)
-    this.side.append(this.switcher, newChat, this.list);
+    this.listEntries = [];
+    this.side.append(this.switcher, newChat, this.buildFind(), this.list);
 
     const main = this.el('div', 'sb-ai-main');
     const head = this.head = this.el('div', 'sb-ai-head');
     this.historyToggle = this.el('button', 'sb-ai-history-toggle');
-    this.historyToggle.addEventListener('click', () => this.setHistoryCollapsed(!this.historyCollapsed));
+    this.historyToggle.setAttribute('type', 'button');
+    this.historyToggle.append(this.icon('panelLeft'));
+    // what is on screen decides: the web shell starts a phone with the list folded, without saving that as a choice
+    this.historyToggle.addEventListener('click', () => this.setHistoryCollapsed(!this.side.hidden));
     this.historyNewChat = button(this.doc, 'New chat', () => this.newChat());
     this.historyNewChat.className = 'sb-ai-history-newchat';
+    // the open session's name and, when it is in a project, "in <project>"; always shown, so the thread has a heading
     this.headerTitle = this.el('span', 'sb-ai-head-title');
+    this.headerName = this.el('span', 'sb-ai-head-name');
+    this.headerCrumb = this.el('span', 'sb-ai-head-crumb');
+    this.headerTitle.append(this.headerName, this.headerCrumb);
     this.where = this.el('span', 'sb-ai-where');
+    this.whereText = this.el('span', 'sb-ai-where-label');
+    this.where.append(this.el('span', 'sb-ai-where-dot'), this.whereText);
     this.artifactsButton = this.el('button', 'sb-ai-artifacts-button');
     this.artifactsButton.hidden = true;
     this.artifactsButton.addEventListener('click', (event) => { event.stopPropagation(); this.openArtifactList(); });
-    head.append(this.historyToggle, this.historyNewChat, this.headerTitle, this.where, this.artifactsButton);
+    // the results panel's own toggle, beside "Artifacts (N)": opens the newest result, or closes the panel
+    this.panelToggle = this.el('button', 'sb-ai-panel-toggle');
+    this.panelToggle.setAttribute('type', 'button');
+    this.panelToggle.hidden = true;
+    this.panelToggle.append(this.icon('panelRight'));
+    this.panelToggle.addEventListener('click', () => {
+      if (this.artifactOpen) { this.closeArtifact(); return; }
+      const newest = [...this.artifacts].sort((a, b) => (a.updated < b.updated ? 1 : -1))[0];
+      if (newest) void this.openArtifact(newest.ref);
+    });
+    head.append(this.historyToggle, this.historyNewChat, this.headerTitle, this.artifactsButton, this.panelToggle);
     if (this.host.openInTab) {
       const openInTab = this.el('button', 'sb-ai-open-tab', '⤢');
       openInTab.title = 'Open this chat in its own tab';
@@ -228,7 +250,7 @@ export class ChatView {
     this.jump = this.el('button', 'sb-ai-jump', '↓ Jump to latest');
     this.jump.hidden = true;
     this.jump.addEventListener('click', () => this.follower.follow());
-    this.follower = new ScrollFollower(this.win, this.scroller, this.thread, (paused) => { this.jump.hidden = !paused; });
+    this.follower = new ScrollFollower(this.win, this.scroller, this.thread, (paused) => { this.jump.hidden = !showJump({ paused, turns: this.thread.querySelectorAll('.sb-ai-user').length }); });
 
     const composer = this.composer = this.el('div', 'sb-ai-composer');
     const inner = this.el('div', 'sb-ai-composer-inner');
@@ -265,20 +287,45 @@ export class ChatView {
       }
       this.modePick.append(box);
     }
-    this.modePick.addEventListener('change', () => this.setMode(this.modePick.value));
+    this.modePick.addEventListener('change', () => this.switchMode(this.modePick.value));
     modeWrap.append(this.modeIcon, this.modePick);
-    this.sourceGroup = this.el('div', 'sb-ai-sources');
+    // spec 029 R6: Papers, Notes, Scholarly and Web (and Valency, when connected) are checkboxes in one "Sources" menu,
+    // whose button names what is on, so the controls fit one line
+    this.sourceGroup = this.el('span', 'sb-ai-sources');
+    this.sourcesButton = this.el('button', 'sb-ai-sources-btn');
+    this.sourcesButton.setAttribute('type', 'button');
+    this.sourcesButton.setAttribute('aria-haspopup', 'menu');
+    this.sourcesButton.setAttribute('aria-expanded', 'false');
+    this.sourcesButton.title = 'Where to search: your papers, your notes, scholarly databases, the web';
+    this.sourcesLabelEl = this.el('span', 'sb-ai-sources-label');
+    this.sourcesButton.append(this.sourcesLabelEl, this.icon('chevron', 'sb-ai-icon sb-ai-sources-chevron'));
+    this.sourcesMenu = this.el('div', 'sb-ai-sources-menu');
+    this.sourcesMenu.setAttribute('role', 'menu');
+    this.sourcesMenu.setAttribute('aria-label', 'Sources');
+    this.sourcesMenu.hidden = true;
+    this.sourcesButton.addEventListener('click', () => this.setSourcesOpen(this.sourcesMenu.hidden));
+    this.sourcesButton.addEventListener('keydown', (event) => {
+      if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+      event.preventDefault();
+      this.setSourcesOpen(true, event.key === 'ArrowUp' ? 'last' : 'first');
+    });
+    this.sourcesMenu.addEventListener('keydown', (event) => this.sourcesMenuKey(event));
+    this.sourceGroup.append(this.sourcesButton, this.sourcesMenu);
     this.sourceButtons = {};
     this.sources = this.savedSources();
     /** @type {any} */
     this.engineSettings = null;
     void this.syncSources();
     for (const [id, label, title] of ChatView.SOURCES) {
-      const btn = this.el('button', 'sb-ai-source', label);
+      const btn = this.el('button', 'sb-ai-source');
+      btn.setAttribute('type', 'button');
+      btn.setAttribute('role', 'menuitemcheckbox');
+      btn.tabIndex = -1;
+      btn.append(this.el('span', 'sb-ai-source-check'), this.el('span', 'sb-ai-source-label', label));
       btn.title = `Search ${hintOf(this.host, id, title)}`;
       btn.addEventListener('click', () => this.toggleSource(id));
       this.sourceButtons[id] = btn;
-      this.sourceGroup.append(btn);
+      this.sourcesMenu.append(btn);
     }
     this.sourceButtons.valency.hidden = true;
     void this.refreshConnectors();
@@ -304,7 +351,8 @@ export class ChatView {
     this.send.addEventListener('click', () => (this.running ? this.stop() : this.submit()));
     this.box = box;
     this.localMenu = new LocalMenu(this);
-    row.append(modeWrap, this.sourceGroup, this.optionsButton, this.localMenu.button, this.el('span', 'sb-ed-spacer'), ...(this.skillsButton ? [this.skillsButton] : []), this.attachButton);
+    // "On this computer" sits here as a small dot and label, out of the header
+    row.append(modeWrap, this.sourceGroup, this.optionsButton, this.localMenu.button, this.el('span', 'sb-ed-spacer'), this.where, ...(this.skillsButton ? [this.skillsButton] : []), this.attachButton);
     // The send button lives beside the message box, never in the controls row: those wrap (a narrow pane, a wide
     // monospace font) and a wrapped send would take a row of its own.
     const inputRow = this.el('div', 'sb-ai-inputrow');
@@ -338,10 +386,27 @@ export class ChatView {
     this.doc.addEventListener('pointerdown', this.closeOptions = (event) => {
       if (!this.reportOptions.hidden && !this.reportOptions.contains(event.target) && !this.optionsButton.contains(event.target)) this.setOptionsOpen(false);
       if (this.picker?.isOpen && !this.picker.root.contains(event.target) && !this.attachButton.contains(event.target) && event.target !== this.input) this.picker.close();
+      if (!this.sourcesMenu.hidden && !this.sourceGroup.contains(event.target)) this.setSourcesOpen(false);
     });
     this.narrow = new this.win.ResizeObserver(() => this.applyNarrow(root.clientWidth < 560));
     this.narrow.observe(root);
     return root;
+  }
+
+  /** "Find a chat": a filter over the titles already listed, no request. */
+  buildFind() {
+    this.listQuery = '';
+    this.listFailed = '';
+    const find = this.el('label', 'sb-ai-find');
+    const input = this.findInput = /** @type {HTMLInputElement} */ (this.el('input', 'sb-ai-find-input'));
+    input.type = 'search';
+    input.placeholder = 'Find a chat';
+    input.setAttribute('aria-label', 'Find a chat');
+    const apply = () => { this.listQuery = input.value.trim(); this.paintList(); };
+    input.addEventListener('input', apply);
+    input.addEventListener('keydown', (event) => { if (event.key === 'Escape' && input.value) { input.value = ''; apply(); } });
+    find.append(this.icon('find'), input);
+    return find;
   }
 
   /** Scope, years and thoroughness for a Research report; Find papers uses only the scope. Other modes hide the row. */
@@ -634,13 +699,59 @@ export class ChatView {
       btn.disabled = !!disabledHere;
       const on = id === 'valency' ? this.sources.valency !== false : !!this.sources[id];
       btn.classList.toggle('is-on', on);
-      btn.setAttribute('aria-pressed', String(on));
+      btn.setAttribute('aria-checked', String(on));
       btn.classList.toggle('is-offline', id === 'notes' && offline);
       const [, , title] = ChatView.SOURCES.find(([sid]) => sid === id);
       const hint = hintOf(this.host, id, title);
       btn.title = disabledHere ?? (id === 'notes' && offline
         ? "Notes need the Veritas server, which isn't running" : `Search ${hint}`);
     }
+    const label = sourcesLabel(ChatView.SOURCES.map(([id, name]) => {
+      const btn = this.sourceButtons[id];
+      return { id, label: name, on: id === 'valency' ? this.sources.valency !== false : !!this.sources[id], usable: !btn.hidden && !btn.disabled };
+    }));
+    this.sourcesLabelEl.textContent = label;
+    this.sourcesButton.setAttribute('aria-label', `${label}. Choose where to search`);
+  }
+
+  /** Opens or closes the Sources menu; `focus` puts the keyboard on its first or last item (spec 029 R6). The menu
+   *  opens above the button and is moved left as far as needed to stay inside the message box (a narrow pane).
+   *  @param {boolean} open @param {'first' | 'last' | null} [focus] */
+  setSourcesOpen(open, focus = null) {
+    this.sourcesMenu.hidden = !open;
+    this.sourcesButton.setAttribute('aria-expanded', String(open));
+    this.sourcesButton.classList.toggle('is-open', open);
+    if (!open) return;
+    this.sourcesMenu.style.insetInlineStart = '';
+    const box = this.box.getBoundingClientRect();
+    const menu = this.sourcesMenu.getBoundingClientRect();
+    const over = menu.right - (box.right - 8);
+    if (over > 0) this.sourcesMenu.style.insetInlineStart = `${-Math.min(over, menu.left - box.left - 8)}px`;
+    const items = this.sourceItems();
+    if (focus && items.length) items[focus === 'last' ? items.length - 1 : 0].focus();
+  }
+
+  /** The menu's items the keyboard can reach: shown and not disabled in this mode. */
+  sourceItems() {
+    return Object.values(this.sourceButtons).filter((btn) => !btn.hidden && !btn.disabled);
+  }
+
+  /** Arrows, Home and End move inside the Sources menu; Escape closes it and gives the keyboard back to its button;
+   *  Tab closes it and moves on. Space and Enter tick an item (it is a button). */
+  sourcesMenuKey(event) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      this.setSourcesOpen(false);
+      this.sourcesButton.focus();
+      return;
+    }
+    if (event.key === 'Tab') { this.setSourcesOpen(false); return; }
+    const items = this.sourceItems();
+    const next = menuStep(event.key, items.indexOf(this.doc.activeElement), items.length);
+    if (next === null) return;
+    event.preventDefault();
+    items[next].focus();
   }
 
   /** True once every source pill is off — Send is disabled and the empty state explains why (spec 005 §5). */
@@ -690,22 +801,26 @@ export class ChatView {
    *  "New chat" gets its own header button when the side panel (which normally holds it) is hidden. */
   setHistoryCollapsed(collapsed) {
     this.historyCollapsed = collapsed;
+    this.autoFolded = false; // the user's choice: closing the results panel leaves it as it is
     this.host.prefs.set('historyCollapsed', collapsed);
     this.applyHistoryCollapsed(collapsed);
+  }
+
+  /** Is the chat list beside the thread right now? Not when folded, and not as the narrow pane's drawer (spec 029 R5). */
+  get listOnScreen() {
+    return !this.side.hidden && !this.narrowMode;
   }
 
   applyHistoryCollapsed(collapsed) {
     this.root.classList.toggle('is-history-open', !collapsed);
     this.side.hidden = collapsed;
     this.historyNewChat.hidden = !collapsed;
-    this.headerTitle.hidden = !collapsed;
-    this.headerTitle.textContent = this.currentTitle;
     const label = collapsed ? 'Show chat history' : 'Hide chat history';
     this.historyToggle.title = label;
     this.historyToggle.setAttribute('aria-label', label);
     this.historyToggle.setAttribute('aria-expanded', String(!collapsed));
-    this.historyToggle.textContent = collapsed ? '▶' : '◀';
     this.applyArtifactLayout();
+    if (this.thread?.querySelector('.sb-ai-empty')) this.renderSuggestions(); // the recent chats show where the list is not
   }
 
   /** Below ~560 px (the docked sidebar) the history list becomes a drawer over the thread, and the empty state and
@@ -716,17 +831,57 @@ export class ChatView {
     if (this.narrowMode === isNarrow) return;
     this.narrowMode = isNarrow;
     this.root.classList.toggle('is-narrow', isNarrow);
+    if (this.thread?.querySelector('.sb-ai-empty')) this.renderSuggestions();
     this.historyNewChat.textContent = isNarrow ? '+' : 'New chat';
     this.historyNewChat.title = 'New chat';
   }
 
   setHeaderTitle(title) {
     this.currentTitle = title || 'New chat';
-    if (this.historyCollapsed) this.headerTitle.textContent = this.currentTitle;
+    this.headerName.textContent = this.currentTitle;
+    this.paintHeaderCrumb();
+  }
+
+  /** "in <project>" after the title when the open chat or report belongs to one. */
+  paintHeaderCrumb() {
+    const entry = this.listEntries.find((e) => (e.kind === 'chat' && e.conversation.id === this.sessionID) || (e.kind === 'report' && e.progress.id === this.reviewID));
+    // a chat opened before the list arrived (a link) gets its name here
+    if (entry?.kind === 'chat') { this.currentTitle = entry.conversation.title; this.headerName.textContent = this.currentTitle; }
+    const id = entry ? projectOf(entry.kind === 'chat' ? entry.conversation : entry.progress, this.projects.map((p) => p.id)) : null;
+    const project = this.projects.find((p) => p.id === id);
+    this.headerCrumb.textContent = project ? `in ${project.name}` : '';
+    this.headerCrumb.hidden = !project;
+  }
+
+  /** The dot and label in the composer row. `where` null: no answer from the engine, so the dot says so and the last label stays.
+   *  @param {string | null} where */
+  paintWhere(where) {
+    if (where) this.whereKind = where;
+    const label = this.whereKind ? whereLabel(this.whereKind) : 'Not connected';
+    this.whereText.textContent = label;
+    this.where.classList.toggle('is-off', !where);
+    this.where.title = where ? label : "Can't reach the server";
   }
 
   get modeInfo() {
     return ChatView.MODES.find((m) => m.id === this.mode) ?? ChatView.MODES[0];
+  }
+
+  /** Spec 030 R1: is a thread open that a change of mode should keep? Not an empty start page, not Routines (a view). */
+  get threadOpen() {
+    if (VIEW_MODES.includes(this.mode) || !this.thread || this.thread.querySelector('.sb-ai-empty:not(.sb-ai-pick)')) return false;
+    return Boolean(this.conversationID || this.sessionID || this.findID || this.reviewID || this.thread.querySelector('.sb-ai-user'));
+  }
+
+  /** Spec 030 R1: the mode menu. With a thread open, the mode changes for the next step and the thread stays (its
+   *  title, its session, what is on screen); on an empty thread, or to or from Routines, it is setMode as before. */
+  switchMode(mode) {
+    if (this.running) { this.modePick.value = this.mode; return; }
+    if (!this.threadOpen || VIEW_MODES.includes(mode)) { this.setMode(mode); return; }
+    if (PICKER_MODES.includes(mode)) { void this.startPaperTool(mode); return; }
+    this.setMode(mode, { fresh: false });
+    this.renderAddStep();
+    this.input.focus();
   }
 
   /** Switches mode. `fresh` (the default) also starts an empty thread; opening something from the history
@@ -903,10 +1058,14 @@ export class ChatView {
     if (picked.length && (this.mode === 'chat' || this.mode === 'ask')) {
       box.append(selectionCard(this.doc, picked, { report: Boolean(this.engineCanReport) }, (kind) => this.startFromSelection(kind, picked)));
     }
-    // spec 007 §7: up to three cards; the most recent sessions first, then the context suggestions
-    const cards = cardSplit(this.recent);
+    // spec 007 §7, spec 029 R5: up to three recent chats, as a compact list, only where the chat list is not on
+    // screen (a phone, a narrow pane, the list folded); then the context suggestions
+    const cards = startPageRecent(this.recent, this.listOnScreen);
     if (cards.length) {
       const row = this.el('div', 'sb-ai-cardrow');
+      row.setAttribute('role', 'group');
+      row.setAttribute('aria-label', 'Recent chats');
+      row.append(this.el('div', 'sb-ai-cardrow-head', 'Recent'));
       for (const session of cards) row.append(this.sessionCard(session));
       box.append(row);
     }
@@ -964,15 +1123,21 @@ export class ChatView {
       ai = await this.host.ai();
     } catch (error) {
       this.host.logError(error);
+      this.listFailed = String(/** @type {any} */ (error)?.message ?? error) || 'no answer';
+      this.paintWhere(null);
+      this.paintList();
       return;
     }
     this.engineCanFill = Boolean(ai.sessions?.run && ai.sessions?.estimate && ai.sessions?.events);
     this.engineCanReport = Boolean(ai.reviews?.answer); // pipeline 2 (spec 007 E7): clarify cards and reports written from a table
-    this.where.textContent = ai.where === 'server' ? 'Runs on the Veritas server' : 'Runs on this computer';
     this.canProject = Boolean(ai.projects);
-    const [conversations, reviews, searches, projects] = await Promise.all([ai.conversations.list().catch(() => []),
+    /** @type {any} */ let failed = null; // the chats could not be listed: the list says so instead of looking empty, and keeps the ones it had
+    const [conversations, reviews, searches, projects] = await Promise.all([ai.conversations.list().catch((error) => { failed = error; return this.listedChats ?? []; }),
       Promise.resolve().then(() => ai.reviews.list()).catch(() => []), FindView.list(this.host).catch(() => []),
       this.canProject ? ai.projects.list().catch(() => this.projects) : []]);
+    this.listFailed = failed ? String(failed?.message ?? failed) || 'no answer' : '';
+    if (failed) this.host.logError(failed); else this.listedChats = conversations;
+    this.paintWhere(failed ? null : ai.where);
     this.projects = projects;
     this.newsById = new Map(conversations.filter((x) => x.news).map((x) => [x.id, x.news])); // the Routines view reads this
     if (this.projectId && !projects.some((p) => p.id === this.projectId)) this.setProject(null, { refresh: false }); // its project is gone
@@ -983,21 +1148,51 @@ export class ChatView {
     this.recent = shown.sessions.map((e) => ({ ...e.conversation, search: e.search })).sort((a, b) => (a.updated < b.updated ? 1 : -1));
     const all = [
       ...shown.sessions.map((e) => ({ kind: 'chat', at: e.conversation.updated, conversation: { ...e.conversation, search: e.search } })),
-      ...reviews.map((progress) => ({ kind: 'report', at: progress.started ?? '', progress })),
+      ...sessionlessReviews(reviews, shown.sessions).map((progress) => ({ kind: 'report', at: progress.started ?? '', progress })),
       ...shown.searches.map((search) => ({ kind: 'find', at: search.at, search })),
     ].sort((a, b) => (a.at < b.at ? 1 : -1));
     const known = projects.map((p) => p.id);
+    this.listEntries = all;
+    this.paintHeaderCrumb();
     const entries = filterEntries(all, this.projectId, known);
     this.recent = this.recent.filter((c) => entries.some((e) => e.kind === 'chat' && e.conversation.id === c.id));
+    this.paintList();
+    if (this.thread.querySelector('.sb-ai-empty')) this.renderSuggestions();
+    this.renderAddStep();
+  }
+
+  /** Draws the history from what refreshList last fetched: the open project, then "Find a chat", under day headings. */
+  paintList() {
+    const known = this.projects.map((p) => p.id);
+    const entries = findEntries(filterEntries(this.listEntries, this.projectId, known), this.listQuery);
     this.list.replaceChildren();
-    if (!entries.length) this.list.append(this.el('div', 'sb-muted sb-ai-list-empty', emptyLine(projects.find((p) => p.id === this.projectId))));
-    for (const entry of entries) {
-      this.list.append(entry.kind === 'chat' ? this.chatRow(entry.conversation) : entry.kind === 'find' ? this.findRow(entry.search) : this.reportRow(entry.progress));
+    if (this.listFailed) this.list.append(this.listFailure());
+    else if (!entries.length) this.list.append(this.el('div', 'sb-muted sb-ai-list-empty', this.listQuery ? noMatchLine(this.listQuery) : emptyLine(this.projects.find((p) => p.id === this.projectId))));
+    for (const group of groupEntries(entries)) {
+      const heading = this.el('div', 'sb-ai-list-day', group.label);
+      heading.setAttribute('role', 'heading');
+      heading.setAttribute('aria-level', '3');
+      this.list.append(heading);
+      for (const entry of group.entries) {
+        this.list.append(entry.kind === 'chat' ? this.chatRow(entry.conversation) : entry.kind === 'find' ? this.findRow(entry.search) : this.reportRow(entry.progress));
+      }
     }
     this.markSelected();
-    if (this.thread.querySelector('.sb-ai-empty')) this.renderSuggestions();
     this.markRunning();
-    this.renderAddStep();
+  }
+
+  /** The list's own line when the chats can't be fetched: never "Your chats and reports appear here", which would read as none. */
+  listFailure() {
+    const box = this.el('div', 'sb-ai-list-failed');
+    box.setAttribute('role', 'alert');
+    box.title = this.listFailed;
+    const line = this.el('div', 'sb-ai-list-failed-line');
+    line.append(this.icon('alert'), this.el('span', '', "Can't reach the server"));
+    const retry = this.el('button', 'sb-ai-list-retry', 'Try again');
+    retry.setAttribute('type', 'button');
+    retry.addEventListener('click', () => this.refreshList());
+    box.append(line, retry);
+    return box;
   }
 
   /** Is this session's step running right now (the one open here)? A quiet dot, as reports have their status. */
@@ -1011,30 +1206,52 @@ export class ChatView {
     row.dataset.id = conversation.search ? conversation.search.id : conversation.id;
     row.dataset.session = conversation.id;
     if (conversation.search) row.classList.add('is-find');
-    const text = this.el('div', 'sb-ai-conv-text');
-    const titleRow = this.el('div', 'sb-ai-conv-titlerow');
-    titleRow.append(this.el('div', 'sb-ai-conv-title', conversation.title), ...this.newsBadge(conversation));
-    text.append(titleRow, this.el('div', 'sb-ai-conv-date', this.when(conversation.updated)));
-    const remove = this.el('button', 'sb-ai-conv-x', '×');
-    remove.title = conversation.search ? 'Delete this search' : 'Delete this chat';
-    remove.addEventListener('click', (event) => { event.stopPropagation(); this.remove(conversation); });
-    row.append(this.icon(SESSION_KIND_ICON[conversation.search ? 'find' : conversation.kind ?? 'chat'] ?? 'chat'), text);
+    const meta = [this.el('span', 'sb-ai-conv-date', this.when(conversation.updated)), ...this.newsBadge(conversation)];
     if (conversation.routine) {
       const made = this.icon('clock', 'sb-ai-icon sb-ai-conv-routine');
       made.append(Object.assign(this.doc.createElementNS(SVG_NS, 'title'), { textContent: 'Made by a routine' }));
-      row.append(made);
+      meta.push(made);
     }
-    if (conversation.artifacts > 0) {
-      const count = this.el('span', 'sb-ai-conv-count', String(conversation.artifacts));
-      count.title = artifactsWord(conversation.artifacts);
-      row.append(count);
-    }
-    row.append(this.el('span', 'sb-ai-conv-dot'), ...this.moreButton({ kind: 'chat', conversation }, row), remove);
+    if (conversation.artifacts > 0) meta.push(this.countPill(conversation.artifacts, 'sb-ai-conv-count'));
+    const kind = conversation.search ? 'find' : conversation.kind ?? 'chat';
+    row.append(this.rowOpener(SESSION_KIND_ICON[kind] ?? 'chat', chatTitle(conversation), meta, kind),
+      this.el('span', 'sb-ai-conv-dot'), ...this.moreButton({ kind: 'chat', conversation }, row));
     row.addEventListener('contextmenu', (event) => { event.preventDefault(); openRowMenu(this, { kind: 'chat', conversation }, row); });
     row.addEventListener('click', () => this.openSession(conversation));
     row.addEventListener('dblclick', () => this.rename(conversation));
     row.title = 'Double-click to rename';
     return row;
+  }
+
+  /** A row's one real control: its icon and text as a button, so Tab and Enter reach it. A click bubbles to the row's
+   *  own listener, which also takes clicks on the row's padding. @param {string} iconName @param {string} title @param {Node[]} meta */
+  rowOpener(iconName, title, meta, kind = iconName) {
+    const open = this.el('button', 'sb-ai-conv-open');
+    open.setAttribute('type', 'button');
+    const text = this.el('span', 'sb-ai-conv-text');
+    const line = this.el('span', 'sb-ai-conv-meta');
+    line.append(...meta);
+    text.append(this.el('span', 'sb-ai-conv-title', title), line);
+    open.append(this.kindIcon(iconName, kind), text);
+    return open;
+  }
+
+  /** A row's kind icon, with its kind as tooltip and spoken name: Chat, Find papers, Research report (spec 029 R7). */
+  kindIcon(iconName, kind) {
+    const wrap = this.el('span', 'sb-ai-kind');
+    wrap.title = kindTitle(kind);
+    wrap.setAttribute('role', 'img');
+    wrap.setAttribute('aria-label', kindTitle(kind));
+    wrap.append(this.icon(iconName));
+    return wrap;
+  }
+
+  /** "2 artifacts" with a tooltip saying what they are (spec 029 R7). @param {number} n @param {string} cls */
+  countPill(n, cls) {
+    const pill = countPill(n);
+    const count = this.el('span', cls, pill.text);
+    count.title = pill.title;
+    return count;
   }
 
   /** The small "N new" badge for a session a routine added papers to since it was last opened ([] when there is none). */
@@ -1047,14 +1264,20 @@ export class ChatView {
   }
 
   /** The user opened this session: tells the engine (so the badge stays gone) and clears it here without a refresh.
-   *  An older server has no `markSeen`; the badge then simply never appears. */
+   *  Once the engine has it, tells the host (`newsChanged`), so a count kept outside the chat (the web rail's Home
+   *  badge) reads again. An older server has no `markSeen`; the badge then simply never appears. */
   markSeen(id) {
     for (const c of this.recent) if (c.id === id) delete c.news;
     for (const badge of Array.from(this.root.querySelectorAll('.sb-ai-news'))) {
       if (badge.closest('[data-id="' + id + '"], [data-session="' + id + '"]')) badge.remove();
     }
     if (this.newsById) this.newsById.delete(id);
-    this.host.ai().then((ai) => ai.conversations.markSeen?.(id)).catch((error) => this.host.logError(error));
+    this.host.ai().then(async (ai) => {
+      const told = ai.conversations.markSeen?.(id);
+      if (!told) return; // an older server
+      await told;
+      this.host.newsChanged?.();
+    }).catch((error) => this.host.logError(error));
   }
 
   /** A session opens as what it is: the saved Find search it belongs to (the table with its summary), or the thread. */
@@ -1070,13 +1293,9 @@ export class ChatView {
     const kind = conversation.search ? 'find' : conversation.kind ?? 'chat';
     const meta = this.el('span', 'sb-ai-card-meta');
     meta.append(this.icon(SESSION_KIND_ICON[kind] ?? 'chat'), this.el('span', 'sb-ai-card-when', sessionMeta({ kind, updated: conversation.updated })));
-    if (conversation.artifacts > 0) {
-      const count = this.el('span', 'sb-ai-card-count', String(conversation.artifacts));
-      count.title = artifactsWord(conversation.artifacts);
-      meta.append(count);
-    }
+    if (conversation.artifacts > 0) meta.append(this.countPill(conversation.artifacts, 'sb-ai-card-count'));
     meta.append(...this.newsBadge(conversation));
-    card.append(this.el('span', 'sb-ai-card-title', conversation.title), meta);
+    card.append(this.el('span', 'sb-ai-card-title', chatTitle(conversation)), meta);
     card.addEventListener('click', () => this.openSession(conversation));
     return card;
   }
@@ -1084,11 +1303,9 @@ export class ChatView {
   reportRow(progress) {
     const row = this.el('div', `sb-ai-conv is-report is-${progress.status.state}`);
     row.dataset.id = progress.id;
-    const text = this.el('div', 'sb-ai-conv-text');
     const date = progress.started ? ` · ${this.when(progress.started)}` : '';
-    text.append(this.el('div', 'sb-ai-conv-title', progress.question || 'Research report'),
-      this.el('div', 'sb-ai-conv-date', ReportView.statusLine(progress) + date));
-    row.append(this.icon('report'), text, ...this.moreButton({ kind: 'report', progress }, row));
+    row.append(this.rowOpener('report', progress.question || 'Research report', [this.el('span', 'sb-ai-conv-date', ReportView.statusLine(progress) + date)]),
+      ...this.moreButton({ kind: 'report', progress }, row));
     row.addEventListener('contextmenu', (event) => { event.preventDefault(); openRowMenu(this, { kind: 'report', progress }, row); });
     row.addEventListener('click', () => this.openReport(progress.id, progress.question));
     return row;
@@ -1097,29 +1314,33 @@ export class ChatView {
   findRow(search) {
     const row = this.el('div', 'sb-ai-conv is-find');
     row.dataset.id = search.id;
-    const text = this.el('div', 'sb-ai-conv-text');
-    text.append(this.el('div', 'sb-ai-conv-title', search.query), this.el('div', 'sb-ai-conv-date', `${search.count} papers · ${this.when(search.at)}`));
-    const remove = this.el('button', 'sb-ai-conv-x', '×');
-    remove.title = 'Delete this search';
-    remove.addEventListener('click', async (event) => {
-      event.stopPropagation();
-      if (!(await this.host.confirm(`Delete "${search.query}"? This can't be undone.`, { title: 'Delete search' }))) return;
-      try { // its stored result goes with it, or the session would stay behind, unlisted
-        const session = (await FindView.load(this.host, search.id)).session;
-        if (session) await (await this.host.ai()).conversations.remove(session);
-      } catch (error) { this.host.logError(error); }
-      await FindView.remove(this.host, search.id);
-      if (this.findID === search.id) this.setMode('find');
-      ChatView.refreshAll();
-    });
-    row.append(this.icon('find'), text, remove);
+    row.append(this.rowOpener('find', search.query, [this.el('span', 'sb-ai-conv-date', `${search.count} papers · ${this.when(search.at)}`)]),
+      ...this.moreButton({ kind: 'find', search }, row));
+    row.addEventListener('contextmenu', (event) => { event.preventDefault(); openRowMenu(this, { kind: 'find', search }, row); });
     row.addEventListener('click', () => this.openFind(search.id));
     return row;
   }
 
+  /** @param {{ id: string, query: string }} search a saved search with no session in the list */
+  async removeFind(search) {
+    if (!(await this.host.confirm(`Delete "${search.query}"? This can't be undone.`, { title: 'Delete search' }))) return;
+    try { // its stored result goes with it, or the session would stay behind, unlisted
+      const session = (await FindView.load(this.host, search.id)).session;
+      if (session) await (await this.host.ai()).conversations.remove(session);
+    } catch (error) { this.host.logError(error); }
+    await FindView.remove(this.host, search.id);
+    if (this.findID === search.id) this.setMode('find');
+    ChatView.refreshAll();
+  }
+
   markSelected() {
     const open = new Set([this.conversationID, this.reviewID, this.findID, this.sessionID].filter(Boolean));
-    for (const row of this.list?.children ?? []) row.classList.toggle('is-selected', open.has(row.dataset.id) || open.has(row.dataset.session));
+    for (const row of this.list?.children ?? []) {
+      const selected = open.has(row.dataset.id) || open.has(row.dataset.session);
+      row.classList.toggle('is-selected', selected);
+      const opener = row.querySelector(':scope > .sb-ai-conv-open');
+      if (selected) opener?.setAttribute('aria-current', 'true'); else opener?.removeAttribute('aria-current');
+    }
   }
 
   /** The quiet dot on the open session's row while one of its steps runs. */
@@ -1131,9 +1352,7 @@ export class ChatView {
   }
 
   when(iso) {
-    const date = new Date(iso);
-    const today = new Date().toDateString() === date.toDateString();
-    return today ? date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : date.toLocaleDateString();
+    return whenLabel(iso);
   }
 
   /** What's open, so another view can show the same thing ("Open in a tab"). */
@@ -1178,7 +1397,8 @@ export class ChatView {
     const more = this.el('button', 'sb-ai-conv-more');
     more.setAttribute('type', 'button');
     more.title = 'More';
-    more.setAttribute('aria-label', 'More');
+    more.setAttribute('aria-label', `More for ${entryTitle(entry)}`);
+    more.setAttribute('aria-haspopup', 'menu');
     more.append(this.icon('more'));
     more.addEventListener('click', (event) => { event.stopPropagation(); openRowMenu(this, entry, more); });
     return [more];
@@ -1220,7 +1440,10 @@ export class ChatView {
 
   renameEntry(entry) { if (entry.kind === 'chat') this.rename(entry.conversation); }
 
-  deleteEntry(entry) { if (entry.kind === 'chat') this.remove(entry.conversation); }
+  deleteEntry(entry) {
+    if (entry.kind === 'chat') this.remove(entry.conversation);
+    else if (entry.kind === 'find') void this.removeFind(entry.search);
+  }
 
   async remove(conversation) {
     if (!(await this.host.confirm(`Delete "${conversation.title}"? This can't be undone.`, { title: conversation.search ? 'Delete search' : 'Delete chat' }))) return;
@@ -1230,8 +1453,11 @@ export class ChatView {
     ChatView.refreshAll();
   }
 
+  /** Opens a stored chat. The thread says "Opening…" until its records arrive; a click on another chat (or anything
+   *  else) meanwhile wins, and the late answer is dropped, so a thread never lands under another chat's title. */
   async openConversation(id) {
     if (this.running) return;
+    const mine = (this.openToken = (this.openToken ?? 0) + 1);
     this.setMode('chat', { fresh: false });
     this.report?.stop();
     this.report = null;
@@ -1241,12 +1467,27 @@ export class ChatView {
     this.resetArtifacts();
     this.sessionID = id;
     this.markSeen(id);
-    this.setHeaderTitle(this.list.querySelector(`[data-id="${id}"] .sb-ai-conv-title`)?.textContent);
+    this.setHeaderTitle(entryTitle(this.listEntries.find((e) => e.kind === 'chat' && e.conversation.id === id) ?? { kind: 'chat' }));
     this.markSelected();
-    const ai = await this.host.ai();
-    const records = await ai.conversations.load(id);
-    // spec 007 E3: the results this session holds, and which answer made each (assistant.step -> step_end.writes)
-    const view = await ai.sessions?.view(id).catch(() => null);
+    this.thread.replaceChildren(this.el('div', 'sb-ai-text is-waiting sb-ai-opening', 'Opening…'));
+    const stale = () => mine !== this.openToken || this.conversationID !== id;
+    /** @type {any[]} */ let records;
+    /** @type {any} */ let view;
+    try {
+      const ai = await this.host.ai();
+      if (stale()) return;
+      // the records and the session's results are asked for together; the view is optional (an older engine has none)
+      // spec 007 E3: the results this session holds, and which answer made each (assistant.step -> step_end.writes)
+      [records, view] = await Promise.all([ai.conversations.load(id),
+        Promise.resolve().then(() => ai.sessions?.view(id)).catch(() => null)]);
+    } catch (error) {
+      if (stale()) return;
+      this.host.logError(error);
+      this.thread.replaceChildren(this.el('div', 'sb-ai-error', `Couldn't open this chat: ${/** @type {any} */ (error)?.message ?? error}`));
+      return;
+    }
+    if (stale()) return;
+    if (this.running) { this.thread.querySelector('.sb-ai-opening')?.remove(); return; } // a turn sent meanwhile keeps its thread
     this.artifacts = view?.results ?? [];
     this.sessionResults = this.artifacts;
     this.pickedRef = view?.current ?? null;
@@ -1262,6 +1503,7 @@ export class ChatView {
       if (record.type === 'user') this.addUser(record.text, record.attachments, { on: record.on, skills: record.skills });
       else if (record.type === 'assistant') { lastTurn = this.paintRecordedAnswer(this.thread, record, placed); if (record.columnChange) this.addGapChip(lastTurn, record); }
       else if (record.type === 'failed') this.fail(this.addAnswer(), record.error);
+      else if (record.type === 'step' && this.paintStepRecord(record, placed)) lastTurn = null; // spec 030 R6
     }
     // a version no answer wrote (a restore, a saved search's papers) sits under the last answer, or alone
     let home = lastTurn?.cards;
@@ -1271,6 +1513,60 @@ export class ChatView {
       this.addArtifactCard(home, summary);
     }
     this.scrollToEnd(true);
+    this.renderAddStep();
+  }
+
+  /** Spec 030 R6: a Find search or a report that was a step of this session, where it happened in the thread: its query
+   *  or question (naming the step), then its results' cards; a report's view in between, live while it runs. Other
+   *  steps (columns, narrowing, picked papers) are drawn as before. Returns whether it drew anything.
+   *  @param {any} record a `step` record @param {Set<string>} placed */
+  paintStepRecord(record, placed) {
+    const input = record.input ?? {};
+    const writes = this.recordInfo?.stepWrites.get(record.id) ?? [];
+    const cards = () => {
+      const home = this.el('div', 'sb-art-cards');
+      for (const ref of writes) {
+        const summary = this.recordInfo?.summaries.get(`${ref.id}@${ref.version}`);
+        if (summary) { this.addArtifactCard(home, summary); placed.add(`${ref.id}@${ref.version}`); }
+      }
+      if (home.childNodes.length) this.thread.append(home);
+    };
+    if (input.kind === 'find' || (input.kind === 'import' && String(input.from ?? '').startsWith('find:'))) {
+      this.addUser(String(input.query ?? input.label ?? ''), [], { step: 'Find papers' });
+      cards();
+      return true;
+    }
+    if (input.kind === 'report' && input.review) {
+      const request = input.request ?? {};
+      const label = reportStepLabel(request);
+      this.appendReport(input.review, String(request.question ?? ''), label);
+      for (const ref of writes) placed.add(`${ref.id}@${ref.version}`); // the report view shows them; their cards are in the panel's list
+      return true;
+    }
+    return false;
+  }
+
+  /** Spec 030 R6: a saved Find search opened as its table shows what its session did after it (chat turns, other
+   *  searches, reports), under the table. @param {string} session @param {string} findId @param {string} query */
+  async paintLaterSteps(session, findId, query) {
+    let records;
+    try { records = await (await this.host.ai()).conversations.load(session); } catch (error) { this.host.logError(error); return; }
+    if (this.sessionID !== session || this.findID !== findId) return;
+    const summaries = new Map(records.filter((r) => r.type === 'result').map((r) => [`${r.summary.ref.id}@${r.summary.ref.version}`, r.summary]));
+    const stepWrites = new Map(records.filter((r) => r.type === 'step_end').map((r) => [r.id, r.writes]));
+    this.recordInfo = { records, summaries, stepWrites };
+    // the step this search is: imported (an old saved search) or put by the search itself (a `find` step with its query)
+    const first = records.findIndex((r) => r.type === 'step' && ((r.input?.kind === 'import' && r.input.from === `find:${findId}`) || (r.input?.kind === 'find' && r.input.query === query)));
+    const later = records.slice(first + 1);
+    if (!later.some((r) => r.type === 'user' || r.type === 'step')) return;
+    this.thread.querySelector('.sb-addstep')?.remove();
+    const placed = new Set();
+    for (const record of later) {
+      if (record.type === 'user') this.addUser(record.text, record.attachments, { on: record.on, skills: record.skills });
+      else if (record.type === 'assistant') this.paintRecordedAnswer(this.thread, record, placed);
+      else if (record.type === 'failed') this.fail(this.addAnswer(), record.error);
+      else if (record.type === 'step') this.paintStepRecord(record, placed);
+    }
     this.renderAddStep();
   }
 
@@ -1367,16 +1663,22 @@ export class ChatView {
   // ------------------------------------------------------------------ paper searches
 
   async startFind(query) {
+    const inThread = this.threadOpen; // spec 030 R2: read before this search's own line is on screen
     this.input.value = '';
     this.fitInput();
+    // the thread's session first, so an earlier Find search in it is imported before this one is added
+    if (inThread && !this.sessionID) {
+      try { await this.ensureSession(query); } catch (error) { this.host.logError(error); }
+    }
     this.thread.querySelector('.sb-ai-empty')?.remove();
+    this.thread.querySelector('.sb-addstep')?.remove();
     this.follower.disable(); // a table of papers is read from the top
-    this.addUser(query);
+    this.addUser(query, [], inThread ? { step: 'Find papers' } : {});
     const view = new FindView(this, { query, scope: this.scopeValue(), sources: { papers: this.sources.papers, scholarly: this.sources.scholarly } });
+    if (inThread) { view.root.classList.add('is-step'); view.session = this.sessionID; view.inThread = true; } // its papers go into this thread's session
     this.findView = view;
     this.thread.append(view.root);
-    this.findID = view.id;
-    this.setHeaderTitle(query);
+    if (!inThread) { this.findID = view.id; this.setHeaderTitle(query); }
     await this.runInThread(async (signal) => {
       await view.run(signal);
       ChatView.refreshAll();
@@ -1409,6 +1711,7 @@ export class ChatView {
     this.thread.append(this.findView.root);
     this.scroller.scrollTop = 0;
     this.renderAddStep();
+    if (saved.session) await this.paintLaterSteps(saved.session, id, saved.query); // spec 030 R6
   }
 
   /** Runs `work(signal)` as the thread's current job: Send turns into Stop until it ends. */
@@ -1434,6 +1737,7 @@ export class ChatView {
     const panel = this.ensurePanel();
     if (!this.artifactOpen) this.threadScroll = this.scroller.scrollTop;
     this.artifactOpen = true;
+    this.foldListForPanel();
     this.artifactPane.hidden = false;
     this.applyArtifactLayout();
     await panel.open(`review:${review}`, { id: 'screening' }, 1);
@@ -1442,9 +1746,73 @@ export class ChatView {
   /** Called by the ReportView on each progress snapshot, so the history row's status stays current. A panel still showing
    *  this review's toggles is read again once the review is no longer waiting (the card answered it first). */
   onReviewProgress(progress) {
+    // spec 030 R3: a report running inside this thread put its report and papers in the session when it finished
+    if (progress?.status?.state === 'done' && this.inlineReports?.some((v) => v.id === progress.id)) void this.refreshArtifacts();
     if (progress?.status && progress.status.state !== 'awaiting_review' && this.panel?.state?.sessionId === `review:${progress.id}` && this.panel.gate()) this.panel.load();
     clearTimeout(this.listTimer);
     this.listTimer = setTimeout(() => this.refreshList(), 300);
+  }
+
+  /** Spec 030 R4: the session the next step of an open thread goes into. A thread without one gets one first: a
+   *  Find search is imported (its table becomes the session's first result); anything else gets a new session titled
+   *  `title`. The thread on screen stays as it is. @param {string} title @returns {Promise<string>} */
+  async ensureSession(title) {
+    if (this.sessionID) { this.conversationID ??= this.sessionID; return this.sessionID; }
+    if (this.findView?.rows?.length && (await this.importFind())) { this.conversationID = this.sessionID; return /** @type {string} */ (this.sessionID); }
+    const ai = await this.host.ai();
+    const id = this.conversationID ?? (await ai.conversations.create('chat', this.projectOpt()));
+    if (!this.conversationID) {
+      const name = title.replace(/\s+/g, ' ').slice(0, 60);
+      await ai.conversations.rename(id, name);
+      this.setHeaderTitle(name);
+    }
+    this.conversationID = id;
+    this.sessionID = id;
+    ChatView.refreshAll();
+    return id;
+  }
+
+  /** Spec 030 R3: a review that is a step of this thread's session, shown under the turns before it, not on its own
+   *  page. `label` names the step on its question line. @param {string} id @param {string} question @param {string} label */
+  appendReport(id, question, label) {
+    this.thread.querySelector('.sb-addstep')?.remove();
+    this.thread.querySelector('.sb-ai-empty')?.remove();
+    if (question) this.addUser(question, [], { step: label });
+    const view = new ReportView(this, id);
+    view.root.append(this.el('div', 'sb-ai-text is-waiting', 'Loading…'));
+    this.thread.append(view.root);
+    (this.inlineReports ??= []).push(view);
+    this.follower.follow();
+    void view.watch();
+    return view;
+  }
+
+  /** Spec 030 R3: Research report or Systematic review asked in an open thread: one `report` step of its session, on
+   *  the current paper set or table when there is one ("Report on these"), shown in the thread. */
+  async startReportHere(question) {
+    const sources = Object.keys(this.sources).filter((id) => this.sources[id]);
+    if (!sources.length) { this.fail(this.addAnswer(), { message: 'Pick at least one place to search: Library, Scholarly or Web.' }); return; }
+    const systematic = this.mode === 'systematic';
+    this.input.value = '';
+    this.fitInput();
+    try {
+      const session = await this.ensureSession(question);
+      const current = this.currentSummary();
+      const on = current && (current.kind === 'papers' || current.kind === 'table') ? current : null;
+      const request = {
+        question, scope: this.scopeValue(), sources, depth: this.depth.value, pipeline: 2, session, ...(this.projectOpt() ?? {}), ...(systematic ? { systematic: true } : {}),
+        years: { from: this.yearFrom.value ? Number(this.yearFrom.value) : null, to: this.yearTo.value ? Number(this.yearTo.value) : null },
+        ...(this.skills.length ? { skills: this.skills.map((name) => ({ name })) } : {}),
+        ...(on ? { on: on.ref, ...(on.kind === 'table' ? { fromTable: true, autoApprove: true } : {}) } : {}),
+      };
+      const id = await (await this.host.ai()).reviews.start(request);
+      this.skills = [];
+      this.renderChips();
+      this.appendReport(id, question, reportStepLabel(request));
+      ChatView.refreshAll();
+    } catch (error) {
+      this.fail(this.addAnswer(), { message: String(error?.message ?? error) });
+    }
   }
 
   async startReport(question) {
@@ -1478,8 +1846,11 @@ export class ChatView {
   async submit() {
     const text = this.input.value.trim();
     if (!text || this.running || this.noSources || PICKER_MODES.includes(this.mode)) return;
-    if (isReviewMode(this.mode)) return this.startReport(text);
+    if (isReviewMode(this.mode)) return this.threadOpen ? this.startReportHere(text) : this.startReport(text);
     if (this.mode === 'find') return this.startFind(text);
+    // spec 030 R5: Quick answer in an open thread is a turn of its session (saved, and the next step can use it)
+    const oneOff = this.mode === 'ask' && !this.threadOpen;
+    const inThread = this.threadOpen;
     this.pendingAbout = null;
     const attachments = [...this.activeContext, ...this.attachments].map((a) => a.attachment);
     const { web, sources } = this.sendSources();
@@ -1488,6 +1859,7 @@ export class ChatView {
     this.input.value = '';
     this.fitInput();
     this.renderSend();
+    const attached = this.attachments;
     this.attachments = [];
     this.skills = [];
     this.renderChips();
@@ -1498,7 +1870,7 @@ export class ChatView {
     const on = current?.kind === 'papers' ? { result: { id: current.ref.id, version: current.ref.version }, rows: 'all' } : null;
     const user = this.addUser(text, attachments, on ? { skills, on } : { skills });
     const turn = this.addAnswer();
-    turn.retry = { run: () => this.resendAfterSwitch(text, this.mode) };
+    turn.retry = { run: () => { this.attachments = [...attached, ...this.attachments]; this.skills = skills; this.renderChips(); return this.resendAfterSwitch(text, this.mode); } };
     this.startLive(turn);
     this.reserveSpace(user, turn.root);
     this.follower.follow();
@@ -1506,9 +1878,11 @@ export class ChatView {
     this.setRunning(controller);
     try {
       const ai = await this.host.ai();
-      if (this.mode === 'ask') {
+      if (oneOff) {
         await this.stream(turn, ai.ask(text, { attachments, web, scope, sources, signal: controller.signal }), { streamText: false });
       } else {
+        // spec 030 R4: an open thread's session (a Find search's, a report's) takes the question; a new one only for a new thread
+        if (!this.conversationID && inThread) await this.ensureSession(text);
         const fresh = !this.conversationID;
         this.conversationID ??= await ai.conversations.create('chat', this.projectOpt());
         this.sessionID = this.conversationID;
@@ -1583,7 +1957,7 @@ export class ChatView {
       this.renderActivities(turn);
     } else if (event.type === 'notice' && event.kind === 'rate_limit') {
       if (!this.reportOptions.hidden) void this.refreshUsage();
-      if (primary) this.where.textContent = `${this.where.textContent.split(' · ')[0]} · ${event.text}`;
+      if (primary) { this.whereText.textContent = `${this.whereText.textContent.split(' · ')[0]} · ${event.text}`; this.where.title = event.text; }
     } else if (event.type === 'notice') {
       turn.notice.textContent = event.text;
     } else if (event.type === 'result') {
@@ -1690,15 +2064,16 @@ export class ChatView {
     this.renderSuggestions();
   }
 
-  /** @param {string} text @param {any[]} [attachments] @param {{ into?: HTMLElement, on?: { result: any, rows: any } | null }} [opts]
-   *  `into`: a container other than the thread (the Chat with papers tab); `on`: what the question was about (spec 007 §6). */
+  /** @param {string} text @param {any[]} [attachments] @param {{ into?: HTMLElement, on?: { result: any, rows: any } | null, skills?: string[], step?: string }} [opts]
+   *  `into`: a container other than the thread (the Chat with papers tab); `on`: what the question was about (spec 007 §6);
+   *  `step`: the workflow this question started, in a thread of several (spec 030: "Find papers", "Research report"). */
   addUser(text, attachments = [], opts = {}) {
     this.thread.querySelector('.sb-addstep')?.remove();
-    const box = this.el('div', 'sb-ai-user has-avatar');
-    // who said it: a person here, the AI mark on answers, so the two read apart at a glance
-    const who = personAvatar(this.doc, { size: 20, label: 'You' });
-    who.classList.add('sb-ai-avatar');
-    box.append(who, this.el('div', 'sb-ai-user-text', text));
+    // spec 029 R14: no mark on your own messages (the bubble already says who wrote it); answers keep the AI mark
+    const box = this.el('div', 'sb-ai-user');
+    // spec 030: in a thread of several workflows, a question that started a Find search or a report says so
+    if (opts.step) { box.classList.add('is-step'); box.append(this.el('div', 'sb-ai-user-step', opts.step)); }
+    box.append(this.el('div', 'sb-ai-user-text', text));
     if (opts.on) {
       const total = this.artifacts.find((a) => a.ref.id === opts.on.result?.id)?.rows ?? null;
       const said = describeOn(opts.on, total);
@@ -1948,6 +2323,15 @@ export class ChatView {
     turn.text = box;
     // The chosen AI is not installed: offer the ones that are ready. Only a turn asked just now knows its question (`retry`).
     if (error.kind === NOT_INSTALLED && turn.retry) void offerSwitch(this, box, turn.retry.run);
+    else if (turn.retry) box.append(this.tryAgainButton(turn.retry.run));
+  }
+
+  /** Asks the failed question again, once, as a new turn under this one. @param {() => any} run */
+  tryAgainButton(run) {
+    const again = /** @type {HTMLButtonElement} */ (this.el('button', 'sb-ai-error-again', 'Try again'));
+    again.setAttribute('type', 'button');
+    again.addEventListener('click', () => { again.disabled = true; void run(); });
+    return again;
   }
 
   /** `force` jumps to the end and follows from there; otherwise pins only if the thread is following. */
@@ -1960,6 +2344,8 @@ export class ChatView {
 
   /** A new thread, a reopened one or another kind of item: nothing of the old session's results stays on screen. */
   resetArtifacts() {
+    for (const view of this.inlineReports ?? []) view.stop(); // spec 030 R3: reports shown inside the old thread
+    this.inlineReports = [];
     this.closeArtifact();
     this.recordInfo = null;
     this.panel?.resetChat();
@@ -2001,6 +2387,7 @@ export class ChatView {
     this.artifactsButton.hidden = n === 0;
     this.artifactsButton.textContent = `Artifacts (${n})`;
     this.artifactsButton.title = 'The tables and paper sets in this chat';
+    this.paintPanelToggle();
     this.renderCurrent();
     this.renderAddStep();
   }
@@ -2078,6 +2465,7 @@ export class ChatView {
     const panel = this.ensurePanel();
     if (!this.artifactOpen) this.threadScroll = this.scroller.scrollTop;
     this.artifactOpen = true;
+    this.foldListForPanel();
     this.artifactPane.hidden = false;
     this.applyArtifactLayout();
     const latest = this.artifacts.find((a) => a.ref.id === ref.id)?.ref.version;
@@ -2089,8 +2477,26 @@ export class ChatView {
     this.artifactOpen = false;
     this.artifactExpanded = false;
     this.artifactPane.hidden = true;
+    if (this.autoFolded) { this.autoFolded = false; this.historyCollapsed = false; this.applyHistoryCollapsed(false); }
     this.applyArtifactLayout();
     if (this.threadScroll != null) this.scroller.scrollTop = this.threadScroll; // the thread was hidden, not rebuilt
+  }
+
+  /** The panel needs the history list's room when the chat is short of it. The fold is not saved: closing the panel brings
+   *  the list back, unless the user folded it themselves. */
+  foldListForPanel() {
+    if (this.historyCollapsed || !panelFoldsList(this.root.clientWidth)) return;
+    this.autoFolded = true;
+    this.historyCollapsed = true;
+    this.applyHistoryCollapsed(true);
+  }
+
+  paintPanelToggle() {
+    const label = this.artifactOpen ? 'Close the results panel' : 'Open the results panel';
+    this.panelToggle.hidden = this.artifacts.length === 0;
+    this.panelToggle.title = label;
+    this.panelToggle.setAttribute('aria-label', label);
+    this.panelToggle.setAttribute('aria-expanded', String(Boolean(this.artifactOpen)));
   }
 
   /** spec 007 §4 "Widths": side by side from 960 px, over the thread from 560, full view below. */
@@ -2106,6 +2512,7 @@ export class ChatView {
     this.root.classList.toggle('has-artifact', open);
     for (const m of ['side', 'cover', 'full']) this.root.classList.toggle(`is-art-${m}`, open && mode === m);
     this.root.classList.toggle('is-art-expanded', expanded);
+    if (this.panelToggle) this.paintPanelToggle();
     this.panel?.setLayout(mode, expanded);
     if (open && mode === 'side' && !expanded) this.artifactPane.style.width = `${this.clampArtifactWidth(this.host.prefs.get('artifactWidth'))}px`;
     else this.artifactPane.style.width = '';
@@ -2155,7 +2562,8 @@ export class ChatView {
 
   /** Called by a Find papers view once its rows are stored as a result. */
   setFindSession(view, sessionId, summary) {
-    if (this.findID !== view.id) return;
+    if (this.findID !== view.id && this.findView !== view) return; // spec 030 R2: also a search run inside a thread
+    if (this.sessionID && this.sessionID !== sessionId) return;
     this.sessionID = sessionId;
     this.noteArtifact(summary);
   }
@@ -2316,7 +2724,7 @@ export class ChatView {
       const id = await (await this.host.ai()).reviews.start(request);
       this.input.value = '';
       this.fitInput();
-      this.openReport(id, question);
+      this.appendReport(id, question, reportStepLabel(request)); // spec 030 R3: in this thread
       ChatView.refreshAll();
     } catch (error) {
       this.host.logError(error);
@@ -2365,7 +2773,7 @@ export class ChatView {
       if (await this.importFind()) return open(this.papersInSession()?.ref);
       return;
     }
-    const keep = Boolean(this.sessionID && this.artifacts.length);
+    const keep = this.threadOpen || Boolean(this.sessionID && this.artifacts.length); // spec 030 R1: an open thread stays
     this.setMode(kind, { fresh: false });
     if (!keep) {
       this.report?.stop();
@@ -2474,7 +2882,9 @@ export class ChatView {
    *  right tab (Chat with papers) or the Columns popover (Extract data). */
   async finishPick(kind, rows, label, from) {
     const ai = await this.host.ai();
+    const kept = this.threadOpen; // spec 030 R1: picking papers in an open thread adds them under it
     let id = this.sessionID;
+    if (!id && kept) id = await this.ensureSession(label);
     if (!id) {
       id = await ai.conversations.create('chat', this.projectOpt());
       await ai.conversations.rename(id, label.replace(/\s+/g, ' ').slice(0, 60));
@@ -2484,13 +2894,13 @@ export class ChatView {
     if (!this.findID) this.conversationID ??= id;
     this.picking = null;
     this.setMode('chat', { fresh: false });
-    this.thread.replaceChildren();
+    if (kept) this.thread.querySelector('.sb-ai-pick')?.remove(); else this.thread.replaceChildren();
     const cards = this.thread.appendChild(this.el('div', 'sb-art-cards'));
     this.artifacts = await ai.sessions.view(id).then((v) => v.results, () => this.artifacts);
     this.sessionResults = this.artifacts;
     this.addArtifactCard(cards, summary);
     this.noteArtifact(summary, { skipPanel: true });
-    this.setHeaderTitle(label);
+    if (!kept) this.setHeaderTitle(label);
     ChatView.refreshAll();
     await this.openPaperTool(kind, summary.ref);
   }
@@ -2608,22 +3018,40 @@ tab-content:has(> .sb-ai) { display: flex; }
 .sb-ai-new { align-self: stretch; }
 .sb-ai-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
 .sb-ai-list-empty { padding: 4px 6px; }
+.sb-ai-find { display: flex; align-items: center; gap: 6px; padding: 0 8px; border: 1px solid var(--sb-ui-line); border-radius: 6px; background: var(--sb-ui-bg); color: var(--sb-ui-muted); }
+.sb-ai-find:focus-within { border-color: var(--sb-ui-accent); }
+.sb-ai-find > .sb-ai-icon { width: 14px; height: 14px; }
+.sb-ai .sb-ai-find-input { flex: 1; min-width: 0; height: 28px; min-height: 0; padding: 0; border: none; border-radius: 0; background: transparent; box-shadow: none; outline: none; color: var(--sb-ui-text); font: inherit; }
+.sb-ai-list-day { padding: 10px 6px 3px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--sb-ui-faint); }
+.sb-ai-list-day:first-child { padding-top: 2px; }
+.sb-ai-list-failed { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 8px; margin-bottom: 4px; border: 1px solid var(--sb-ui-line); border-radius: 6px; background: var(--sb-ui-bg); }
+.sb-ai-list-failed-line { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.sb-ai-list-failed-line > .sb-ai-icon { color: var(--sb-ui-danger); }
+.sb-ai .sb-ai-list-retry { height: auto; min-height: 0; padding: 3px 10px; border: 1px solid var(--sb-ui-line); border-radius: 999px; background: transparent; box-shadow: none; color: var(--sb-ui-text); font: inherit; font-size: 12px; cursor: pointer; }
+.sb-ai .sb-ai-list-retry:hover { background: var(--sb-ui-hover); }
 .sb-ai-conv { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 6px; }
-.sb-ai-conv > .sb-ai-icon { width: 14px; height: 14px; opacity: .6; }
+.sb-ai-conv { cursor: pointer; }
+/* .sb-ai in front: Obsidian's button rule would otherwise give this a fill, a shadow and a fixed height */
+.sb-ai .sb-ai-conv-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; height: auto; min-height: 0; padding: 0; border: none; border-radius: 4px; background: transparent; box-shadow: none; color: inherit; font: inherit; text-align: start; cursor: pointer; white-space: normal; }
+.sb-ai .sb-ai-conv-open:focus-visible { outline: 2px solid var(--sb-ui-accent); outline-offset: 2px; }
+.sb-ai-conv-open > .sb-ai-kind { flex: none; display: inline-flex; }
+.sb-ai-conv-open > .sb-ai-kind > .sb-ai-icon { width: 14px; height: 14px; opacity: .6; }
 .sb-ai-conv:hover { background: var(--sb-ui-hover); }
-.sb-ai-conv.is-selected { background: var(--sb-ui-accent); color: var(--sb-ui-on-accent); }
-.sb-ai-conv-text { flex: 1; min-width: 0; }
-.sb-ai-conv-titlerow { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.sb-ai-conv-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.sb-ai-conv.is-selected { background: var(--sb-ui-accent-tint); }
+.sb-ai-conv-text { flex: 1; min-width: 0; display: block; }
+.sb-ai-conv-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.sb-ai-conv.is-selected .sb-ai-conv-title { font-weight: 600; }
+.sb-ai-conv-meta { display: flex; align-items: center; gap: 6px; min-width: 0; margin-top: 1px; }
+.sb-ai .sb-ai-conv-meta .sb-ai-conv-count, .sb-ai .sb-ai-conv-meta .sb-ai-conv-routine { margin-inline-start: 0; }
+.sb-ai .sb-ai-conv-meta .sb-ai-icon { width: 12px; height: 12px; }
 .sb-ai .sb-ai-news { flex: none; padding: 0 6px; border-radius: 8px; font-size: 10.5px; line-height: 16px; font-weight: 600; white-space: nowrap; background: var(--sb-ui-accent); color: var(--sb-ui-on-accent); }
-.sb-ai-conv.is-selected .sb-ai-news { background: var(--sb-ui-on-accent); color: var(--sb-ui-accent); }
-.sb-ai-conv-date { font-size: 11.5px; opacity: .7; }
+.sb-ai-conv-date { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; opacity: .7; }
 /* .sb-ai in front: Obsidian's button rule (button:not(.clickable-icon)) would otherwise give these a grey box that is always shown */
-.sb-ai .sb-ai-conv-x, .sb-ai .sb-ai-conv-more, .sb-ai .sb-ai-chip-x { border: none; background: none; box-shadow: none; height: auto; min-height: 0; color: inherit; font: inherit; cursor: pointer; opacity: 0; padding: 0 4px; }
-/* At rest the row actions take no width, so a title gets the whole row; they open on hover or keyboard focus. */
-.sb-ai .sb-ai-conv .sb-ai-conv-x, .sb-ai .sb-ai-conv .sb-ai-conv-more { max-width: 0; padding: 0; overflow: hidden; flex: none; }
-.sb-ai .sb-ai-conv:hover .sb-ai-conv-x, .sb-ai .sb-ai-conv:hover .sb-ai-conv-more,
-.sb-ai .sb-ai-conv:focus-within .sb-ai-conv-x, .sb-ai .sb-ai-conv:focus-within .sb-ai-conv-more { opacity: .7; max-width: 24px; padding: 0 4px; }
+.sb-ai .sb-ai-conv-more, .sb-ai .sb-ai-chip-x { border: none; background: none; box-shadow: none; height: auto; min-height: 0; color: inherit; font: inherit; cursor: pointer; opacity: 0; padding: 0 4px; }
+/* At rest the row's "..." takes no width, so a title gets the whole row; it opens on hover or keyboard focus, and stays on a touch screen. */
+.sb-ai .sb-ai-conv .sb-ai-conv-more { max-width: 0; padding: 0; overflow: hidden; flex: none; }
+.sb-ai .sb-ai-conv:hover .sb-ai-conv-more, .sb-ai .sb-ai-conv:focus-within .sb-ai-conv-more { opacity: .7; max-width: 24px; padding: 0 4px; }
+@media (hover: none) { .sb-ai .sb-ai-conv .sb-ai-conv-more { opacity: .7; max-width: 24px; padding: 0 4px; } }
 .sb-ai-conv-more .sb-ai-icon { width: 14px; height: 14px; }
 .sb-ai-side { position: relative; }
 /* Projects (spec 011 U5): one quiet switcher row; the actions sit behind menus */
@@ -2649,20 +3077,27 @@ tab-content:has(> .sb-ai) { display: flex; }
 .sb-ai .sb-ai-chip-x, .sb-ai .sb-ai-picker-item, .sb-ai .sb-ai-picker-more { background: transparent; }
 .sb-ai-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .sb-ai-head { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--sb-ui-line); }
-.sb-ai-history-toggle { border: none; background: transparent; color: var(--sb-ui-muted); font: inherit; font-size: 13px;
-	line-height: 1; padding: 4px 6px; border-radius: 5px; cursor: pointer; }
-.sb-ai-history-toggle:hover { background: var(--sb-ui-hover); color: var(--sb-ui-text); }
-.sb-ai-history-newchat[hidden], .sb-ai-head-title[hidden] { display: none; }
-.sb-ai-head-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--sb-ui-muted); font-size: 12px; max-width: 220px; }
-.sb-ai-where { margin-inline-start: auto; font-size: 11px; color: var(--sb-ui-muted); }
+.sb-ai .sb-ai-history-toggle, .sb-ai .sb-ai-panel-toggle { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; min-height: 0; padding: 0; border: none; border-radius: 6px;
+	background: transparent; box-shadow: none; color: var(--sb-ui-muted); cursor: pointer; }
+.sb-ai .sb-ai-history-toggle:hover, .sb-ai .sb-ai-panel-toggle:hover { background: var(--sb-ui-hover); color: var(--sb-ui-text); }
+.sb-ai-history-newchat[hidden] { display: none; }
+.sb-ai-head-title { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; white-space: nowrap; }
+.sb-ai-head-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.sb-ai-head-crumb { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; color: var(--sb-ui-muted); font-size: 12px; }
+.sb-ai-where { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 240px; font-size: 11px; color: var(--sb-ui-muted); white-space: nowrap; }
+.sb-ai-where-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sb-ai-where-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--sb-ui-ok); }
+.sb-ai-where.is-off .sb-ai-where-dot { box-sizing: border-box; background: transparent; border: 1.5px solid var(--sb-ui-danger); }
 .sb-ai-scroll { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
-.sb-ai-thread { flex: 1 0 auto; box-sizing: border-box; width: 100%; max-width: 760px; margin: 0 auto; padding: 20px 24px 12px;
+/* spec 029 R8: the answer column and the message box grow to 860 px of text on a wide screen (712 before); a narrow pane is never that wide */
+.sb-ai-thread { flex: 1 0 auto; box-sizing: border-box; width: 100%; max-width: 908px; margin: 0 auto; padding: 20px 24px 12px;
 	display: flex; flex-direction: column; gap: 14px; }
-.sb-ai-empty { flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding-top: 8px; }
+/* spec 029 R5: the welcome and the suggestions sit together at the foot of the thread, just above the message box */
+.sb-ai-empty { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: flex-start; gap: 6px; padding-top: 8px; }
 .sb-ai-empty-icon { width: 28px; height: 28px; stroke-width: 1.25; color: var(--sb-ui-accent); margin-bottom: 4px; }
 .sb-ai-empty-title { font-size: 20px; font-weight: 700; }
 .sb-ai-empty-text { max-width: 460px; color: var(--sb-ui-muted); line-height: 1.45; }
-.sb-ai-suggestions { margin-top: auto; padding-top: 24px; display: flex; flex-wrap: wrap; gap: 8px; max-width: 100%; }
+.sb-ai-suggestions { padding-top: 14px; display: flex; flex-wrap: wrap; gap: 8px; max-width: 100%; }
 .sb-ai-pill { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; padding: 7px 14px; border-radius: 999px; cursor: pointer;
 	font: inherit; color: var(--sb-ui-text); background: transparent; border: 1px solid var(--sb-ui-line); }
 .sb-ai-pill:hover { background: var(--sb-ui-hover); }
@@ -2723,8 +3158,11 @@ tab-content:has(> .sb-ai) { display: flex; }
 .sb-ai-badge { align-self: flex-start; font-size: 11.5px; padding: 1px 6px; border-radius: 6px; background: var(--sb-ui-line); color: var(--sb-ui-muted); }
 .sb-ai-notice { font-size: 11.5px; color: var(--sb-ui-muted); }
 .sb-ai-error { padding: 8px 10px; border-radius: 10px; background: color-mix(in srgb, var(--sb-ui-danger) 12%, transparent); }
+.sb-ai .sb-ai-error-again { display: block; height: auto; min-height: 0; margin-top: 8px; padding: 3px 10px; border: 1px solid var(--sb-ui-line); border-radius: 999px; background: transparent; box-shadow: none; color: var(--sb-ui-text); font: inherit; font-size: 12px; cursor: pointer; }
+.sb-ai .sb-ai-error-again:hover { background: var(--sb-ui-hover); }
+.sb-ai .sb-ai-error-again[disabled] { opacity: .5; cursor: default; }
 .sb-ai-composer { padding: 4px 24px 16px; }
-.sb-ai-composer-inner { max-width: 712px; margin: 0 auto; display: flex; flex-direction: column; gap: 6px; }
+.sb-ai-composer-inner { max-width: 860px; margin: 0 auto; display: flex; flex-direction: column; gap: 6px; }
 .sb-ai-box { display: flex; flex-direction: column; gap: 8px; padding: 12px 12px 10px 14px; border-radius: 18px;
 	border: 1px solid var(--sb-ui-line); background: var(--sb-ui-bg); }
 .sb-ai-box:focus-within { border-color: var(--sb-ui-accent); box-shadow: 0 0 10px color-mix(in srgb, var(--sb-ui-accent) 18%, transparent); }
@@ -2742,18 +3180,31 @@ tab-content:has(> .sb-ai) { display: flex; }
 .sb-ai-modewrap { position: relative; display: inline-flex; align-items: center; }
 .sb-ai-modeicon { position: absolute; inset-inline-start: 9px; display: flex; pointer-events: none; color: var(--sb-ui-text); }
 .sb-ai-modeicon > .sb-ai-icon { width: 14px; height: 14px; }
-.sb-ai-modepick { appearance: none; font: inherit; font-weight: 600; color: var(--sb-ui-text); cursor: pointer;
+/* as wide as the chosen mode, not the longest one, so the controls stay on one line (a browser without field-sizing keeps the old width) */
+.sb-ai-modepick { appearance: none; field-sizing: content; font: inherit; font-weight: 600; color: var(--sb-ui-text); cursor: pointer;
 	padding: 4px 22px 4px 28px; border-radius: 999px; border: 1px solid var(--sb-ui-line); background-color: var(--sb-ui-line);
 	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%23888'/%3E%3C/svg%3E");
 	background-repeat: no-repeat; background-position: right 8px center; }
-.sb-ai-sources { display: inline-flex; gap: 6px; }
 .sb-ai-row > .sb-button { border-radius: 999px; padding: 3px 10px; background: transparent; }
-.sb-ai-source { font: inherit; padding: 3px 10px; border-radius: 999px; cursor: pointer;
-	border: 1px solid var(--sb-ui-line); background: transparent; color: var(--sb-ui-muted); }
-.sb-ai-source.is-on { border-color: var(--sb-ui-accent); color: var(--sb-ui-text);
-	background: color-mix(in srgb, var(--sb-ui-accent) 12%, transparent); }
-.sb-ai-source:disabled { cursor: default; opacity: .45; }
-.sb-ai-source.is-offline { border-style: dashed; }
+/* spec 029 R6: one Sources button naming what is on; its menu of checkboxes opens above it */
+.sb-ai-sources { position: relative; display: inline-flex; min-width: 0; max-width: 100%; }
+.sb-ai .sb-ai-sources-btn { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; height: auto; min-height: 0; box-shadow: none; font: inherit;
+	padding: 3px 8px 3px 10px; border-radius: 999px; cursor: pointer; white-space: normal; text-align: start;
+	border: 1px solid var(--sb-ui-accent); color: var(--sb-ui-text); background: color-mix(in srgb, var(--sb-ui-accent) 12%, transparent); }
+.sb-ai .sb-ai-sources-btn:hover, .sb-ai .sb-ai-sources-btn.is-open { background: color-mix(in srgb, var(--sb-ui-accent) 20%, transparent); }
+.sb-ai .sb-ai-sources-btn:focus-visible { outline: 2px solid var(--sb-ui-accent); outline-offset: 2px; }
+.sb-ai-sources-label { min-width: 0; overflow-wrap: anywhere; }
+.sb-ai-sources-chevron { width: 12px; height: 12px; color: var(--sb-ui-muted); }
+.sb-ai-sources-menu { position: absolute; z-index: 6; bottom: calc(100% + 6px); inset-inline-start: 0; display: flex; flex-direction: column; min-width: 200px; padding: 4px;
+	border-radius: 10px; border: 1px solid var(--sb-ui-line); background: var(--sb-ui-bg); box-shadow: var(--sb-ui-shadow); }
+.sb-ai .sb-ai-source { display: flex; align-items: center; gap: 8px; width: 100%; box-sizing: border-box; height: auto; min-height: 0; box-shadow: none; font: inherit; font-size: 12.5px;
+	padding: 6px 8px; border: none; border-radius: 6px; cursor: pointer; text-align: start; white-space: nowrap; background: transparent; color: var(--sb-ui-text); }
+.sb-ai .sb-ai-source:hover:not(:disabled), .sb-ai .sb-ai-source:focus-visible { background: var(--sb-ui-hover); outline: none; }
+.sb-ai-source-check { flex: none; box-sizing: border-box; width: 14px; height: 14px; border-radius: 4px; border: 1px solid var(--sb-ui-line); position: relative; }
+.sb-ai-source.is-on .sb-ai-source-check { border-color: var(--sb-ui-accent); background: var(--sb-ui-accent); }
+.sb-ai-source.is-on .sb-ai-source-check::after { content: ""; position: absolute; left: 4px; top: 1px; width: 4px; height: 8px; border: solid var(--sb-ui-on-accent); border-width: 0 1.5px 1.5px 0; transform: rotate(45deg); }
+.sb-ai .sb-ai-source:disabled { cursor: default; opacity: .45; }
+.sb-ai-source.is-offline .sb-ai-source-check { border-style: dashed; }
 .sb-ai-report-options { flex-wrap: wrap; row-gap: 6px; }
 .sb-ai-scope-treewrap { flex-basis: 100%; }
 .sb-ai-field { display: inline-flex; align-items: center; gap: 5px; }
@@ -2841,7 +3292,7 @@ tab-content:has(> .sb-ai) { display: flex; }
 .sb-ai.is-narrow .sb-ai-side { position: absolute; inset: 0 auto auto 0; width: min(320px, 85%); max-height: 70%; z-index: 3;
 	box-shadow: var(--sb-ui-shadow); border-inline-end: none; border-bottom: 1px solid var(--sb-ui-line); }
 .sb-ai.is-narrow .sb-ai-head { gap: 4px; padding: 6px 8px; }
-.sb-ai.is-narrow .sb-ai-head-title { flex: 1; min-width: 0; max-width: none; }
+.sb-ai.is-narrow .sb-ai-where-label { display: none; }
 .sb-ai.is-narrow .sb-ai-history-newchat { min-width: 26px; padding: 2px 6px; font-size: 15px; line-height: 1; }
 .sb-ai.is-narrow .sb-ai-open-tab { margin-inline-start: auto; }
 .sb-ai.is-narrow .sb-ai-thread { padding: 12px 12px 8px; gap: 10px; }
@@ -2852,7 +3303,7 @@ tab-content:has(> .sb-ai) { display: flex; }
 .sb-ai.is-narrow .sb-ai-empty-icon { width: 22px; height: 22px; }
 .sb-ai.is-narrow .sb-ai-empty-title { font-size: 16px; }
 .sb-ai.is-narrow .sb-ai-empty-text { font-size: 12px; }
-.sb-ai.is-narrow .sb-ai-suggestions { padding-top: 12px; gap: 6px; }
+.sb-ai.is-narrow .sb-ai-suggestions { padding-top: 10px; gap: 6px; }
 .sb-ai.is-narrow .sb-ai-pill { padding: 5px 11px; }
 .sb-ai.is-narrow .sb-fp-row { grid-template-columns: 18px minmax(0, 1fr); }
 .sb-ai.is-narrow .sb-fp-abstract { grid-column: 2; -webkit-line-clamp: 3; }

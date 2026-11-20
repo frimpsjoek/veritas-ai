@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fetchAll, fetchSource, politeFetch, parseMcpPapers, REQUEST_BUDGET } from '../src/radar-sources.js';
+import { fetchAll, fetchSource, politeFetch, parseMcpPapers, REQUEST_BUDGET, JOURNAL_CAP } from '../src/radar-sources.js';
 import { collectRadar } from '../src/radar-run.js';
 import { emptyState } from '../src/radar-state.js';
 import { feedXml, res, routedFetch, radarLibrary, profile } from './support/radar-fakes.mjs';
@@ -68,6 +68,40 @@ test('feed source: items before `since` are left out, a 304 keeps the cache and 
   assert.equal(second.error, null);
 });
 
+test('a seed radar also searches arXiv for its topics, more from the ones that weigh more, and 2-letter terms count', async () => {
+  const urls = [];
+  const fetch = async (url) => { urls.push(String(url)); return res(200, '<feed></feed>'); };
+  const topics = [{ text: 'GW quasiparticle calculations', weight: 1, origin: 'user' }, { text: 'AI agents for science', weight: 1, origin: 'user' }, { text: 'quantum dot theory', weight: 0.5, origin: 'user' }, { text: 'title phrase', weight: 1, origin: 'user' }];
+  const r = await fetchSource({ id: 'database:arxiv', on: true, kind: 'database', db: 'arxiv' }, { fetch, profile: profile({ topics }), since: '2026-10-01', seedPlan: { categories: [], phrases: ['title phrase', 'another phrase'] } });
+  assert.equal(r.error, null);
+  const asked = urls.filter((u) => u.includes('export.arxiv.org'));
+  assert.equal(asked.length, 5, 'two title phrases and three topics; a topic that is also a phrase once');
+  const url = (w) => asked.find((u) => u.includes(`all:${w}`));
+  assert.match(url('gw'), /all:gw\+AND\+all:quasiparticle\+AND\+all:calculations/);
+  assert.match(url('ai'), /all:ai\+AND\+all:agents\+AND\+all:science/);
+  assert.match(url('gw'), /max_results=20/);
+  assert.match(url('dot'), /max_results=10/, 'half the weight, half the papers');
+});
+
+test('arXiv asking to slow down stops the searches of this run; the listings still count', async () => {
+  const urls = [];
+  const fetch = async (url) => { urls.push(String(url)); return res(429); };
+  const topics = [{ text: 'first invented topic', weight: 1, origin: 'user' }, { text: 'second invented topic', weight: 1, origin: 'user' }];
+  const r = await fetchSource({ id: 'database:arxiv', on: true, kind: 'database', db: 'arxiv' }, { fetch, profile: profile({ topics }), since: '2026-10-01', seedPlan: { categories: [], phrases: ['a title phrase'] } });
+  assert.equal(urls.length, 1, 'no more requests after the 429');
+  assert.match(r.error, /429/);
+});
+
+test('a followed author looks back two months: OpenAlex attributes papers to people weeks after it lists them', async () => {
+  const urls = [];
+  const fetch = async (url) => { urls.push(String(url)); return res(200, '{"results":[]}'); };
+  await fetchSource({ id: 'author:A1', on: true, kind: 'author', openalexId: 'A1', name: 'Jane Doe' }, { fetch, profile: profile(), since: '2026-11-03' });
+  assert.match(urls[0], /authorships\.author\.id:A1,from_publication_date:2026-09-04/);
+  assert.match(urls[0], /per_page=20/);
+  await fetchSource({ id: 'journal:S1', on: true, kind: 'journal', openalexId: 'S1', name: 'J', issn: null }, { fetch, profile: profile(), since: '2026-11-03' });
+  assert.match(urls[1], /from_publication_date:2026-11-03/, 'a journal is listed the day it publishes');
+});
+
 test('journal and author sources use the OpenAlex filters with the since date', async () => {
   const work = { id: 'https://openalex.org/W1', doi: 'https://doi.org/10.9999/inv.9', display_name: 'Invented journal paper', publication_date: '2026-10-03', publication_year: 2026, primary_location: { source: { display_name: 'J. Invented' } }, authorships: [{ author: { display_name: 'Doe, J.' } }] };
   const fetchFn = routedFetch({});
@@ -77,7 +111,7 @@ test('journal and author sources use the OpenAlex filters with the since date', 
   const j = await fetchSource({ id: 'j', on: true, kind: 'journal', openalexId: 'https://openalex.org/S42', name: 'J. Invented', issn: null }, env);
   const a = await fetchSource({ id: 'a', on: true, kind: 'author', openalexId: 'A7', name: 'Doe' }, env);
   assert.match(decodeURIComponent(fetchFn.calls[0].url), /filter=primary_location\.source\.id:S42,from_publication_date:2026-10-01/);
-  assert.match(decodeURIComponent(fetchFn.calls[1].url), /filter=authorships\.author\.id:A7,from_publication_date:2026-10-01/);
+  assert.match(decodeURIComponent(fetchFn.calls[1].url), /filter=authorships\.author\.id:A7,from_publication_date:2026-08-02/);
   assert.equal(j.items[0].date, '2026-10-03');
   assert.equal(j.items[0].openalexId, 'W1');
   assert.equal(j.items[0].doi, '10.9999/inv.9');
@@ -157,4 +191,58 @@ test('mcp source fills "{query}" deep inside args, and drops items older than si
   const r = await fetchSource(src, { fetch: routedFetch({}), hub, profile: profile(), since: '2026-10-01' });
   assert.deepEqual(calls, [{ operations: [{ cmd: 'search', args: ['hf://papers', 'sleep spindle'] }], keep: 3 }]);
   assert.deepEqual(r.items.map((i) => i.title), ['New paper from this week', 'Undated paper kept anyway']);
+});
+
+// ---------------------------------------------------------------- journal paging (cursor), capped, reported
+
+/** A fake OpenAlex journal listing of `total` invented works, served by cursor pages; `calls` records each URL. */
+function journalPages(total) {
+  const calls = [];
+  const fn = async (url) => {
+    calls.push(String(url));
+    const u = new URL(String(url));
+    const per = Number(u.searchParams.get('per_page'));
+    const cursor = u.searchParams.get('cursor');
+    const from = cursor === '*' ? 0 : Number(cursor);
+    const n = Math.max(0, Math.min(per, total - from));
+    const results = Array.from({ length: n }, (_, i) => ({ id: `https://openalex.org/W${from + i}`, doi: `https://doi.org/10.9999/jp.${from + i}`, display_name: `Invented journal paper number ${from + i}`, publication_date: '2026-11-05', type: 'article', primary_location: { source: { display_name: 'J. Invented' } }, authorships: [] }));
+    return res(200, JSON.stringify({ meta: { count: total, next_cursor: from + n < total ? String(from + n) : null }, results }));
+  };
+  fn.calls = calls;
+  return fn;
+}
+const journal = { id: 'journal:S9', on: true, kind: 'journal', openalexId: 'S9', name: 'J. Invented', issn: null };
+
+test('a journal pages through OpenAlex by cursor until its window is read', async () => {
+  const fetchFn = journalPages(250);
+  const r = await fetchSource(journal, { fetch: fetchFn, profile: profile(), since: '2026-11-01' });
+  assert.equal(r.items.length, 250);
+  assert.equal(fetchFn.calls.length, 2);
+  assert.match(fetchFn.calls[0], /cursor=\*/);
+  assert.match(fetchFn.calls[1], /cursor=200/);
+  assert.equal(r.truncated, undefined, 'the whole window was read');
+});
+
+test('a journal stops at its cap and says how many of how many it read', async () => {
+  const fetchFn = journalPages(812);
+  const r = await fetchSource(journal, { fetch: fetchFn, profile: profile(), since: '2026-11-01' });
+  assert.equal(r.items.length, JOURNAL_CAP);
+  assert.equal(fetchFn.calls.length, Math.ceil(JOURNAL_CAP / 200));
+  assert.deepEqual(r.truncated, { fetched: JOURNAL_CAP, total: 812, reason: 'cap' });
+});
+
+test('the run budget cuts a journal short: the first page stays, the cut is recorded on the source and the run', async () => {
+  const fetchFn = journalPages(450);
+  const { results, requests } = await fetchAll({ sources: [journal], profile: profile(), since: '2026-11-01', fetch: fetchFn, budget: 1 });
+  assert.equal(requests, 1);
+  assert.equal(results[0].items.length, 200);
+  assert.equal(results[0].error, null);
+  assert.deepEqual(results[0].truncated, { fetched: 200, total: 450, reason: 'budget' });
+
+  const out = await collectRadar({
+    config: { scope: { kind: 'library' }, profile: profile(), sources: [journal], size: { fresh: 8, older: 0 }, note: false },
+    since: '2026-11-01', now: '2026-11-07T07:00:00.000Z', fetch: journalPages(450), library: radarLibrary(), state: emptyState(), budget: 1,
+  });
+  assert.deepEqual(out.truncated, ['journal J. Invented: 200 of 450 fetched (request budget)']);
+  assert.deepEqual(out.state.sourceStatus['journal:S9'].truncated, { fetched: 200, total: 450, reason: 'budget' });
 });

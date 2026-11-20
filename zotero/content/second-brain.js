@@ -1,4 +1,4 @@
-/* global Zotero, Services, IOUtils, TextDecoder */
+/* global Zotero, Services, IOUtils, TextDecoder, Components */
 // Loaded into bootstrap.js's scope. Everything the plugin does lives here.
 
 SecondBrain = {
@@ -96,7 +96,25 @@ SecondBrain = {
 	},
 
 	get server() {
-		return (Zotero.Prefs.get("extensions.secondbrain.server", true) || "http://127.0.0.1:27182").replace(/\/+$/, "");
+		return this.ServerPort.address(Zotero.Prefs.get("extensions.secondbrain.server", true), this.appServer);
+	},
+
+	/** Looks for the desktop app's server at the port the app wrote down (content/server-port.js); run at start and
+	 *  with each status check, so an app started, restarted or moved to another port is found within a minute. */
+	async findAppServer() {
+		const dirs = (name) => { try { return Services.dirsvc.get(name, Components.interfaces.nsIFile).path; } catch { return ""; } };
+		this.appServer = await this.ServerPort.find({
+			os: Zotero.isMac ? "mac" : Zotero.isWin ? "win" : "linux",
+			home: dirs("Home"),
+			appData: dirs("AppData"),
+			xdgData: Services.env?.get("XDG_DATA_HOME") ?? "",
+			read: (path) => IOUtils.readUTF8(path),
+			ping: async (url) => {
+				const response = await Zotero.HTTP.request("GET", `${url}/ping`, { timeout: 1500, successCodes: false });
+				return response.status === 200 && JSON.parse(response.responseText || "{}").ok === true;
+			},
+		});
+		return this.appServer;
 	},
 
 	/** The access token for a Veritas server on another computer (Settings → Server and phone). The server treats a
@@ -868,6 +886,7 @@ SecondBrain = {
 	},
 
 	async refreshIndexState() {
+		await this.findAppServer().catch(() => {});
 		try {
 			this.indexState = (await this.api("/zotero/status")).items ?? {};
 			this.setOnline(true);
@@ -1350,6 +1369,20 @@ SecondBrain = {
 		const summary = Object.entries(found).filter(([, n]) => n).map(([name, n]) => `${name} ${n}`).join(", ");
 		line.setText(`Found ${Object.values(found).reduce((a, b) => a + b, 0)} of ${missing.length}${summary ? ` (${summary})` : ""}${job.stop ? " · stopped" : ""}`);
 		progress.startCloseTimer(15000);
+	},
+
+	/** Spec 031 R5: papers just added without a PDF, looked for together a few seconds after the last one arrives
+	 *  (an "Add all" of 20 papers is one search, one progress window). */
+	queueFindPDF(item) {
+		(this.findQueue ??= new Set()).add(item.key);
+		clearTimeout(this.findTimer);
+		this.findTimer = setTimeout(async () => {
+			if (this.fixing) { this.findTimer = setTimeout(() => this.queueFindPDF({ key: [...this.findQueue][0] }), 10_000); return; }
+			const keys = [...this.findQueue];
+			this.findQueue.clear();
+			const job = (this.fixing = { stop: false });
+			try { await this.findOnline(keys, job); } catch (error) { Zotero.logError(error); } finally { this.fixing = null; }
+		}, 3000);
 	},
 
 	/** Right-click: find PDFs for the selected papers (Zotero's resolvers, then arXiv). */

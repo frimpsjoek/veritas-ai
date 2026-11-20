@@ -22,8 +22,9 @@ import { runRadarChecks } from './radar-checks.mjs';
 import { runDigestChecks } from './digest-checks.mjs';
 import { runHomeChecks } from './home-checks.mjs';
 import { runBrowserChecks } from './browser-checks.mjs';
+import { runBrowseChecks } from './browse-checks.mjs';
 
-// SB_ONLY=local,panels runs just those suites (artifacts, columns, papers, steps, live, report, panels, local, web, weblib, webphone, radar, digest, home, browser) after the quick page checks.
+// SB_ONLY=local,panels runs just those suites (artifacts, columns, papers, steps, live, report, panels, local, web, weblib, webphone, radar, digest, home, browser, browse) after the quick page checks.
 const only = process.env.SB_ONLY ? new Set(process.env.SB_ONLY.split(',')) : null;
 const want = (name) => !only || only.has(name);
 const skipped = { failures: 0, count: 0 };
@@ -31,12 +32,17 @@ const root = fileURLToPath(new URL('..', import.meta.url)); // ui/
 const repoRoot = fileURLToPath(new URL('../../zotero', import.meta.url)); // zotero/
 const webRoot = fileURLToPath(new URL('../../web', import.meta.url)); // web/
 // The web app lives in ../web: its bundle is served as /dist-web/… and its sources as /src/web/… (their old place).
+// The shell sets its mark as a page-relative 'veritas-mark-180.png'; in the real app that file sits beside index.html in
+// dist-web/, so the harness pages in dev/harness/ get dist-web's images under their own path. The server serves the app at
+// /app/ (server/http_api.py), and only there does the app use its own origin (web/src/connection.js isServedByServer).
 const webFile = (/** @type {string} */ path) => path.startsWith('/dist-web/') ? join(webRoot, path)
-  : path.startsWith('/src/web/') ? join(webRoot, 'src', path.slice('/src/web/'.length)) : null;
+  : path.startsWith('/app/') ? join(webRoot, 'dist-web', path.slice('/app/'.length))
+  : path.startsWith('/src/web/') ? join(webRoot, 'src', path.slice('/src/web/'.length))
+  : /^\/dev\/harness\/veritas-[a-z0-9-]+\.png$/.test(path) ? join(webRoot, 'dist-web', path.slice('/dev/harness/'.length)) : null;
 const outDir = fileURLToPath(new URL('out', import.meta.url));
 await import('node:fs/promises').then((fs) => fs.mkdir(outDir, { recursive: true }));
 
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json', '.woff2': 'font/woff2', '.webp': 'image/webp' };
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json', '.woff2': 'font/woff2', '.webp': 'image/webp', '.png': 'image/png' };
 
 const server = createServer(async (req, res) => {
   try {
@@ -223,6 +229,10 @@ failures += webPhoneChecks.failures;
 const browserChecks = want('browser') ? await runBrowserChecks(browser, port, outDir) : skipped;
 failures += browserChecks.failures;
 
+// spec 027: Browse on a fake desktop bridge (dev/browse-checks.mjs), against the built dist-web/
+const browseChecks = want('browse') ? await runBrowseChecks(browser, port, outDir) : skipped;
+failures += browseChecks.failures;
+
 // spec 012 R2: the Reading radar setup sheet (dev/radar-checks.mjs)
 const radarChecks = want('radar') ? await runRadarChecks(browser, port, outDir) : skipped;
 failures += radarChecks.failures;
@@ -242,4 +252,4 @@ if (failures) {
   console.error(`${failures} harness screenshot check(s) failed`);
   process.exit(1);
 }
-console.log(`harness checks pass: 12 screenshot checks + 10 source-pill checks + 8 scope-picker checks (spec 008 Z4) + 7 DOM-parity checks + ${behaviorCount} behaviour checks + ${artifacts.count} artifact checks (spec 007 E3) + ${columns.count} columns and filters checks (spec 007 E4) + ${papersChat.count} chat-with-papers checks (spec 007 E5) + ${steps.count} steps checks (spec 007 E6) + ${liveChecks.count} live-feed and composer checks + ${reportChecks.count} report checks (spec 007 E7) + ${panelsChecks.count} panel checks (spec 005 D1) + ${localChecks.count} local-model checks (spec 010) + ${webChecks.count} web app checks (spec 013) + ${webLibraryChecks.count} library, notes, reader and shared-panel checks (spec 013 W2) + ${webPhoneChecks.count} phone checks (spec 013 W4) + ${radarChecks.count} reading radar checks (spec 012) + ${digestChecks.count} radar digest checks (spec 012 R4) + ${homeChecks.count} plugin Home checks (spec 014 G4) + ${browserChecks.count} in-app browser checks (spec 015) (dev/out/*.png)`);
+console.log(`harness checks pass: 12 screenshot checks + 10 source-pill checks + 8 scope-picker checks (spec 008 Z4) + 7 DOM-parity checks + ${behaviorCount} behaviour checks + ${artifacts.count} artifact checks (spec 007 E3) + ${columns.count} columns and filters checks (spec 007 E4) + ${papersChat.count} chat-with-papers checks (spec 007 E5) + ${steps.count} steps checks (spec 007 E6) + ${liveChecks.count} live-feed and composer checks + ${reportChecks.count} report checks (spec 007 E7) + ${panelsChecks.count} panel checks (spec 005 D1) + ${localChecks.count} local-model checks (spec 010) + ${webChecks.count} web app checks (spec 013) + ${webLibraryChecks.count} library, notes, reader and shared-panel checks (spec 013 W2) + ${webPhoneChecks.count} phone checks (spec 013 W4) + ${radarChecks.count} reading radar checks (spec 012) + ${digestChecks.count} radar digest checks (spec 012 R4) + ${homeChecks.count} plugin Home checks (spec 014 G4) + ${browserChecks.count} in-app browser checks (spec 015) + ${browseChecks.count} Browse checks (spec 027) (dev/out/*.png)`);

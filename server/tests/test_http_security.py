@@ -156,3 +156,9 @@ def test_setup_suggest_needs_the_token_and_refuses_agents(server):
     assert call(port, "GET", "/setup/suggest", phone())[0] == 401
     assert call(port, "GET", "/setup/suggest", {"X-KB-Client": "agent"})[0] == 403
     assert call(port, "GET", "/setup/suggest")[0] == 200
+
+
+def test_ping_says_ready_once_the_real_routes_answer(server):
+    port, _ = server
+    status, _, body = call(port, "GET", "/ping")
+    assert status == 200 and json.loads(body) == {"ok": True, "ready": True}

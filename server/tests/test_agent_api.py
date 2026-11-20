@@ -173,7 +173,9 @@ def test_sidecar_is_told_the_port_the_server_runs_on(monkeypatch):
         pass
     def no_server(*a, **k):
         raise Stop
-    monkeypatch.setattr(http_api, "ThreadingHTTPServer", no_server)
+    monkeypatch.setattr(http_api.listen_first, "listen", lambda port: None)
+    monkeypatch.setattr(http_api, "open_index", lambda: None)
+    monkeypatch.setattr(http_api.listen_first, "ready", no_server)
     try:
         http_api.serve(27190)
     except Stop:

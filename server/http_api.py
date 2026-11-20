@@ -1,7 +1,9 @@
 """HTTP API over the index, for the Obsidian plugin on the Mac and on the phone.
 
-GET  /ping                                     is the server up (no database work)
-GET  /status                                   index counts
+GET  /ping                                     is the server up (no database work): {ok, ready}. While it starts the port
+                                                is open before the folders and the index (listen_first.py): ready is false,
+                                                and every other route waits a while, then answers 503 "starting"
+GET  /status                                   index counts, and which OCR engine reads scans and images
 GET  /links?path=...   GET /recent?days=&folder=&limit=
 GET  /search?q=...&limit=&source=&exclude_source=&folder=&tag=&collections=K1,K2&year_from=&year_to=
                                                 same search the agents use; `collections` takes Zotero collection
@@ -23,9 +25,12 @@ GET  /file?name=|path=[&note=]                   an image in the vault, for note
 POST /attachment {"name","data"}               save a pasted image (base64) into Papers/attachments
 GET  /zotero/edits                              comments and Zotero notes edited in Obsidian, to write into Zotero
 POST /zotero/edits/done {"ids"}                 those were written; refresh the notes
-POST /zotero/add {"papers","collection"?,"tag"?}  to Zotero's connector when it runs, else queued: [{status: added|queued|failed}]
+POST /zotero/add {"papers","collection"?,"tag"?,"collection_name"?}  to Zotero's connector when it runs, else queued: [{status: added|queued|failed}]
 POST /zotero/tag {"key"?|"doi"?|"title"?,"tag"}   queue a tag edit (Read later) for the Zotero plugin
 POST /zotero/annotate {"key","annotation"}     queue a highlight on the PDF attachment `key` (pending_adds.annotate)
+POST /zotero/attach-pdf?doi=&title=&url=       body: a PDF saved in a Browse tab (up to 200 MB); queued for the plugin
+                                                to attach (pending_adds.attach_pdf): {status: added|queued|failed}
+GET  /zotero/pending-adds/file?id=             the PDF an attach entry carries, for the plugin (404 once gone)
 GET  /zotero/pending-adds                      queued adds, tags and collection moves the Zotero plugin has yet to apply
 POST /zotero/pending-adds/done {"ids"}         the plugin applied these
 POST /zotero/pending-adds/attempt {"id","message"}  it could not; after 5 tries the entry is marked failed
@@ -45,15 +50,18 @@ GET  /folder-file?path=<index path>              an indexed PDF or image from an
 GET  /zotero/items?collections=K1,K2          indexed Zotero items in those collections and their descendants (spec 012)
 POST /radar/score {"scope","positives","negatives","items"}   similarity to the scope's centroid, and to negatives
 POST /radar/profile {"scope"}                   seed profile: top terms, authors, journals of a scope
-POST /radar/score {..., "seeds"}               with seeds (spec 021): also seed_max and seed_best (closest seed) per item
+POST /radar/score {..., "seeds"}               with seeds (spec 021): also seed_max and seed_best (closest seed) per item; at most 500 seeds, hand-picked first (reply "seeds": {used, of})
 POST /radar/fulltext {"seeds","items":[{id,arxiv}]}  new arXiv papers read whole (PDF text, cached) and compared with the seeds
-POST /radar/calibrate {"seeds","unrelated"}    thresholds for abstracts and whole papers from seed-seed and seed-unrelated similarity
+POST /radar/calibrate {"seeds","unrelated","field"}    thresholds for abstracts and whole papers from seed-seed and seed-unrelated similarity
+POST /paper/text {"key","url"}                  a free copy of a paper outside the library as text (PDF read once, cached; spec 031 R3)
+POST /paper/text-cache {"clear"?: true}        how much paper text is cached {papers, bytes}; with "clear", empty it
+POST /paper/keep {"paper","urls"}               keep a paper's free PDF: in Zotero (held until the plugin attaches it), else in <notes folder>/Papers (spec 032)
 PUT  /digests/<file> {"text"}                   save Second Brain/Digests/<file>.md (atomic; 413 over 512 KB)
 POST /index                                    re-index changed notes now
 GET  /setup/suggest                            what a new user could add: Zotero, Obsidian vaults, PDF folders (spec 023)
 GET  /sources                                  the folders the index reads, each with kind, role and count (spec 018)
 POST /sources {"path","name"?}                 add a folder (400 unreadable/too broad, 409 already listed); starts indexing
-POST /sources {"kind":"zotero-web","user_id","key"?,"name"?}  add an online Zotero library (key goes to the Keychain)
+POST /sources {"kind":"zotero-web","user_id","key"?,"name"?}  add an online Zotero library (key goes to the key store)
 PATCH /sources/<name> {"enabled"?,"skip"?}     switch a folder on or off, or set its skip patterns
 PATCH /sources/output {"name": str|null}       where notes are written: a listed notes folder, or ~/Documents/Veritas
 DELETE /sources/<name>                         take a folder off the list (its rows go on the next index run)
@@ -92,16 +100,20 @@ import time
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Literal, Mapping
+from typing import Mapping
 from urllib.parse import parse_qs, unquote, urlparse
 
 import agent_api
 import kb
+import listen_first
+from listen_first import request_class
 import zotero
 import zotero_files
 import paper_notes
 import pending_adds
 import plugin_updates
+import paper_store
+import paper_text
 import radar_api
 import site_icons
 import skills
@@ -119,13 +131,14 @@ LOCK = threading.Lock()
 # /agent/* and /ai-note) is for the plugins and the sidecar only. privacy.json still filters what these return.
 # Routes that only make sense with a Zotero library (spec 018 G3).
 ZOTERO_ONLY = {"/zotero", "/zotero/pdf", "/zotero/files", "/paper-note", "/paper-note/body", "/paper-note/refresh",
-               "/zotero/add", "/zotero/tag", "/zotero/annotate"}
-AGENT_ROUTES = {"/ping", "/status", "/search", "/related", "/links", "/recent", "/note", "/zotero", "/similar", "/zotero/items", "/radar/score", "/radar/profile", "/radar/fulltext", "/radar/calibrate", "/digests"}  # one SQLite connection and one model, shared by all request threads
+               "/zotero/add", "/zotero/tag", "/zotero/annotate"}  # /zotero/attach-pdf: spec 032 keeps the PDF in Veritas's folder without Zotero
+AGENT_ROUTES = {"/ping", "/status", "/search", "/related", "/links", "/recent", "/note", "/zotero", "/similar", "/zotero/items", "/radar/score", "/radar/profile", "/radar/fulltext", "/radar/calibrate", "/digests", "/paper/text", "/paper/keep"}  # one SQLite connection and one model, shared by all request threads
 SEARCHER: kb.Searcher | None = None
 TOKEN_FILE = kb.data_dir() / "api-token"
-LOCAL_HOSTS = ("127.0.0.1", "localhost")
+PAPER_TEXT_CACHE = kb.data_dir() / "paper-text.sqlite"
 CONFLICT = re.compile(r"\.conflict-macos-(\d{8}T\d{6}Z)\.md$")
 AGENT_SIDECAR: agent_api.Sidecar | None = None  # set by serve(); None means /agent/* answers 503
+LISTENER: ThreadingHTTPServer | None = None  # set by serve(); closed before a Windows self-update (replace_self)
 
 
 def token() -> str:
@@ -135,35 +148,10 @@ def token() -> str:
     return TOKEN_FILE.read_text().strip()
 
 
-RequestClass = Literal["foreign", "proxied", "local", "app"]
-PROXY_HEADERS = ("x-forwarded-", "tailscale-", "forwarded")
 SESSIONS_FILE = kb.data_dir() / "web" / "sessions.json"
 SESSION_SECONDS = 365 * 24 * 3600
 SESSION_COOKIE = "sb_session"
 _sessions_lock = threading.Lock()
-
-
-def request_class(headers: Mapping[str, str]) -> RequestClass:
-    h = {name.lower(): value for name, value in headers.items()}
-    host = h.get("host", "")
-    proxied = any(name.startswith(PROXY_HEADERS) for name in h)
-    local = host.rsplit(":", 1)[0] in LOCAL_HOSTS and not proxied
-    # Behind tailscale serve the page may be on http:// or https:// (an http port does not always say which);
-    # either scheme on this same host is this app, not another website.
-    own_origins = {f"http://{host}", f"https://{host}"} if proxied else {f"http://{host}"} if local else set()
-    origin = h.get("origin", "")
-    # A listed web-app origin (the hosted web app, a Tauri window; web_origins.py): CORS, and the token always.
-    if origin and origin != "null":
-        try:
-            if web_origins.normalise(origin) in web_origins.allowed():
-                return "app"
-        except ValueError:
-            pass
-    # Only http(s) origins are websites; the plugins send no Origin, or an app:// / "null" one.
-    if h.get("sec-fetch-site") in ("cross-site", "same-site") or (
-            origin.startswith(("http://", "https://")) and origin not in own_origins):
-        return "foreign"
-    return "local" if local else "proxied"
 
 
 def _session_hash(session: str) -> str:
@@ -264,7 +252,8 @@ def index_status() -> dict:
     if not running and progress.get("running"):  # the process died without finishing
         progress.update(running=False, stage="idle", label="Interrupted")
     return {**_coverage["stats"], "coverage": _coverage["rows"], "indexing": progress, "running": running,
-            "next_check_at": LAST_CHECK["at"] + kb.FRESH_EVERY if LAST_CHECK["at"] else None}
+            "next_check_at": LAST_CHECK["at"] + kb.FRESH_EVERY if LAST_CHECK["at"] else None,
+            "ocr": kb.media.ocr_engine()}  # "vision", "tesseract" or None: Settings > On this computer says which
 
 
 LAST_CHECK = {"at": 0.0}
@@ -331,8 +320,10 @@ def sources_changed() -> None:
 
 def start_indexing(reread: str | None) -> None:
     """A separate process, so a long run (re-reading every image) outlives server restarts and can be stopped."""
-    # taskpolicy -b: background priority, like the indexing threads (kb.background_priority)
-    args = ["/usr/sbin/taskpolicy", "-b", sys.executable, str(kb.HOME / "kb.py"), "index"]
+    # taskpolicy -b: background priority, like the indexing threads (kb.background_priority); macOS only
+    args = [sys.executable, str(kb.HOME / "kb.py"), "index"]
+    if sys.platform == "darwin":
+        args = ["/usr/sbin/taskpolicy", "-b", *args]
     if reread == "zotero":
         args.append("--reread-zotero")
     elif reread == "media":
@@ -354,10 +345,12 @@ def stop_indexing() -> bool:
         return False
     if pid == os.getpid():
         kb.STOP.set()  # the automatic check running inside this server
-    else:
+        return True
+    kb.STOP_FILE.write_text("")  # read between batches, on every system
+    if sys.platform != "win32":  # on Windows this would be TerminateProcess: the batch would not finish
         import signal
 
-        os.kill(pid, signal.SIGTERM)
+        os.kill(pid, signal.SIGTERM)  # the fast path: the process sets STOP at once
     return True
 
 
@@ -380,9 +373,17 @@ def _without(related: dict, hidden: set[str]) -> dict:
     return out
 
 
-# The plugins are parts of the same repo, beside server/ (kb.HOME).
-ZOTERO_DIST = kb.HOME.parent / "zotero" / "dist"
-OBSIDIAN_DIST = kb.HOME.parent / "obsidian" / "dist-versions"
+# The plugins are parts of the same repo, beside server/ (kb.HOME). The desktop app's server has no repo beside it, so
+# builds are also published into <data dir>/plugins/{zotero,obsidian} (packaging/publish-plugins.sh), and a released app
+# carries its own ($VERITAS_PLUGINS, spec 033 R4); the plugins update themselves from whichever holds the newest version.
+def _plugin_dirs() -> tuple[Path, Path]:
+    pairs = [(kb.HOME.parent / "zotero" / "dist", kb.HOME.parent / "obsidian" / "dist-versions"),
+             (kb.data_dir() / "plugins" / "zotero", kb.data_dir() / "plugins" / "obsidian")]
+    bundled = os.environ.get("VERITAS_PLUGINS")  # spec 033 R4: the plugins inside the desktop app's bundle
+    if bundled:
+        pairs.append((Path(bundled) / "zotero", Path(bundled) / "obsidian"))
+    found = [(plugin_updates._parse_semver(v), pair) for pair in pairs if (v := plugin_updates.lockstep_version(*pair))]
+    return max(found)[1] if found else pairs[0]
 
 AUDIT_FILE = kb.data_dir() / "agent-access.log"
 
@@ -411,6 +412,12 @@ class Handler(BaseHTTPRequestHandler):
             return False
         self._send(409, {"error": "needs_zotero", "message": "Needs Zotero: add your Zotero folder in Settings > Folders"})
         return True
+
+    def _kept(self, result: dict) -> dict:
+        """A PDF newly saved in Veritas's papers folder is indexed at once, so it is found by search (spec 032 R3)."""
+        if result.get("where") == "folder" and result.get("status") == "kept" and not result.get("already") and not kb.index_running():
+            start_indexing(None)
+        return result
 
     def _send(self, status: int, body: object, headers: dict | None = None) -> None:
         data = json.dumps(body, ensure_ascii=False).encode()
@@ -552,7 +559,7 @@ class Handler(BaseHTTPRequestHandler):
             if self._needs_zotero(route):
                 return
             if route == "/ping":
-                return self._send(200, {"ok": True})
+                return self._send(200, {"ok": True, "ready": True})
             if route == "/app" or route.startswith("/app/"):
                 return web_app.serve(self, route)
             if route == "/web/phone-link":
@@ -654,6 +661,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = paper_notes.pending_edits()
             elif route == "/zotero/pending-adds":
                 result = pending_adds.pending()
+            elif route == "/zotero/pending-adds/file":
+                return self._send_binary(pending_adds.attach_file(q.get("id", "")), "application/pdf")
             elif route == "/zotero/status":
                 result = zotero_status()
             elif route == "/zotero/collections":
@@ -674,20 +683,20 @@ class Handler(BaseHTTPRequestHandler):
             elif route == "/paper-note":
                 result = paper_notes.summary(q["key"].removeprefix(zotero.PREFIX))
             elif route == "/plugins/zotero/latest":
-                result = plugin_updates.latest_zotero(ZOTERO_DIST, OBSIDIAN_DIST)
+                result = plugin_updates.latest_zotero(*_plugin_dirs())
                 if result is None:
                     raise FileNotFoundError("no lockstep version available")
             elif route == "/plugins/zotero/xpi":
-                found = plugin_updates.zotero_xpi_path(ZOTERO_DIST, OBSIDIAN_DIST, q.get("version", ""))
+                found = plugin_updates.zotero_xpi_path(*_plugin_dirs(), q.get("version", ""))
                 if not found:
                     return self._send(404, {"error": "no such version"})
                 return self._send_binary(found, "application/x-xpinstall")
             elif route == "/plugins/obsidian/latest":
-                result = plugin_updates.latest_obsidian(ZOTERO_DIST, OBSIDIAN_DIST)
+                result = plugin_updates.latest_obsidian(*_plugin_dirs())
                 if result is None:
                     raise FileNotFoundError("no lockstep version available")
             elif route == "/plugins/obsidian/file":
-                found = plugin_updates.obsidian_file_path(ZOTERO_DIST, OBSIDIAN_DIST, q.get("version", ""), q.get("name", ""))
+                found = plugin_updates.obsidian_file_path(*_plugin_dirs(), q.get("version", ""), q.get("name", ""))
                 if not found:
                     return self._send(404, {"error": "no such file"})
                 content_type = {"main.js": "application/javascript", "manifest.json": "application/json",
@@ -789,7 +798,9 @@ class Handler(BaseHTTPRequestHandler):
                 papers = body.get("papers")
                 if not isinstance(papers, list) or len(papers) > 200:
                     return self._send(400, {"error": "papers must be a list of up to 200"})
-                self._send(200, {"results": pending_adds.add_papers(papers, body.get("collection"), body.get("tag"))})
+                name = body.get("collection_name")
+                self._send(200, {"results": pending_adds.add_papers(papers, body.get("collection"), body.get("tag"),
+                                                                    collection_name=name if isinstance(name, str) else None)})
             elif route == "/zotero/tag":
                 body = self._body()
                 try:
@@ -802,6 +813,18 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(200, pending_adds.annotate(body.get("key"), body.get("annotation")))
                 except ValueError as error:
                     self._send(400, {"error": str(error)})
+            elif route == "/zotero/attach-pdf":
+                length = int(self.headers.get("Content-Length") or 0)
+                if length > pending_adds.MAX_PDF:
+                    self.close_connection = True  # the body is never read
+                    return self._send(413, {"error": "the PDF is larger than 200 MB"})
+                q = self._query()
+                body = self.rfile.read(length) if length > 0 else b""
+                # spec 032 R4: Browse's Save PDF follows the same rule as Get PDF: Zotero, else Veritas's papers folder
+                if paper_store.target() == "zotero":
+                    self._send(200, pending_adds.attach_pdf(body, q.get("doi"), q.get("title"), q.get("url")))
+                else:
+                    self._send(200, self._kept(paper_store.keep({"doi": q.get("doi"), "title": q.get("title")}, q.get("url"), body=body)))
             elif route == "/zotero/pending-adds/done":
                 pending_adds.done(self._body().get("ids", []))
                 self._send(200, {"ok": True})
@@ -841,6 +864,21 @@ class Handler(BaseHTTPRequestHandler):
                     result = [r for r in result if r["path"] not in hidden]
                     audit(route, {"text": body.get("text", "")[:80]}, result)
                 self._send(200, result)
+            elif route == "/paper/text":
+                body = self._body(limit=16_000)
+                try:
+                    text, cached = paper_text.paper_text(str(body.get("key") or ""), str(body.get("url") or ""), PAPER_TEXT_CACHE)
+                except (ValueError, OSError) as error:
+                    return self._send(422, {"error": str(error)})
+                self._send(200, {"text": text, "cached": cached})
+            elif route == "/paper/keep":
+                body = self._body(limit=64_000)
+                paper = body.get("paper") if isinstance(body.get("paper"), dict) else {}
+                urls = body.get("urls") if isinstance(body.get("urls"), list) else [body.get("url")]
+                self._send(200, self._kept(paper_store.keep(paper, [str(u) for u in urls if u])))
+            elif route == "/paper/text-cache":
+                body = self._body(limit=1_000)
+                self._send(200, paper_text.clear(PAPER_TEXT_CACHE) if body.get("clear") else paper_text.stats(PAPER_TEXT_CACHE))
             elif route in ("/radar/score", "/radar/profile", "/radar/fulltext", "/radar/calibrate"):
                 body = self._body(limit=8_000_000)
                 hidden = kb.private_paths() if agent else set()
@@ -963,7 +1001,7 @@ class Handler(BaseHTTPRequestHandler):
 def restart_when_code_changes() -> None:
     """A server outlives the Obsidian that started it and serves the phone, so after an update it replaces itself
     with the new code (same process, same port) instead of leaving the phone with nothing."""
-    files = [kb.HOME / name for name in ("kb.py", "http_api.py", "zotero.py", "mlx_embed.py", "keyword_index.py", "media.py", "zotero_files.py", "paper_notes.py", "agent_api.py", "plugin_updates.py", "skills.py", "radar_api.py", "web_app.py", "pdf_route.py", "pending_adds.py", "paper_figures.py", "sources.py", "site_icons.py")]
+    files = [kb.HOME / name for name in ("kb.py", "http_api.py", "zotero.py", "mlx_embed.py", "keyword_index.py", "media.py", "zotero_files.py", "paper_notes.py", "agent_api.py", "plugin_updates.py", "skills.py", "radar_api.py", "web_app.py", "pdf_route.py", "pending_adds.py", "paper_figures.py", "sources.py", "site_icons.py", "listen_first.py")]
     files.append(kb.HOME / agent_api.AGENTD_ENTRY)  # a rebuilt sidecar is an update too
     started = {f: f.stat().st_mtime for f in files if f.exists()}
     while True:
@@ -971,15 +1009,44 @@ def restart_when_code_changes() -> None:
         if any(f.exists() and f.stat().st_mtime != m for f, m in started.items()):
             time.sleep(2)  # let an editor finish writing the other files
             agent_api.shutdown(AGENT_SIDECAR)  # swapping the process image won't stop this child on its own
-            os.execv(sys.executable, [sys.executable, *sys.argv])
+            replace_self()
+
+
+def replace_self() -> None:
+    """Runs this server again from the new code. os.execv swaps the process image on macOS and Linux; on Windows it
+    starts a second process while this one lives on holding the port, so there the port is freed first, the new
+    server starts detached (it must outlive this one), and this process exits."""
+    argv = [sys.executable, *sys.argv]
+    if sys.platform != "win32":
+        os.execv(sys.executable, argv)
+        return
+    import subprocess
+
+    if LISTENER is not None:
+        LISTENER.server_close()
+    # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP, spelled out: the subprocess constants exist only on Windows
+    subprocess.Popen(argv, cwd=os.getcwd(), stdin=subprocess.DEVNULL, creationflags=0x00000008 | 0x00000200)
+    os._exit(0)
 
 
 def sidecar_kb_url(port: int) -> str:
     return f"http://127.0.0.1:{int(port)}"
 
 
+def open_index() -> None:
+    """Opens the index once (and migrates it, if it must) before the routes that need it answer. A failure is left for
+    those routes to report: the server stays up, and the log says why."""
+    try:
+        kb.connect().close()
+        listen_first.stage("index opened")
+    except Exception as error:
+        listen_first.stage(f"index not opened: {type(error).__name__}: {error}")
+
+
 def serve(port: int) -> None:
-    global AGENT_SIDECAR
+    global AGENT_SIDECAR, LISTENER
+    server = LISTENER = listen_first.listen(port)  # already open when started as `kb.py serve`
+    listen_first.stage("sources read")  # kb resolved the folder list at import
     token()  # create it on first start, so the Mac plugin can hand it to the phone
     try:
         # The sidecar reaches the library through this server, on the port it actually runs on (it used to be told
@@ -996,8 +1063,10 @@ def serve(port: int) -> None:
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     threading.Thread(target=restart_when_code_changes, daemon=True).start()
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    open_index()
+    listen_first.ready(server, Handler)
     threading.Thread(target=kb.keep_fresh, kwargs={"on_check": lambda: LAST_CHECK.update(at=time.time())},
                      daemon=True).start()
     threading.Thread(target=lambda: searcher().search("warm up"), daemon=True).start()  # load model + vectors now
-    server.serve_forever()
+    while True:  # the listener has its own thread; this one stays for the signal handlers
+        time.sleep(3600)
