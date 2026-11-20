@@ -3,6 +3,10 @@
 Each release of Veritas AI. `node tools/release.mjs <version>` adds the next section (the commit subjects since the
 last tag, to edit before pushing); the GitHub Release shows that section as its notes.
 
+## 0.54.4 (2026-11-20)
+
+- Spec 034: one path format on every system (Windows)
+
 ## 0.54.3 (2026-11-20)
 
 - Obsidian install.sh: install into the vault Obsidian has open, not a fixed folder
