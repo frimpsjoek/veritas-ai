@@ -5,34 +5,84 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Veritas</title>
 <style>
-  :root { --bg: #fbfaf8; --fg: #1d2233; --muted: #6b7083; --track: #e6e3dd; --bar: #34409a; --error: #b3261e; }
+  :root { --bg: #fbfaf8; --fg: #1d2233; --muted: #6b7083; --track: #e6e3dd; --bar: #34409a; --error: #b3261e;
+          --indigo: #3b4793; --coral: #eb7558; --glow: rgba(59, 71, 147, 0.18); --blob-a: rgba(59, 71, 147, 0.14);
+          --blob-b: rgba(235, 117, 88, 0.12); }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #16181f; --fg: #eceaf2; --muted: #9a9db0; --track: #2b2e3a; --bar: #8f9cf0; --error: #f2b8b5; }
+    :root { --bg: #16181f; --fg: #eceaf2; --muted: #9a9db0; --track: #2b2e3a; --bar: #8f9cf0; --error: #f2b8b5;
+            --indigo: #8f9cf0; --coral: #f29a82; --glow: rgba(143, 156, 240, 0.22); --blob-a: rgba(143, 156, 240, 0.12);
+            --blob-b: rgba(242, 154, 130, 0.08); }
   }
   html, body { height: 100%; margin: 0; }
-  body { display: grid; place-items: center; background: var(--bg); color: var(--fg);
+  body { display: grid; place-items: center; background: var(--bg); color: var(--fg); overflow: hidden;
          font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
-  main { width: min(520px, 100% - 32px); text-align: center; }
-  img { width: 96px; height: 96px; border-radius: 22px; }
-  h1 { font-size: 20px; font-weight: 600; margin: 16px 0 4px; }
+  /* two soft colour fields drifting slowly behind everything */
+  .backdrop { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+  .backdrop::before, .backdrop::after { content: ""; position: absolute; width: 60vmax; height: 60vmax; border-radius: 50%;
+         filter: blur(60px); animation: drift 18s ease-in-out infinite alternate; }
+  .backdrop::before { background: radial-gradient(circle, var(--blob-a), transparent 65%); top: -20vmax; left: -15vmax; }
+  .backdrop::after { background: radial-gradient(circle, var(--blob-b), transparent 65%); bottom: -25vmax; right: -15vmax;
+         animation-duration: 22s; animation-direction: alternate-reverse; }
+  @keyframes drift { to { transform: translate(12vmax, 8vmax) scale(1.15); } }
+
+  main { position: relative; width: min(520px, 100% - 32px); text-align: center; animation: rise 0.7s cubic-bezier(.2,.8,.2,1) both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(12px); } }
+
+  /* the mark: the icon inside a turning gradient ring, with a breathing glow */
+  .mark { position: relative; width: 132px; height: 132px; margin: 0 auto; display: grid; place-items: center; }
+  .mark::before { content: ""; position: absolute; inset: 0; border-radius: 50%;
+         background: conic-gradient(from 0deg, transparent 0 55%, var(--indigo) 80%, var(--coral) 100%);
+         -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+                 mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+         animation: spin 1.6s linear infinite; }
+  .mark::after { content: ""; position: absolute; inset: 14px; border-radius: 28px; box-shadow: 0 0 40px 6px var(--glow);
+         animation: breathe 2.4s ease-in-out infinite; }
+  .mark img { position: relative; z-index: 1; width: 96px; height: 96px; border-radius: 22px;
+         box-shadow: 0 6px 24px rgba(29, 34, 51, 0.12); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes breathe { 50% { opacity: 0.35; transform: scale(0.94); } }
+  body.waiting .mark::before { animation-play-state: paused; opacity: 0.35; }
+  body.waiting .mark::after { animation: none; opacity: 0.4; }
+  body.failed .mark::before { animation: none; background: var(--error); opacity: 0.5; }
+  body.failed .mark::after { animation: none; box-shadow: none; }
+
+  h1 { font-size: 22px; font-weight: 600; letter-spacing: 0.01em; margin: 18px 0 4px; }
   p { margin: 0; color: var(--muted); }
-  .track { height: 6px; background: var(--track); border-radius: 3px; overflow: hidden; margin: 20px 0 8px; }
-  .bar { height: 100%; width: 0; background: var(--bar); transition: width 0.2s; }
+  #status { transition: opacity 0.25s ease; min-height: 1.5em; }
+  #status.swap { opacity: 0; }
+  /* while starting: three dots after the step's words */
+  .dots { display: inline-flex; gap: 4px; margin-left: 6px; vertical-align: middle; }
+  .dots i { width: 4px; height: 4px; border-radius: 50%; background: currentColor; animation: dot 1.2s ease-in-out infinite; }
+  .dots i:nth-child(2) { animation-delay: 0.15s; } .dots i:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes dot { 0%, 80%, 100% { opacity: 0.2; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-3px); } }
+  body:not(.busy) .dots { display: none; }
+
+  .track { position: relative; height: 6px; background: var(--track); border-radius: 3px; overflow: hidden; margin: 22px 0 8px; }
+  .bar { height: 100%; width: 0; border-radius: 3px; background: linear-gradient(90deg, var(--indigo), var(--coral));
+         transition: width 0.3s ease; position: relative; overflow: hidden; }
+  .bar::after { content: ""; position: absolute; inset: 0; animation: shimmer 1.4s linear infinite;
+         background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.45), transparent); }
+  @keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
   .error { color: var(--error); white-space: pre-wrap; text-align: left; font-size: 13px; margin-top: 16px;
            max-height: 40vh; overflow: auto; }
   #offer { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
   #offer[hidden] { display: none; }
   #use { background: var(--bar); color: var(--bg); border-color: var(--bar); }
   button { margin-top: 16px; font: inherit; padding: 6px 18px; border-radius: 6px; border: 1px solid var(--muted);
-           background: transparent; color: var(--fg); cursor: pointer; }
+           background: transparent; color: var(--fg); cursor: pointer; transition: transform 0.15s ease, background 0.15s; }
+  button:hover { transform: translateY(-1px); }
   [hidden] { display: none; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
 </style>
 </head>
-<body>
+<body class="busy">
+<div class="backdrop" aria-hidden="true"></div>
 <main>
-  <img src="icon.png" alt="">
+  <div class="mark"><img src="icon.png" alt=""></div>
   <h1>Veritas</h1>
-  <p id="status">Starting…</p>
+  <p role="status" aria-live="polite"><span id="status">Starting</span><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span></p>
   <div class="track" id="track" hidden><div class="bar" id="bar"></div></div>
   <p id="detail"></p>
   <div class="error" id="error" hidden></div>
@@ -48,9 +98,17 @@
   const { listen } = window.__TAURI__.event;
   const $ = (id) => document.getElementById(id);
   const mb = (bytes) => (bytes / 1e6).toFixed(0);
+  /** The step's words, faded over when they change; `state` is busy (turning ring, dots), waiting (a choice) or failed. */
+  function say(text, state = 'busy') {
+    document.body.className = state;
+    const el = $('status');
+    if (el.textContent === text) return;
+    el.classList.add('swap');
+    setTimeout(() => { el.textContent = text; el.classList.remove('swap'); }, 180);
+  }
 
   listen('model-progress', ({ payload }) => {
-    $('status').textContent = 'Downloading the search model (once)';
+    say('Downloading the search model (once)');
     $('track').hidden = false;
     $('bar').style.width = `${Math.min(100, (100 * payload.done) / payload.total)}%`;
     $('detail').textContent = `${mb(payload.done)} of ${mb(payload.total)} MB`;
@@ -63,7 +121,7 @@
     const first = found[0];
     // the chats an import brings: its own or, when it has none, those of the other index found with the most
     const chats = first.brings?.chats ? `, ${num(first.brings.chats)} chat${first.brings.chats === 1 ? '' : 's'}` : '';
-    $('status').textContent = `Found an existing Veritas index (${num(first.passages)} passages from ${num(first.notes)} notes${chats}). Use it?`;
+    say(`Found an existing Veritas index (${num(first.passages)} passages from ${num(first.notes)} notes${chats}). Use it?`, 'waiting');
     $('detail').textContent = `${first.path}. It is copied, not changed; only notes that changed since are read again.`;
     $('offer').hidden = false;
     $('use').onclick = () => boot(first.path);
@@ -82,16 +140,17 @@
     lastReuse = reuse;
     $('error').hidden = $('retry').hidden = $('offer').hidden = true;
     $('detail').textContent = '';
-    $('status').textContent = reuse && reuse !== 'fresh' ? 'Copying your index…' : 'Starting…';
+    say(reuse && reuse !== 'fresh' ? 'Copying your index' : 'Starting');
     // the server is started after the download; show that step once the bar is full
     const started = setInterval(() => {
-      if ($('bar').style.width === '100%') { $('status').textContent = 'Starting the server…'; $('track').hidden = true; $('detail').textContent = ''; }
+      if ($('bar').style.width === '100%') { say('Starting the server'); $('track').hidden = true; $('detail').textContent = ''; }
     }, 300);
     try {
       const answer = await invoke('boot', { reuse }); // once started, the window has moved to the web app
       if (answer.offer) offer(answer.offer);
     } catch (error) {
-      $('status').textContent = 'Veritas could not start';
+      say('Veritas could not start', 'failed');
+      $('track').hidden = true; $('detail').textContent = '';
       $('error').textContent = String(error);
       $('error').hidden = $('retry').hidden = false;
     } finally {
