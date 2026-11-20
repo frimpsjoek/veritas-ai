@@ -3,6 +3,10 @@
 Each release of Veritas AI. `node tools/release.mjs <version>` adds the next section (the commit subjects since the
 last tag, to edit before pushing); the GitHub Release shows that section as its notes.
 
+## 0.54.7 (2026-11-20)
+
+- Citations: a link a search returned counts in any of its spellings
+
 ## 0.54.6 (2026-11-20)
 
 - Spec 030 R12: a report asked in a chat reads the conversation it was asked in
