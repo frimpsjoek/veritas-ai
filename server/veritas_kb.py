@@ -4,9 +4,14 @@ Each instance owns one SQLite file, one Tantivy folder and one kb.Searcher, and 
 settings (DB_PATH, HOME, the folder list, the key store); only the embedding model is shared (kb.shared_embedder),
 read-only. The on-disk format is kb's: a database written here is a Veritas database.
 
-Calls are blocking: an async host runs them in worker threads. On one instance, searches queue behind each other on
-a per-instance lock (waiting at most `search_timeout` seconds, then ConcurrentUseError), writes (apply,
-embed_pending) queue behind each other on another, and reads (read, documents, get_meta, stats) take no lock.
+Calls are blocking: an async host runs them in worker threads. Thread-safety contract, per instance:
+- writes (apply, embed_pending) take the write lock and queue behind each other;
+- searches (search, similar_to_text) take the write lock, then the search lock, so a search sees one committed version
+  of the index (vectors, keyword index and rows alike) and never runs during a write. They wait at most
+  `search_timeout` seconds for both together, then ConcurrentUseError. embed_pending holds the write lock while it
+  embeds, so searches wait for (or time out on) a running embed_pending;
+- reads (read, documents, get_meta, stats) take no lock, open their own connection and run alongside everything;
+- close() refuses new calls (ClosedError), waits for running reads, writes and searches, then releases the files.
 Different instances never wait for each other, except on the shared model while it is first built.
 """
 from __future__ import annotations
@@ -28,7 +33,7 @@ __all__ = ["KnowledgeBase", "Document", "ConcurrentUseError", "ClosedError"]
 
 
 class ConcurrentUseError(TimeoutError):
-    """A search waited longer than `search_timeout` for another search on the same KnowledgeBase."""
+    """A search waited longer than `search_timeout` for another search or a write on the same KnowledgeBase."""
 
 
 class ClosedError(RuntimeError):
@@ -70,10 +75,13 @@ class KnowledgeBase:
         kb.resolve_backend(backend)  # an unknown backend fails here, not at the first search
         self.search_timeout = search_timeout
         self._embedder = embedder
-        self._write_lock = threading.Lock()  # apply + embed_pending (spec 035, concurrency contract)
+        # Lock order: _write_lock, then _search_lock (searches and close() alike); _state is never held while waiting
+        # for either.
+        self._write_lock = threading.Lock()  # apply + embed_pending, and searches: one version of the index per search
         self._search_lock = threading.Lock()  # search + similar_to_text: the Searcher is not for parallel use
-        self._state = threading.Lock()  # guards _closed
+        self._state = threading.Condition()  # guards _closed and _reads; notified when the last read ends
         self._closed = False
+        self._reads = 0  # reads running now (they take no other lock)
         self._claim()
         try:
             self._searcher = kb.Searcher(writer=True, db_path=self.db_path, keyword_dir=self.keyword_dir,
@@ -100,12 +108,14 @@ class KnowledgeBase:
             raise ClosedError(f"KnowledgeBase {self.db_path} is closed")
 
     def close(self) -> None:
-        """Waits for in-flight calls and the searcher's background rebuild, then releases the files. Idempotent;
-        later calls raise ClosedError."""
+        """Refuses new calls, waits for in-flight ones (reads too) and the searcher's background rebuild, then
+        releases the files. Idempotent; later calls raise ClosedError."""
         with self._state:
             if self._closed:
                 return
             self._closed = True
+            while self._reads:
+                self._state.wait()
         with self._write_lock, self._search_lock:
             self._searcher.close()
         self._release()
@@ -187,25 +197,42 @@ class KnowledgeBase:
         return self._searching(lambda s: s.similar_to_text(text, exclude, limit))
 
     def _searching(self, call):
+        """Holds the write lock too, so no apply or embed_pending commits between the searcher's refresh and its row
+        reads (review M1: with chunk ids reused, the search would score one document's vector and return another).
+        One deadline covers both locks."""
         self._check_open()
-        if not self._search_lock.acquire(timeout=self.search_timeout):
-            self._check_open()  # close() holds the lock while it waits: ClosedError, not a timeout
-            raise ConcurrentUseError(f"another search on this KnowledgeBase ran for over {self.search_timeout:g} s")
+        deadline = time.monotonic() + self.search_timeout
+        held = []
         try:
+            for lock in (self._write_lock, self._search_lock):  # the order close() takes them in
+                if not lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
+                    self._check_open()  # close() holds the locks while it waits: ClosedError, not a timeout
+                    raise ConcurrentUseError(f"another search or a write (apply, embed_pending) on this KnowledgeBase "
+                                             f"ran for over {self.search_timeout:g} s")
+                held.append(lock)
             self._check_open()
             return call(self._searcher)
         finally:
-            self._search_lock.release()
+            for lock in reversed(held):
+                lock.release()
 
     # ------------------------------------------------------------ reads (own connections, no lock)
 
     def _read(self, query):
-        self._check_open()
-        db = sqlite3.connect(self.db_path, timeout=60)
+        with self._state:  # registered before the check: close() waits for this read, or this read sees it closed
+            self._check_open()
+            self._reads += 1
         try:
-            return query(db)
+            db = sqlite3.connect(self.db_path, timeout=60)
+            try:
+                return query(db)
+            finally:
+                db.close()
         finally:
-            db.close()
+            with self._state:
+                self._reads -= 1
+                if not self._reads:
+                    self._state.notify_all()
 
     def read(self, path: str, max_chars: int = 30000, offset: int = 0, heading: str | None = None) -> dict:
         """A document's indexed text, one page at a time (`next_offset`), as kb.read_note reads Zotero items."""

@@ -412,6 +412,123 @@ def test_search_during_write_is_consistent(open_kb):
     assert paths(a.search("common keyword", limit=50)) == old
 
 
+def _chunk_ids(db_path: Path, path: str) -> set[int]:
+    db = sqlite3.connect(db_path)
+    try:
+        return {r[0] for r in db.execute("SELECT id FROM chunks WHERE path=?", (path,))}
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("method", ["search", "similar_to_text"])
+def test_search_sees_one_version_across_a_write(open_kb, method):
+    """Review M1: an apply that deletes and reinserts (SQLite handing the old chunk ids to the new text) must not commit
+    between a search's vector refresh and its chunk-row read; else the search scores A's vectors and returns B."""
+    a = open_kb()
+    a.apply(add=[doc("zotero/A", "Xenon lamps glow brightly")])
+    a.embed_pending()
+    old_ids = _chunk_ids(a.db_path, "zotero/A")
+    searcher, real_refresh = a._searcher, a._searcher._refresh
+    refreshed, go = threading.Event(), threading.Event()
+
+    def refresh():
+        real_refresh()
+        if not refreshed.is_set():  # the search under test: pause after loading the vectors
+            refreshed.set()
+            assert go.wait(10)
+
+    searcher._refresh = refresh
+    query = "xenon lamps glow brightly, measured in the laboratory samples"
+    searching, search_box = in_thread(getattr(a, method), query)
+    assert refreshed.wait(5)
+    writer, write_box = in_thread(a.apply, [doc("zotero/B", "Yttrium garnets are hard")], ["zotero/A"])
+    writer.join(0.5)
+    write_went_first = not writer.is_alive()
+    go.set()
+    searching.join(10), writer.join(10)
+    assert "error" not in write_box and write_box["result"] == {"added": 1, "removed": 1}
+    assert _chunk_ids(a.db_path, "zotero/B") & old_ids  # the setup really reused ids
+    assert "error" not in search_box, search_box.get("error")
+    assert paths(search_box["result"]) == {"zotero/A"}  # never B, which shares no word with the query
+    assert not write_went_first  # the write waited for the search
+
+
+def test_search_waits_for_embedding_within_the_timeout(open_kb):
+    embedder = BlockingEmbedder()
+    a = open_kb(embedder=embedder, search_timeout=0.3)
+    a.apply(add=[doc("zotero/1", "xenon lamps")])
+    embedder.block_passages = True
+    embedding, embed_box = in_thread(a.embed_pending)
+    assert embedder.entered.wait(5)
+    started = time.monotonic()
+    with pytest.raises(ConcurrentUseError):
+        a.search("xenon")
+    assert 0.25 < time.monotonic() - started < 2
+    embedder.block_passages = False
+    embedder.release.set()
+    embedding.join(5)
+    assert "error" not in embed_box
+    assert paths(a.search("xenon")) == {"zotero/1"}
+
+
+def test_search_timeout_covers_both_locks(open_kb):
+    """One deadline for the write lock and the search lock together, not search_timeout for each."""
+    a = open_kb(search_timeout=0.6)
+    a._search_lock.acquire()
+    a._write_lock.acquire()
+    releaser = threading.Timer(0.4, a._write_lock.release)  # a timeout per lock would wait 1.0 s in all
+    releaser.start()
+    try:
+        started = time.monotonic()
+        with pytest.raises(ConcurrentUseError):
+            a.search("anything")
+        assert 0.55 < time.monotonic() - started < 0.9
+    finally:
+        releaser.join()
+        a._search_lock.release()
+    assert a.search("anything") == []
+
+
+def _paused_connect(monkeypatch, pauses: int):
+    """veritas_kb's sqlite3.connect, the first `pauses` calls held until released (all of them inside together)."""
+    real, lock, entered = sqlite3.connect, threading.Lock(), []
+    inside, release = threading.Barrier(pauses + 1, timeout=5), threading.Event()
+
+    def connect(*args, **kwargs):
+        with lock:
+            pause = len(entered) < pauses
+            entered.append(1)
+        if pause:
+            inside.wait()  # every paused read is inside at once: reads do not wait for each other
+            assert release.wait(10)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(veritas_kb, "sqlite3", type("sqlite3", (), {"connect": staticmethod(connect)}))
+    return inside, release
+
+
+def test_close_waits_for_reads(open_kb, monkeypatch):
+    a = open_kb()
+    a.apply(add=[doc("zotero/1", "first xenon")])
+    inside, release = _paused_connect(monkeypatch, pauses=2)
+    readers = [in_thread(a.documents), in_thread(a.get_meta, "indexed_at")]
+    inside.wait()  # both reads are past the open check, before connecting
+    closer, close_box = in_thread(a.close)
+    time.sleep(0.2)
+    assert closer.is_alive()  # waits for the reads
+    with pytest.raises(ClosedError):
+        a.stats()  # a read begun after close began
+    with pytest.raises(ClosedError):
+        a.read("zotero/1")
+    release.set()
+    for thread, _ in readers:
+        thread.join(5)
+    closer.join(5)
+    assert not closer.is_alive() and "error" not in close_box
+    assert set(readers[0][1]["result"]) == {"zotero/1"} and readers[1][1]["result"]
+    KnowledgeBase(a.db_path, embedder=HashEmbedder()).close()  # the files were released
+
+
 def test_embed_pending_serialised_with_apply(open_kb):
     embedder = BlockingEmbedder()
     a = open_kb(embedder=embedder)
