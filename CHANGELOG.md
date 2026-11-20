@@ -3,6 +3,10 @@
 Each release of Veritas AI. `node tools/release.mjs <version>` adds the next section (the commit subjects since the
 last tag, to edit before pushing); the GitHub Release shows that section as its notes.
 
+## 0.54.2 (2026-11-20)
+
+- Obsidian: an open note no longer blocks the plugin's self-update forever
+
 ## 0.54.1 (2026-11-20)
 
 - Check: Windows runs but does not block a release yet; two Windows test mistakes fixed
