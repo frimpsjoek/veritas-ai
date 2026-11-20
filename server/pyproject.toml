@@ -1,0 +1,27 @@
+# The search index as a library (spec 035): `pip install ./server[onnx]`, then `from veritas_kb import KnowledgeBase`.
+# The app itself (kb.py serve, the HTTP API, bin/veritas, Homebrew, PyInstaller) runs from the checkout and
+# requirements.txt as before; this file only describes the library wheel. Its version is the library's own (0.1.0),
+# not the app's.
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "veritas-kb"
+version = "0.1.0"
+description = "Veritas search index (SQLite FTS5 + Tantivy + snowflake-arctic-embed-s) as a library"
+requires-python = ">=3.11"  # also needs SQLite >= 3.43 in Python's sqlite3 (FTS5 contentless_delete)
+license = "MIT"
+dependencies = ["numpy>=2", "tantivy>=0.25", "tokenizers>=0.20"]
+
+[project.optional-dependencies]
+onnx = ["onnxruntime>=1.20"]  # the embedder off macOS (and on macOS without MLX)
+mlx = ["mlx>=0.20; sys_platform == 'darwin'", "onnx>=1.16; sys_platform == 'darwin'"]  # onnx: MLX weight extraction
+media = ["pypdfium2>=4", "pillow>=10"]  # only kb.index()'s PDF and image stage
+test = ["pytest>=8", "onnxruntime>=1.20"]
+
+[tool.setuptools]
+# Flat: the server's modules import each other as top-level modules (import media, import zotero). Only the engine,
+# what it imports at load, and the files kb checks at import (kb._CODE); tests/test_packaging.py keeps this complete.
+py-modules = ["veritas_kb", "kb", "keyword_index", "mlx_embed", "listen_first", "web_origins", "media", "sources",
+              "connectors", "abstracts", "zotero", "zotero_web", "zotero_files", "paper_notes", "paths"]
