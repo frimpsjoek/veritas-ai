@@ -28,22 +28,14 @@
   main { position: relative; width: min(520px, 100% - 32px); text-align: center; animation: rise 0.7s cubic-bezier(.2,.8,.2,1) both; }
   @keyframes rise { from { opacity: 0; transform: translateY(12px); } }
 
-  /* the mark: the icon inside a turning gradient ring, with a breathing glow */
-  .mark { position: relative; width: 132px; height: 132px; margin: 0 auto; display: grid; place-items: center; }
-  .mark::before { content: ""; position: absolute; inset: 0; border-radius: 50%;
-         background: conic-gradient(from 0deg, transparent 0 55%, var(--indigo) 80%, var(--coral) 100%);
-         -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
-                 mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
-         animation: spin 1.6s linear infinite; }
-  .mark::after { content: ""; position: absolute; inset: 14px; border-radius: 28px; box-shadow: 0 0 40px 6px var(--glow);
+  /* the mark: the icon with a breathing glow */
+  .mark { position: relative; width: 96px; height: 96px; margin: 0 auto; display: grid; place-items: center; }
+  .mark::after { content: ""; position: absolute; inset: 0; border-radius: 22px; box-shadow: 0 0 40px 6px var(--glow);
          animation: breathe 2.4s ease-in-out infinite; }
   .mark img { position: relative; z-index: 1; width: 96px; height: 96px; border-radius: 22px;
          box-shadow: 0 6px 24px rgba(29, 34, 51, 0.12); }
-  @keyframes spin { to { transform: rotate(360deg); } }
   @keyframes breathe { 50% { opacity: 0.35; transform: scale(0.94); } }
-  body.waiting .mark::before { animation-play-state: paused; opacity: 0.35; }
   body.waiting .mark::after { animation: none; opacity: 0.4; }
-  body.failed .mark::before { animation: none; background: var(--error); opacity: 0.5; }
   body.failed .mark::after { animation: none; box-shadow: none; }
 
   h1 { font-size: 22px; font-weight: 600; letter-spacing: 0.01em; margin: 18px 0 4px; }
@@ -63,7 +55,7 @@
   .bar::after { content: ""; position: absolute; inset: 0; animation: shimmer 1.4s linear infinite;
          background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.45), transparent); }
   @keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
-  .error { color: var(--error); white-space: pre-wrap; text-align: left; font-size: 13px; margin-top: 16px;
+  .error { color: var(--error); white-space: pre-wrap; text-align: center; font-size: 13px; margin-top: 16px;
            max-height: 40vh; overflow: auto; }
   #offer { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
   #offer[hidden] { display: none; }
