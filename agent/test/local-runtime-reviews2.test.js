@@ -15,7 +15,8 @@ function fakeProvider({ questions = [], seen = [], candidates = null, beforeCand
     async *turn(req) {
       seen.push(req.input.split('\n')[0]);
       let json;
-      if (/^A researcher wants a literature report/.test(req.input)) json = { questions };
+      if (/^A researcher asked for a literature report from inside a conversation/.test(req.input)) json = { question: 'Which papers study reproducing agent-made performance optimizations in WEST?' };
+      else if (/^A researcher wants a literature report/.test(req.input)) json = { questions };
       else if (/^Plan a literature review/.test(req.input)) json = { subQuestions: [{ id: 'sq1', question: 'part 1', strategy: 's', sources: ['papers'] }], criteria: [], columns: [{ name: 'Main findings', instruction: 'f' }], assumed: [] };
       else if (/finding papers for one sub-question/.test(req.input)) { if (beforeCandidates) yield* beforeCandidates(); json = { candidates: candidates ?? [cand(1), cand(2)], searchLog: [{ query: 'q', source: 'papers', results: 2 }] }; }
       else if (/^You extract data/.test(req.input)) {
@@ -261,4 +262,35 @@ test('spec 032: papers.keep looks the free copies up and hands them, in order, t
   assert.deepEqual([got.where, got.path, got.access.access], ['folder', 'Papers/A.pdf', 'open']);
   await ai.papers.keep({ title: 'B', doi: '10.9/closed' });
   assert.deepEqual(kept[1].urls, []);
+});
+
+test('spec 030 R12: a report asked in a chat reads the conversation: its message becomes a standalone question before planning', async () => {
+  const fs = memoryFs();
+  const seen = [];
+  const { ai } = await runtime(fs, { seen });
+  const session = await ai.conversations.create('chat');
+  for await (const _ of ai.conversations.send(session, { text: 'What themes run through my library?' })) { /* the fake answers */ }
+  // the earlier answer named the topic; the report's own message leans on it
+  const records = await ai.conversations.load(session);
+  assert.ok(records.some((r) => r.type === 'assistant'));
+  const id = await ai.reviews.start({ ...REQUEST, question: 'i need more papers on this', session, autoApprove: true });
+  await until(ai, id, 'done');
+  const request = JSON.parse(await fs.read(`/data/reviews/${id}/request.json`));
+  assert.equal(request.asked, 'i need more papers on this');
+  assert.equal(request.question, 'Which papers study reproducing agent-made performance optimizations in WEST?');
+  assert.match(request.thread, /User: What themes run through my library\?/);
+  assert.ok(seen.some((l) => /^A researcher asked for a literature report from inside a conversation/.test(l)), 'the rewrite turn ran');
+  assert.ok(seen.findIndex((l) => /^A researcher asked for a literature report from inside/.test(l)) < seen.findIndex((l) => /^Plan a literature review/.test(l)), 'before the plan');
+});
+
+test('spec 030 R12: a report started outside a thread is not rewritten', async () => {
+  const fs = memoryFs();
+  const seen = [];
+  const { ai } = await runtime(fs, { seen });
+  const id = await ai.reviews.start({ ...REQUEST, autoApprove: true });
+  await until(ai, id, 'done');
+  const request = JSON.parse(await fs.read(`/data/reviews/${id}/request.json`));
+  assert.equal(request.thread, undefined);
+  assert.equal(request.question, REQUEST.question);
+  assert.ok(!seen.some((l) => /from inside a conversation/.test(l)));
 });

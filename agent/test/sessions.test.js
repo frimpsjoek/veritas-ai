@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  manifest, legacyView, isLegacy, summaryExtras, coverOf, chatFirst, nextStepId, nextResultId, rowIdFor,
+  manifest, legacyView, isLegacy, summaryExtras, coverOf, chatFirst, threadText, nextStepId, nextResultId, rowIdFor,
   papersFromFind, papersFromReview, renderResult, manifestBlock,
 } from '../src/sessions.js';
 
@@ -244,4 +244,19 @@ test('manifestBlock lists every result with the current one marked, and stays un
 
 test('manifestBlock is empty with no results (a plain chat)', () => {
   assert.equal(manifestBlock({ results: [], current: null }), '');
+});
+
+test('spec 030 R12: threadText is the last turns of a thread, oldest first, cut to size; none without chat turns', () => {
+  const records = [
+    { type: 'meta' },
+    { type: 'user', text: 'What themes run through my library?' },
+    { type: 'assistant', answer: { text: 'Reproducible agent-made optimizations in WEST.' } },
+    { type: 'step', input: { kind: 'find' } },
+    { type: 'user', text: 'i need more papers on this' },
+  ];
+  assert.equal(threadText(records), 'User: What themes run through my library?\n\nAssistant: Reproducible agent-made optimizations in WEST.\n\nUser: i need more papers on this');
+  assert.equal(threadText([{ type: 'meta' }, { type: 'step' }]), '');
+  const long = Array.from({ length: 10 }, (_, i) => ({ type: 'user', text: `q${i} ${'x'.repeat(3000)}` }));
+  const text = threadText(long);
+  assert.ok(text.length <= 6000 && text.includes('q9') && !text.includes('q0 '), 'the newest turns, within the limit');
 });

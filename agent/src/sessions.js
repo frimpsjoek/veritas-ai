@@ -493,3 +493,19 @@ export function chatPapersBlock(summary, rows, total, on, first, cap = 6000) {
  * }} SessionStep
  */
 export const __types = true;
+
+/** Spec 030 R12: the conversation a report was asked in, for a report started in a thread ("i need more papers on this"
+ *  means nothing alone). The last `turns` questions and answers, oldest first, each cut to `perTurn` characters, the
+ *  whole to `max`; '' for a thread with no chat turns. Pure.
+ *  @param {any[]} records @param {{ turns?: number, perTurn?: number, max?: number }} [opts] */
+export function threadText(records, opts = {}) {
+  const turns = opts.turns ?? 6, perTurn = opts.perTurn ?? 1500, max = opts.max ?? 6000;
+  const cut = (/** @type {string} */ t) => (t.length > perTurn ? `${t.slice(0, perTurn - 1).trimEnd()}…` : t);
+  const lines = records
+    .filter((r) => (r.type === 'user' && r.text) || (r.type === 'assistant' && r.answer?.text))
+    .map((r) => (r.type === 'user' ? `User: ${cut(String(r.text).trim())}` : `Assistant: ${cut(String(r.answer.text).trim())}`))
+    .slice(-turns);
+  let text = lines.join('\n\n');
+  while (text.length > max && lines.length > 1) { lines.shift(); text = lines.join('\n\n'); }
+  return text.slice(-max);
+}

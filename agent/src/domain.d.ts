@@ -431,6 +431,10 @@ export interface SkillRun extends SkillRef { block: string; notice?: string | nu
 export interface ReviewRequest {
   question: string; scope: Scope; sources: ReviewSource[];
   years: { from: number | null; to: number | null }; depth: Depth;
+  /** Spec 030 R12: the conversation a report asked in a thread was asked in (set at start), and the words typed once
+   *  `question` has been made standalone from it. */
+  thread?: string;
+  asked?: string;
   /** Skip the approve stage's WAIT and run straight through (spec F4: "run it automatically"). Default false: pause. */
   autoApprove?: boolean;
   /** spec 007 §2.1: 2 = clarify → plan → approve → search → screen → extract → synthesize → publish. Missing = 1. */

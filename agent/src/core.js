@@ -37,7 +37,7 @@ import { syncEndpointProviders } from './providers/index.js';
 import { createSettingsStore, DEFAULT_TURN_WALL_CLOCK_MS, DEFAULT_TOOL_CALL_BUDGET, localRoleRefusal, viewSettings, viewMcpConfig } from './settings.js';
 import { createSecretStore } from './secrets.js';
 import { myPapers as findMyPapers, seedCategories, calibrateRadar } from './radar-seeds.js';
-import { rowIdFor, manifest, legacyView, isLegacy, nextStepId, nextResultId, manifestBlock, partialStepPath, subsetRows, chatPapersBlock, newsOf, viewedSince } from './sessions.js';
+import { rowIdFor, manifest, legacyView, isLegacy, nextStepId, nextResultId, manifestBlock, partialStepPath, subsetRows, chatPapersBlock, newsOf, viewedSince, threadText } from './sessions.js';
 import { CHAT_PAPERS_INSTRUCTIONS, LOCAL_INSTRUCTIONS, LOCAL_SMALL_TALK } from './prompts.js';
 import { retrievePassages, passagesFromSet, queryFor, passageBlock, notFoundAnswer, questionOf, isSmallTalk } from './local/retrieve.js';
 import { selectTargets, estimateStep, extractBatches, textFor, versionCells, changeLine, cellKey, errorText, FULL_TEXT_CHARS } from './extract.js';
@@ -1772,6 +1772,11 @@ export async function createLocalRuntime(deps) {
         const request = asked.skills?.length ? { ...asked, skills: await skillStore.resolve(asked.skills.map((k) => k.name)) } : (({ skills: _skills, ...rest }) => rest)(asked);
         if (request.sources.includes('web')) {
           request.web = await savedWebMode();
+        }
+        // spec 030 R12: a report asked in a thread reads the conversation it was asked in
+        if (request.session && !request.fromTable) {
+          const thread = threadText(await sessionRecords(request.session).catch(() => []));
+          if (thread) /** @type {any} */ (request).thread = thread;
         }
         const id = /** @type {import("./domain").ReviewId} */ (ulid());
         reviewLog.begin(id);

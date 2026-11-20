@@ -3,7 +3,7 @@
 // write files in reviews/<id>/ exactly as pipeline 1 does (output file = done, WAIT for a human). Screening and
 // extraction both go through extract.js, so they share its batching, quote check and cell shapes.
 import { WAIT } from './wait.js';
-import { CLARIFY_SCHEMA, PLAN_SCHEMA_2, PLAN_SCHEMA_SYSTEMATIC, CANDIDATES_SCHEMA, REPORT_SCHEMA_2, SKILL_REPORT_SCHEMA, DEPTH_PRESETS, REPORT_CAPS, SYSTEMATIC_CAPS, clarifyPrompt, systematicClarifyPrompt, leadPrompt2, systematicLeadPrompt, candidatesPrompt, writerPrompt2 } from './prompts.js';
+import { STANDALONE_SCHEMA, standalonePrompt, CLARIFY_SCHEMA, PLAN_SCHEMA_2, PLAN_SCHEMA_SYSTEMATIC, CANDIDATES_SCHEMA, REPORT_SCHEMA_2, SKILL_REPORT_SCHEMA, DEPTH_PRESETS, REPORT_CAPS, SYSTEMATIC_CAPS, clarifyPrompt, systematicClarifyPrompt, leadPrompt2, systematicLeadPrompt, candidatesPrompt, writerPrompt2 } from './prompts.js';
 import { skillSection } from './skills.js';
 import { extractBatches, selectTargets, slugColumn, cellKey } from './extract.js';
 import { rowIdFor } from './sessions.js';
@@ -60,6 +60,7 @@ export function cleanQuestions(out) {
 
 /** @param {StageCtx} ctx */
 export async function clarifyStage(ctx) {
+  await withStandaloneQuestion(ctx);
   // The lead may not ask when the researcher chose "run it automatically": its own defaults become "assumed" lines.
   if (ctx.settings.autoApprove) return { questions: [], answers: [] };
   // Restart while waiting: the questions are already on disk, so no second turn.
@@ -69,6 +70,23 @@ export async function clarifyStage(ctx) {
   if (!questions.length) return { questions: [], answers: [] };
   await ctx.write('clarify-questions.json', questions);
   return WAIT;
+}
+
+/** Spec 030 R12: a report started in a chat thread carries that conversation (`request.thread`, set at start); its
+ *  message is turned into a standalone question once, before anything is planned, and every later stage (the plan,
+ *  the searches, the report's title) works from it. The words typed stay as `asked`. Saved in request.json, so a
+ *  restart does not ask again. A failed turn leaves the question as typed. @param {StageCtx} ctx */
+export async function withStandaloneQuestion(ctx) {
+  const request = /** @type {any} */ (ctx.request);
+  if (!request.thread || request.asked) return;
+  let question = '';
+  try {
+    const out = await ctx.turns.structured('lead', standalonePrompt(request.question, request.thread), STANDALONE_SCHEMA, noTools(ctx, 'standalone'), ctx.signal);
+    question = String(/** @type {any} */ (out)?.question ?? '').trim().replace(/\s+/g, ' ').slice(0, 400);
+  } catch { /* the question stays as typed */ }
+  request.asked = request.question;
+  if (question) request.question = question;
+  await ctx.write('request.json', request);
 }
 
 /** @param {import("./domain").ReviewRequest} request */

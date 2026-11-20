@@ -74,6 +74,12 @@ review: every one of its 240 cells came from a search snippet, none from a paper
   link an earlier answer resolved); it is not marked red as "couldn't be found in your library". A link the thread does
   not hold still is.
 
+- R12. (2026-11-20, user, with a screenshot: after chatting, a Research report asked "i need more papers on this" was
+  planned as "a topic or research question": "it doesn't take the context of the previous conversation") A report
+  asked in a thread reads the conversation it was asked in (the last turns, `request.thread`), and its message is first
+  made a standalone question from it (`asked` keeps the words typed); the plan, the searches and the report's title
+  work from that question. Not for "Report from this table", which works on the table.
+
 ## Non-goals
 
 - Routines stays its own view (it lists schedules, it is not a conversation); leaving it starts a new chat, as now.

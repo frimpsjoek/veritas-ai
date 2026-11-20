@@ -249,6 +249,24 @@ export const SYSTEMATIC_CAPS = /** @type {const} */ ({
 });
 
 /** The lead's clarify turn: zero, one or two questions. Zero means the question is clear enough to plan. */
+/** Spec 030 R12: a report asked inside a chat; its message may lean on the conversation ("more papers on this"). */
+export const STANDALONE_SCHEMA = {
+  type: 'object',
+  properties: { question: { type: 'string' } },
+  required: ['question'],
+  additionalProperties: false,
+};
+
+/** @param {string} asked @param {string} thread */
+export function standalonePrompt(asked, thread) {
+  return [
+    'A researcher asked for a literature report from inside a conversation. Their message may refer to the conversation ("this", "these papers", "more on that").',
+    `The conversation so far (oldest first):\n${thread}`,
+    `Their message: "${asked}"`,
+    'Write the research question the report should answer, as one standalone sentence that needs none of the conversation to be understood: name the topic, system or method the conversation is about. Keep the researcher\'s own aim ("more papers on", "compare", "what is known about"). If the message already stands alone, return it unchanged. Do not answer it.',
+  ].join('\n');
+}
+
 export const CLARIFY_SCHEMA = {
   type: 'object',
   properties: {
