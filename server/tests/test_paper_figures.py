@@ -73,3 +73,24 @@ def test_a_publisher_refusal_is_a_settled_none(monkeypatch):
         raise urllib.error.HTTPError(url, 403, "Forbidden", {}, None)
     monkeypatch.setattr(pf, "_get", get)
     assert pf._find("10.1021/acs.jpcc.6c01336", None, None) == (None, True)
+
+
+def test_the_first_figure_is_an_img_or_an_svg_object_whichever_comes_first():
+    # newer arXiv pages embed SVG figures as <object data=...> (seen live: 2610.37530 showed no figure)
+    svg_first = ('<img src="logo.svg" alt="archive"><figure><object type="image/svg+xml" data="2610.37530v1/idvg.svg" '
+                 'class="ltx_graphics ltx_centering"></object></figure><img src="x2.png" class="ltx_graphics">')
+    assert pf.first_figure(svg_first) == "2610.37530v1/idvg.svg"
+    img_first = '<img class="ltx_graphics ltx_img_landscape" src="x1.png" width="3"><object data="b.svg" class="ltx_graphics">'
+    assert pf.first_figure(img_first) == "x1.png"
+    assert pf.first_figure('<img src="logo.svg"><p>no figures</p>') is None
+
+
+def test_a_none_an_older_finder_gave_is_asked_again_at_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(pf, "CACHE", tmp_path / "figures.json")
+    monkeypatch.setattr(pf, "_cache", {"2610.37530": {"image": None, "at": 0}, "2611.00001": {"image": "a.png", "at": 0}})
+    calls = []
+    monkeypatch.setattr(pf, "_find", lambda doi, arxiv, url: (calls.append(arxiv), ("b.svg", True))[1])
+    assert pf.figure(arxiv="2610.37530", now=60) == "b.svg"  # no "finder": written before FINDER 2
+    assert pf.figure(arxiv="2610.37530", now=120) == "b.svg"
+    assert pf.figure(arxiv="2611.00001", now=60) == "a.png"  # a found image is kept
+    assert calls == ["2610.37530"]

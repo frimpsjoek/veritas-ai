@@ -9,7 +9,7 @@ Tried in order, each only when it applies:
 4. The article page's own preview image (og:image / twitter:image), unless it is a logo or a journal cover.
 
 Answers are kept in data/web/paper-figures.json. A "none" every source answered is asked again after a week; a none
-caused by an error (a timeout, no network) after an hour. The browser loads the image from its source.
+caused by an error (a timeout, no network) after an hour; a none an older finder gave (FINDER) at once. The browser loads the image from its source.
 """
 from __future__ import annotations
 
@@ -28,6 +28,8 @@ CACHE = kb.data_dir() / "web" / "paper-figures.json"
 RETRY_NONE_S = 7 * 24 * 3600
 RETRY_ERROR_S = 3600  # a none that came from an error (timeout, network), not from every source saying no
 TIMEOUT_S = 8
+FINDER = 2  # raised when the finder learns a new kind of figure: a none an older finder gave is asked again at once
+ARXIV_PAGE_LIMIT = 4_000_000  # a long paper's page runs to megabytes; its first figure can sit past the first 600 kB
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
 GENERIC = re.compile(r"logo|cover|default|placeholder|favicon|social|share|banner|sprite|icon", re.I)
 SPRINGER = re.compile(r"10\.(?:1038|1007|1186)/s(\d+)-(\d{3})-(\d+)-\w", re.I)
@@ -90,10 +92,22 @@ def preview_image(html: str, page: str) -> str | None:
 
 def arxiv_figure(aid: str) -> str | None:
     """The first figure of an arXiv paper's HTML page, or None when it has none (raises on a network error)."""
-    status, page, body = _get(f"https://arxiv.org/html/{aid}")
-    html = body.decode("utf8", "ignore")
-    m = re.search(r'<img[^>]+src="([^"]+)"[^>]*class="ltx_graphics', html) or re.search(r'class="ltx_graphics[^"]*"[^>]*src="([^"]+)"', html)
-    return urllib.parse.urljoin(page, m.group(1)) if status == 200 and m else None
+    status, page, body = _get(f"https://arxiv.org/html/{aid}", limit=ARXIV_PAGE_LIMIT)
+    found = first_figure(body.decode("utf8", "ignore"))
+    return urllib.parse.urljoin(page, found) if status == 200 and found else None
+
+
+def first_figure(html: str) -> str | None:
+    """The address of the first figure on an arXiv (LaTeXML) page: an <img src> or, for an SVG figure, an
+    <object data>, whichever comes first, each marked class="ltx_graphics"."""
+    for m in re.finditer(r"<(?:img|object)\b[^>]*>", html, re.I):
+        tag = m.group(0)
+        if not re.search(r'class="[^"]*\bltx_graphics\b', tag):
+            continue
+        src = re.search(r'\b(?:src|data)="([^"]+)"', tag)
+        if src:
+            return src.group(1)
+    return None
 
 
 def preprint_of(doi: str) -> str | None:
@@ -147,10 +161,10 @@ def figure(doi: str = "", arxiv: str | None = None, url: str | None = None, now:
     with _lock:
         hit = _load().get(key)
     retry = RETRY_NONE_S if (hit or {}).get("settled", True) else RETRY_ERROR_S
-    if hit and (hit.get("image") or now - hit.get("at", 0) < retry):
+    if hit and (hit.get("image") or (hit.get("finder", 1) >= FINDER and now - hit.get("at", 0) < retry)):
         return hit.get("image")
     image, settled = _find(doi, arxiv, url)
     with _lock:
-        _load()[key] = {"image": image, "at": now, **({} if settled else {"settled": False})}
+        _load()[key] = {"image": image, "at": now, "finder": FINDER, **({} if settled else {"settled": False})}
         _save()
     return image
