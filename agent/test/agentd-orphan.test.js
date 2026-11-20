@@ -10,7 +10,7 @@ const entry = fileURLToPath(new URL('../src/node/agentd.mjs', import.meta.url));
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-test('agentd leaves when the server that started it dies, so no orphan keeps ticking routines', { timeout: 30000 }, async () => {
+test('agentd leaves when the server that started it dies, so no orphan keeps ticking routines', { timeout: 30000, skip: process.platform === 'win32' && 'the test starts its fake server with /bin/sh' }, async () => {
   const data = mkdtempSync(join(tmpdir(), 'sb-orphan-'));
   // the parent shell starts agentd in the background and lives a moment, then exits without stopping it, as a server killed with -9 would
   const parent = spawn('/bin/sh', ['-c', `"${process.execPath}" "${entry}" --port 0 --data "${data}" --kb http://127.0.0.1:9 >/dev/null 2>&1 & sleep 3`], {

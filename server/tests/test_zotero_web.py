@@ -5,6 +5,7 @@ import base64
 import io
 import json
 import os
+import sys
 import re
 import urllib.error
 from urllib.parse import parse_qs, urlparse
@@ -253,6 +254,7 @@ def test_add_account_refuses_a_listed_user_and_reports_keychain_failure(tmp_path
     assert [e.get("user_id") for e in sources.load() if "user_id" in e] == ["123"]  # nothing half-added
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="the macOS Keychain's `security` command; other systems keep keys elsewhere")
 def test_store_key_runs_a_real_security_with_the_command_on_stdin(tmp_path, monkeypatch):
     """A fake `security` on PATH records what a real process would see: its argv and its stdin."""
     fake = tmp_path / "security"
