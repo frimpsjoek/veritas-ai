@@ -204,6 +204,103 @@ def test_embedder_defaults_unchanged(tmp_path, monkeypatch, fake_onnx):
     assert embedder.mlx is None and fake_onnx.opened == [str(model / "onnx" / "model.onnx")]
 
 
+class _FakeMX:
+    """mlx.core, as much as mlx_embed touches outside forward(): no real MLX on Linux."""
+    float16 = "float16"
+
+    class array:
+        def __init__(self, value):
+            self.value = value
+
+        def astype(self, dtype):
+            return self
+
+    @staticmethod
+    def set_cache_limit(limit):
+        pass
+
+
+@pytest.fixture
+def mlx_embed_stubbed(monkeypatch):
+    """A private copy of mlx_embed imported against a stubbed mlx.core (sys.modules' mlx_embed untouched)."""
+    import importlib.util
+    import sys
+    import types
+
+    core = types.ModuleType("mlx.core")
+    for name in ("float16", "array", "set_cache_limit"):
+        setattr(core, name, getattr(_FakeMX, name))
+    package = types.ModuleType("mlx")
+    package.core = core
+    monkeypatch.setitem(sys.modules, "mlx", package)
+    monkeypatch.setitem(sys.modules, "mlx.core", core)
+    spec = importlib.util.spec_from_file_location("mlx_embed_under_test", kb.HOME / "mlx_embed.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _mlx_weights():
+    names = [f"encoder.layer.{i}.{p}.weight" for i in range(12) for p in
+             ("attention.self.query", "attention.self.key", "attention.self.value", "attention.output.dense",
+              "intermediate.dense", "output.dense")]
+    return {name: np.zeros(1, dtype=np.float32) for name in names + ["embeddings.word_embeddings.weight"]}
+
+
+def test_mlx_backend_gets_the_model_folder(tmp_path, monkeypatch, fake_onnx):
+    """Review M3: the MLX weights come from `model_dir`, like the tokenizer, not from the default folder."""
+    import sys
+    import types
+
+    model = _tiny_model(tmp_path / "other-model")
+    built = []
+
+    class ArcticMLX:
+        def __init__(self, model_dir):
+            built.append(model_dir)
+
+    monkeypatch.setitem(sys.modules, "mlx_embed", types.SimpleNamespace(ArcticMLX=ArcticMLX))
+    embedder = kb.Embedder(model, "mlx")
+    assert embedder.mlx is not None and fake_onnx.opened == []  # no silent fall back to onnxruntime
+    assert built == [model]
+
+
+def test_mlx_weights_load_from_the_model_folder(tmp_path, monkeypatch, mlx_embed_stubbed):
+    mlx_embed = mlx_embed_stubbed
+    model = tmp_path / "other-model"
+    model.mkdir()
+    np.savez(model / "mlx-weights.npz", **_mlx_weights())
+    loaded = mlx_embed.load(model)
+    assert set(loaded) == set(_mlx_weights())
+    arctic = mlx_embed.ArcticMLX(model)
+    assert set(arctic.w) == set(_mlx_weights())
+    asked = []
+    monkeypatch.setattr(mlx_embed, "load", lambda model_dir=None: asked.append(model_dir) or _mlx_weights())
+    mlx_embed.ArcticMLX(model), mlx_embed.ArcticMLX()
+    assert asked == [model, None]  # None: the module's own folder, as before
+
+
+def test_mlx_weights_extracted_from_the_model_folder(tmp_path, monkeypatch, mlx_embed_stubbed):
+    import os
+    import stat
+
+    mlx_embed = mlx_embed_stubbed
+    seen = []
+    monkeypatch.setattr(mlx_embed, "extract", lambda model_dir: seen.append(model_dir) or _mlx_weights())
+    model = tmp_path / "other-model"
+    model.mkdir()
+    assert set(mlx_embed.load(model)) == set(_mlx_weights())
+    assert seen == [model] and (model / "mlx-weights.npz").exists()  # cached beside the ONNX file it came from
+    read_only = tmp_path / "ro-model"
+    read_only.mkdir()
+    read_only.chmod(stat.S_IRUSR | stat.S_IXUSR)
+    try:
+        assert set(mlx_embed.load(read_only)) == set(_mlx_weights())  # extracted again, not cached
+        assert os.listdir(read_only) == []
+    finally:
+        read_only.chmod(stat.S_IRWXU)
+
+
 def test_onnx_model_folder_may_be_read_only(tmp_path, monkeypatch, fake_onnx):
     import os
     import stat

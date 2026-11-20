@@ -10,16 +10,16 @@ from pathlib import Path
 import mlx.core as mx
 import numpy as np
 
-MODEL_DIR = Path(__file__).resolve().parent / "models" / "snowflake-arctic-embed-s"
-WEIGHTS = MODEL_DIR / "mlx-weights.npz"
+MODEL_DIR = Path(__file__).resolve().parent / "models" / "snowflake-arctic-embed-s"  # default; kb passes its own
+WEIGHTS = "mlx-weights.npz"  # in the model folder, beside the ONNX file it is extracted from
 LAYERS, HEADS, HIDDEN, EPS = 12, 12, 384, 1e-12
 
 
-def extract() -> dict[str, np.ndarray]:
+def extract(model_dir: Path | None = None) -> dict[str, np.ndarray]:
     import onnx
     from onnx import numpy_helper
 
-    model = onnx.load(str(MODEL_DIR / "onnx" / "model.onnx"))
+    model = onnx.load(str(Path(model_dir or MODEL_DIR) / "onnx" / "model.onnx"))
     inits = {i.name: numpy_helper.to_array(i) for i in model.graph.initializer}
     weights = {k: v for k, v in inits.items() if not k.startswith("onnx::")}
     consumers: dict[str, list] = {}
@@ -39,10 +39,22 @@ def extract() -> dict[str, np.ndarray]:
     return weights
 
 
-def load() -> dict[str, mx.array]:
-    if not WEIGHTS.exists():
-        np.savez(WEIGHTS, **extract())
-    return {k: mx.array(v) for k, v in np.load(WEIGHTS).items()}
+def load(model_dir: Path | None = None) -> dict[str, mx.array]:
+    """The weights of the model in `model_dir` (default MODEL_DIR), extracted once and cached there; a folder this
+    process may not write (a shared, read-only model) is extracted again on each load instead."""
+    cached = Path(model_dir or MODEL_DIR) / WEIGHTS
+    if cached.exists():
+        weights = dict(np.load(cached).items())
+    else:
+        weights = extract(model_dir)
+        try:
+            np.savez(cached, **weights)
+        except OSError:
+            try:
+                cached.unlink(missing_ok=True)  # no half-written cache left behind
+            except OSError:
+                pass
+    return {k: mx.array(v) for k, v in weights.items()}
 
 
 def layer_norm(x: mx.array, w: mx.array, b: mx.array) -> mx.array:
@@ -50,9 +62,9 @@ def layer_norm(x: mx.array, w: mx.array, b: mx.array) -> mx.array:
 
 
 class ArcticMLX:
-    def __init__(self) -> None:
+    def __init__(self, model_dir: Path | None = None) -> None:
         # Half precision: ~50% faster than float32 on the GPU; vectors match float32 at cosine >= 0.9993.
-        self.w = {name: weight.astype(mx.float16) for name, weight in load().items()}
+        self.w = {name: weight.astype(mx.float16) for name, weight in load(model_dir).items()}
         needed = [f"encoder.layer.{i}.{p}.weight" for i in range(LAYERS) for p in
                   ("attention.self.query", "attention.self.key", "attention.self.value", "attention.output.dense",
                    "intermediate.dense", "output.dense")]

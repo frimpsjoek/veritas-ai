@@ -430,8 +430,9 @@ def resolve_backend(backend: str | None = None) -> str:
 
 class Embedder:
     def __init__(self, model_dir: Path | None = None, backend: str | None = None) -> None:
-        """`model_dir` (default MODEL_DIR) is only read on the onnxruntime path; `backend`: see resolve_backend. The
-        tokenizer is configured here only, so one Embedder can encode from several threads."""
+        """`model_dir` (default MODEL_DIR): the tokenizer and the model, for either backend (MLX caches the weights it
+        extracts from the ONNX file there when it may write); `backend`: see resolve_backend. The tokenizer is
+        configured here only, so one Embedder can encode from several threads."""
         from tokenizers import Tokenizer
 
         model_dir = Path(model_dir) if model_dir is not None else MODEL_DIR
@@ -445,7 +446,7 @@ class Embedder:
             try:
                 from mlx_embed import ArcticMLX
 
-                self.mlx = ArcticMLX()
+                self.mlx = ArcticMLX(model_dir)
                 return
             except Exception as error:  # no GPU or MLX missing: fall back to onnxruntime
                 print(f"MLX unavailable, using CPU: {error}", file=sys.stderr)
