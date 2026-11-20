@@ -74,6 +74,37 @@ From the command line:
 .venv/bin/python eval.py [gates...]     # paraphrase recall check; 2026-09-21: hit@5 9/11, hit@1 6/11
 ```
 
+## Using the index as a library
+
+`veritas_kb.KnowledgeBase` (spec 035) is the same index with its own files, so one process can hold several (one per
+user). Install the engine as a wheel (`pip install ./server[onnx]`; `[mlx]` on a Mac) or import it from this folder.
+
+```python
+from veritas_kb import Document, KnowledgeBase
+
+index = KnowledgeBase("/srv/u/alice/knowledgebase/zotero/index/kb.sqlite",  # Tantivy goes to tantivy/ beside it
+                      model_dir="/srv/models/snowflake-arctic-embed-s")      # backend="auto": MLX on macOS, else onnx
+index.apply(add=[Document("zotero/ABCD1234", "A paper", "# A paper\n\n## Abstract\n\n...")],
+            remove=["zotero/OLD00000"], meta={"zotero_web_version:lib": "1234"})  # one transaction
+index.embed_pending()                                  # vectors for new passages
+hits = index.search("spin waves in garnets", limit=8)  # same results as kb.py search
+page = index.read("zotero/ABCD1234")                   # also documents(), get_meta(), stats(), similar_to_text()
+index.close()                                          # or `with KnowledgeBase(...) as index:`
+```
+
+- **Shared:** only the embedding model, one per (model folder, backend), loaded on first use, read-only (the ONNX
+  path only reads `tokenizer.json` and `onnx/model.onnx`, so the folder may be read-only). Everything else (database,
+  Tantivy folder, vectors in memory) belongs to one instance; a second instance on the same files in one process is
+  refused. kb's module settings (`KB_DB`, the data folder, the folder list) are never read for these files; only the
+  default `model_dir` is kb's (`VERITAS_DATA`/models or `server/models`).
+- **Threads:** calls block. On one instance, searches wait for each other (up to `search_timeout`, default 60 s, then
+  `ConcurrentUseError`), `apply` and `embed_pending` wait for each other, reads take no lock; different instances never
+  wait for each other. `apply` is all or nothing. `close()` waits for running calls and the background vector reload.
+- **MLX:** `mlx_embed` reads the model from `server/models/` whatever `model_dir` says, and writes `mlx-weights.npz`
+  there on first use; several instances on the MLX backend in one process are untested. Off macOS, `"auto"` never
+  tries MLX.
+- Needs SQLite >= 3.43 in Python's `sqlite3`.
+
 ## Obsidian plugin (Mac and phone)
 
 `obsidian-plugin/` holds "Second Brain Search". Run `./install.sh` to type-check it, build it and copy it into the vault; git sync takes it to the phone. `data.json` (settings and token) stays out of git on purpose.
