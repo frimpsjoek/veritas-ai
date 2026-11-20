@@ -3,6 +3,10 @@
 Each release of Veritas AI. `node tools/release.mjs <version>` adds the next section (the commit subjects since the
 last tag, to edit before pushing); the GitHub Release shows that section as its notes.
 
+## 0.54.9 (2026-11-20)
+
+- App start page: turning ring, drifting colour, fading steps
+
 ## 0.54.8 (2026-11-20)
 
 - Server: check HTTPS against the system's certificates (truststore)

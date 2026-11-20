@@ -1,6 +1,6 @@
 {
   "name": "second-brain-agent-core",
-  "version": "0.54.8",
+  "version": "0.54.9",
   "private": true,
   "type": "module",
   "scripts": {
