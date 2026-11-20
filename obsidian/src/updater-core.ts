@@ -20,11 +20,14 @@ export interface IdleState {
 	chatRunning: boolean;
 	/** A report-plan or chat-composer field has focus. */
 	fieldFocused: boolean;
+	/** Obsidian's window has the user's focus. An open note keeps its editor focused even when the user is in another
+	 *  app, so a focused field counts as busy only while the window is in front (else the update never found a moment). */
+	windowFocused?: boolean;
 }
 
 /** Conservative on purpose: any of these being true means "wait", the same rule the spec gives for Zotero. */
 export function isIdle(state: IdleState): boolean {
-	return !state.chatRunning && !state.fieldFocused;
+	return !state.chatRunning && !(state.fieldFocused && state.windowFocused !== false);
 }
 
 /** SHA-256 of `data` as lowercase hex, compared against `expected` (also lowercase hex expected). Uses

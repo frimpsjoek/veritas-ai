@@ -31,6 +31,12 @@ test("isIdle: any busy signal means not idle", () => {
 	assert.equal(isIdle({ chatRunning: true, fieldFocused: true }), false);
 });
 
+test("isIdle: a note left open while the user is in another app is not busy; a running chat still is", () => {
+	assert.equal(isIdle({ chatRunning: false, fieldFocused: true, windowFocused: false }), true);
+	assert.equal(isIdle({ chatRunning: false, fieldFocused: true, windowFocused: true }), false);
+	assert.equal(isIdle({ chatRunning: true, fieldFocused: true, windowFocused: false }), false);
+});
+
 test("verifySha256: matches the real hash and rejects a tampered one", async () => {
 	const data = new TextEncoder().encode("second brain auto-update fixture").buffer;
 	const digest = await crypto.subtle.digest("SHA-256", data);
