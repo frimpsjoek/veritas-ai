@@ -1,0 +1,90 @@
+# Spec 035: the index as a library, one per user (slice 0)
+
+Status: DRAFT 2026-11-20 (Trinity integration driver; decisions D1-D8 below taken by the driver). Plan: `plan.md`.
+
+## What happens today
+
+The search index (SQLite + FTS5, Tantivy keyword index, snowflake-arctic-embed-s vectors, fused ranking) lives in
+`server/kb.py` and is bound to one index per process: the database path, the Tantivy folder, the model folder, the
+embedding backend and the vector-reuse stash are module globals (`kb.DB_PATH`, `kb.data_dir()`, `kb.MODEL_DIR`,
+`kb.USE_MLX`, `kb._VEC_STASH`). A host that wants one index per user (Trinity) cannot hold two in one process, and
+there is no `pyproject.toml` to install the engine as a library.
+
+## Goals
+
+- R1. `KnowledgeBase(db_path, model_dir=None, *, keyword_dir=None, backend="auto", embedder=None, vector_gate=None)`
+  in a new `server/veritas_kb.py`: one instance owns one SQLite file, one Tantivy folder and one in-memory searcher.
+  Two instances share no mutable index state: ingest into A, search B returns nothing.
+- R2. The only shared object is the embedding model, one per `(model dir, backend)`, built once, lazily, without
+  holding a process-wide lock while it loads. The ONNX path only reads the model folder.
+- R3. `backend="auto"` uses MLX on macOS and onnxruntime elsewhere, with no MLX attempt or warning on Linux.
+- R4. Writes are atomic per call: `apply(add, remove, meta)` stores documents, removes paths and sets meta stamps in
+  one SQLite transaction, all or nothing; a failed call leaves the index as it was and the instance usable.
+- R5. Lifecycle: a failed constructor releases its claim on the files; `close()` is idempotent and returns only after
+  in-flight work and the searcher's background rebuild have stopped; the same files can then be reopened.
+- R6. Back-compatibility: `kb.py` keeps its whole API and CLI, `kb.py serve`, `bin/veritas`, the LaunchAgent,
+  Homebrew and PyInstaller builds are unchanged, the on-disk format is unchanged (a database written by a
+  `KnowledgeBase` is a Veritas database), and every existing test passes without edits.
+- R7. `server/pyproject.toml` (`veritas-kb` 0.1.0): a wheel installed in a clean venv outside the checkout can create,
+  ingest, search, close and reopen an index.
+
+## Decisions (driver, 2026-11-20)
+
+- D1. Flat modules (`py-modules`), as the server's modules import each other top-level. Trinity runs Veritas in a
+  separate worker subprocess with its own venv, so module names cannot collide and kb's import-time side effects stay
+  out of Trinity's process. `veritas_kb` still imports kb with a neutral `sys.argv` (kb opens port 27182 at import
+  when `argv[1] == "serve"`).
+- D2. Package version 0.1.0, independent of the app's version (no release-script change).
+- D3. `mlx_embed`'s own `MODEL_DIR` (ignores `VERITAS_DATA`) is left untouched; an upstream issue is drafted below, not
+  filed. No MLX change in slice 0.
+- D4. Default backend `"auto"`.
+- D5. kb's read-only folder-layout probe at import is acceptable (it runs in the worker).
+- D6. Synchronous, simple API. No process-wide mutex is held while a model loads (per-key in-flight construction).
+  SQLite serialises writers; Python locks only where shared in-memory state or a non-transactional write needs them,
+  all per instance. The caller runs calls off its event loop.
+- D9 (2026-11-20, answers to the plan's open questions). Searches on one instance wait on a per-instance lock with a
+  bounded timeout (see the concurrency contract). A full vector reload follows every write that deleted rows. The
+  clean-venv wheel test stays opt-in (`VERITAS_WHEEL_TEST=1`); its output is recorded as evidence.
+- D7. Tenant layout (Trinity's concern; the class takes explicit paths):
+  `<user>/knowledgebase/zotero/index/kb.sqlite` and `<user>/knowledgebase/zotero/index/tantivy/` (the default
+  `keyword_dir` is `db_path.parent / "tantivy"`, so passing the db path is enough).
+- D8. This spec before implementation.
+
+## Concurrency contract (R1, D6)
+
+- Different instances never wait for each other, except on the shared model while it is first built for the same key.
+- On one instance: `search` / `similar_to_text` use the searcher's own connection and in-memory vectors, which are not
+  safe for parallel use (upstream also serialises every searcher call, `http_api.LOCK`). They take a **per-instance
+  search lock and wait** for it, at most `search_timeout` seconds (default 60), then raise `ConcurrentUseError` (a
+  `TimeoutError`). Driver decision 2026-11-20, replacing the earlier fail-fast guard: Trinity serves concurrent HTTP
+  requests for one user's index from a thread pool. Different instances never share this lock.
+- `apply` and `embed_pending` open their own short-lived connections and share one per-instance write lock. It is
+  required for correctness: `embed_pending` reads chunks, embeds them outside any transaction and then writes vectors
+  by chunk id, and SQLite reuses the highest rowid after a delete (`INTEGER PRIMARY KEY` without `AUTOINCREMENT`), so a
+  concurrent removal plus insert would give a new chunk the old chunk's vector. Upstream prevents the same with its
+  one-indexer file lock (`kb.LOCK_FILE`). The lock is per instance, so it never stalls another tenant.
+- `stats`, `read`, `documents`, `get_meta` use their own short-lived read connections and no lock.
+- Every call is blocking I/O; an async host runs them in worker threads (Trinity: the worker subprocess).
+
+## Out of scope
+
+Moving code out of `kb.py`; multi-index versions of the folder/vault indexing, desktop Zotero, media/OCR, paper notes,
+privacy rules, collections, `similar_notes`/`related`/`duplicates`; per-user HTTP API or auth; the incremental Zotero
+Web sync (planned interface only, plan Task 7); MLX changes; PyPI publishing; Trinity's worker, path authorisation
+and tenant mapping (checked in Trinity's own lane).
+
+## Way of working
+
+TDD; unit tests in `server/tests` run by `check.sh`; a clean-venv wheel round trip as packaging evidence.
+
+## Notes
+
+Draft upstream issue (D3, not filed):
+
+> **MLX backend ignores VERITAS_DATA.** `mlx_embed.MODEL_DIR` is `Path(__file__).parent / "models" /
+> "snowflake-arctic-embed-s"` (`server/mlx_embed.py:13`), while `kb.MODEL_DIR` follows `VERITAS_DATA`
+> (`paths.models_dir`). On installs that keep the model under `$VERITAS_DATA/models` (Homebrew, the desktop app) with
+> `KB_BACKEND=mlx`, `ArcticMLX()` finds no model, `kb.Embedder` catches the error and silently falls back to
+> onnxruntime on the CPU. `mlx_embed.load()` also writes `mlx-weights.npz` into the model folder on first use, so the
+> MLX path fails on a read-only model folder. Suggested fix: `ArcticMLX(model_dir)` passed from `kb.Embedder`, and
+> keep the extracted weights in memory when the folder is not writable.
