@@ -259,7 +259,8 @@ def test_arxiv_requests_are_spaced(monkeypatch):
     started = time.monotonic()
     for _ in range(3):
         radar_api.fetch_arxiv_pdf("2410.00001", fetch=lambda a: b"x")
-    assert time.monotonic() - started >= 0.4
+    # two waits of 0.2 s; Windows' clock and sleep tick about every 16 ms, so allow one tick short (0.391 s was seen)
+    assert time.monotonic() - started >= 0.4 - 0.02
 
 
 def test_calibration_separates_related_from_unrelated(searcher, tmp_path, monkeypatch):
