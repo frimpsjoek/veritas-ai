@@ -15,4 +15,4 @@ listen_first.if_serving(sys.argv)  # `serve`: the port opens before kb's imports
 
 import kb  # noqa: E402  (after the argv fix, since kb parses arguments only in main())
 
-kb.main()
+kb.main()  # reads the folder list (kb.ensure_layout) before any command, as kb no longer does at import

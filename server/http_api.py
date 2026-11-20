@@ -1046,7 +1046,8 @@ def open_index() -> None:
 def serve(port: int) -> None:
     global AGENT_SIDECAR, LISTENER
     server = LISTENER = listen_first.listen(port)  # already open when started as `kb.py serve`
-    listen_first.stage("sources read")  # kb resolved the folder list at import
+    kb.ensure_layout()  # the folder list: kb no longer reads it at import (kb.main has, when started as `kb.py serve`)
+    listen_first.stage("sources read")
     token()  # create it on first start, so the Mac plugin can hand it to the phone
     try:
         # The sidecar reaches the library through this server, on the port it actually runs on (it used to be told

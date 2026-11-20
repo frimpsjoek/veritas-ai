@@ -73,7 +73,33 @@ def reload_layout() -> None:
     zotero.ZOTERO = LAYOUT.zotero or NO_ZOTERO
 
 
-reload_layout()
+# The folder list is read when first needed, not at import (review round 2, M1): importing kb as a library
+# (veritas_kb) must not read the host's folder list, where a blocked folder could stall opening an unrelated index.
+# The CLI (main) and the server (http_api.serve) read it before they start; LAYOUT and VAULT, asked for before
+# that, read it then (module __getattr__ for kb.VAULT from other modules, _layout() / _vault() inside kb).
+def ensure_layout() -> None:
+    """Reads the folder list unless already read (or set by hand, as tests do)."""
+    if "LAYOUT" not in globals():
+        reload_layout()
+
+
+def __getattr__(name: str):
+    if name in ("LAYOUT", "VAULT"):
+        ensure_layout()
+        return globals()[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def _layout():
+    ensure_layout()
+    return globals()["LAYOUT"]
+
+
+def _vault() -> Path:
+    ensure_layout()
+    return globals()["VAULT"]
+
+
 HOME = Path(__file__).resolve().parent
 
 
@@ -361,7 +387,7 @@ def chunk_note(body: str) -> list[Chunk]:
 def vault_files(top: Path | None = None, kind: str = "obsidian", skip: list[str] | tuple = ()) -> dict[str, os.stat_result]:
     """Notes under one folder. Obsidian vaults: .md, without drawings/templates/attachments folders. Plain folders
     (spec 018): .md, .markdown and .txt, every non-dot folder. Both drop the folder's own `skip` globs."""
-    top = VAULT if top is None else top
+    top = _vault() if top is None else top
     extensions = (".md",) if kind == "obsidian" else PLAIN_EXTENSIONS
     files = {}
     for root, dirs, names in os.walk(top):
@@ -389,23 +415,23 @@ class Root:
 def roots() -> list[Root]:
     # The main folder always gets Obsidian rules: it is the vault, or the home folder Second Brain itself writes
     # ai_notes/ and digests into, whose folder labels and weights must stay.
-    return [Root("", VAULT, "obsidian")] + [Root(f.prefix, f.path, sources.connectors.indexed_as(f.kind), f.name, tuple(f.skip))
-                                       for f in LAYOUT.others]
+    return [Root("", _vault(), "obsidian")] + [Root(f.prefix, f.path, sources.connectors.indexed_as(f.kind), f.name, tuple(f.skip))
+                                       for f in _layout().others]
 
 
 def kept_prefixes() -> tuple[str, ...]:
     """Listed folders that are switched on but not there (an unplugged drive): their rows stay until they return."""
-    return tuple(f.prefix for f in LAYOUT.ignored if f.kind == "missing")
+    return tuple(f.prefix for f in _layout().ignored if f.kind == "missing")
 
 
 def split_prefixed(path: str) -> tuple[Path, str, str]:
     """(folder, prefix, path inside it) for an index path: `name:/rel` belongs to that listed folder."""
     name, sep, rest = path.partition(":/")
     if sep:
-        for f in LAYOUT.others:
+        for f in _layout().others:
             if f.name == name:
                 return f.path, f.prefix, rest
-    return VAULT, "", path
+    return _vault(), "", path
 
 
 def note_title(fields: dict, body: str, stem: str) -> str:
@@ -817,7 +843,7 @@ def refresh_paper_references(paths: list[str]) -> None:
     import paper_notes
     for rel in paths:
         try:
-            key = parse_frontmatter((VAULT / rel).read_text(encoding="utf-8"))[0].get("zotero-key")
+            key = parse_frontmatter((_vault() / rel).read_text(encoding="utf-8"))[0].get("zotero-key")
             if key:
                 paper_notes.refresh(str(key), rel)
         except Exception as exc:  # noqa: BLE001 - a broken note must not stop indexing
@@ -909,10 +935,10 @@ def index_zotero(db: sqlite3.Connection, verbose: bool, progress: Progress) -> i
     """Every enabled Zotero library: the default one as zotero/KEY, the others as <name>:/zotero/KEY (phase 2).
     Items of a library that is no longer enabled are removed."""
     changed = 0
-    default = LAYOUT.libraries[0] if LAYOUT.libraries else None
+    default = _layout().libraries[0] if _layout().libraries else None
     if default is not None or zotero.available():
         changed += _index_library(db, verbose, progress, "", "zotero_fingerprint")
-    others = LAYOUT.libraries[1:]
+    others = _layout().libraries[1:]
     for lib in others:
         with zotero.library(lib.path):
             changed += _index_library(db, verbose, progress, lib.prefix, f"zotero_fingerprint:{lib.name}")
@@ -926,7 +952,7 @@ def prune_zotero(db: sqlite3.Connection) -> None:
     """Removes the items of libraries and online accounts that are no longer listed or switched on, with their
     change stamps, so a library switched on again is read again. A listed library on a drive that is not plugged in
     keeps its items."""
-    keep = ({lib.prefix for lib in LAYOUT.libraries[1:]} | {a.prefix for a in LAYOUT.accounts}
+    keep = ({lib.prefix for lib in _layout().libraries[1:]} | {a.prefix for a in _layout().accounts}
             | set(kept_prefixes()))
     gone = set()
     for (path,) in db.execute("SELECT path FROM notes WHERE source='zotero' AND path LIKE '%:/%'").fetchall():
@@ -1001,7 +1027,7 @@ def index_zotero_web(db: sqlite3.Connection, verbose: bool, progress: Progress) 
     moved; an error (no key, 403, 429, no network) keeps its indexed items and is reported, not raised."""
     import zotero_web
     changed, errors = 0, []
-    for account in LAYOUT.accounts:
+    for account in _layout().accounts:
         if account.kind != "zotero-web":
             continue
         key = zotero_web.get_key(account.user_id)
@@ -1042,7 +1068,7 @@ def account_item(path: str) -> dict | None:
     """An online library's item (<account>:/zotero/KEY) in the shape zotero.item_detail gives, from the index: there
     is no local database to read. None when the path is not an online item."""
     name, sep, rest = path.partition(":/")
-    account = next((a for a in LAYOUT.accounts if a.name == name), None) if sep else None
+    account = next((a for a in _layout().accounts if a.name == name), None) if sep else None
     if account is None:
         return None
     row = connect().execute("SELECT title, tags, meta FROM notes WHERE path=? AND source='zotero'", (path,)).fetchone()
@@ -1062,9 +1088,10 @@ def account_item(path: str) -> dict | None:
 def zotero_ref(path: str) -> tuple[Path, str]:
     """(library folder, item key) for an index path or key: <name>:/zotero/KEY is that library's item, zotero/KEY or
     a bare KEY the default library's."""
+    ensure_layout()  # zotero.ZOTERO is the folder list's default library
     name, sep, rest = path.partition(":/")
     if sep:
-        for lib in LAYOUT.libraries:
+        for lib in _layout().libraries:
             if lib.name == name:
                 return lib.path, rest.removeprefix(zotero.PREFIX)
         raise FileNotFoundError(f"no Zotero library named {name!r}")
@@ -1679,8 +1706,8 @@ def resolve(path: str) -> Path:
         return candidate.with_name(candidate.name + ".md")
     # A bare path written when another folder was the output (old chats cite ai_notes/x.md): the listed folder that
     # has it now.
-    if top == VAULT:
-        for f in LAYOUT.others:
+    if top == _vault():
+        for f in _layout().others:
             moved = (f.path / inner).resolve()
             if f.path.resolve() in moved.parents and moved.is_file():
                 return moved
@@ -1940,11 +1967,12 @@ def coverage() -> list[dict]:
                     "with_vectors": 0}]
 
 
-def stats(db: sqlite3.Connection | None = None) -> dict:
+def stats(db: sqlite3.Connection | None = None, *, vault: bool = True) -> dict:
+    """Index counts; with `vault`, the main folder too (which reads the folder list: veritas_kb passes False)."""
     db = db if db is not None else connect()
     stamp = db.execute("SELECT value FROM meta WHERE key='indexed_at'").fetchone()
     return {
-        "vault": str(VAULT),
+        **({"vault": str(_vault())} if vault else {}),
         "notes": db.execute("SELECT count(*) FROM notes").fetchone()[0],
         "chunks": db.execute("SELECT count(*) FROM chunks").fetchone()[0],
         "chunks_with_vectors": db.execute("SELECT count(*) FROM vecs").fetchone()[0],
@@ -1980,17 +2008,17 @@ def sources_report() -> dict:
         name, sep, _ = path.partition(":/")
         key = f"{name}:/" if sep else ("zotero/" if path.startswith(zotero.PREFIX) else "")
         counts[key] = counts.get(key, 0) + 1
-    ignored = {f.name for f in LAYOUT.ignored}
+    ignored = {f.name for f in _layout().ignored}
     rows = []
-    for f in LAYOUT.folders:
+    for f in _layout().folders:
         if not f.enabled:
             role, documents = "off", 0
         elif f.name in ignored:
             role, documents = "ignored", counts.get(f.prefix, 0)
         elif f.kind == "zotero":
-            default = bool(LAYOUT.libraries) and LAYOUT.libraries[0].name == f.name
+            default = bool(_layout().libraries) and _layout().libraries[0].name == f.name
             role, documents = "zotero", counts["zotero/"] if default else counts.get(f.prefix, 0)
-        elif f.path.resolve() == VAULT.resolve():
+        elif f.path.resolve() == _vault().resolve():
             role, documents = "main", counts[""]
         else:
             role, documents = "listed", counts.get(f.prefix, 0)
@@ -1999,10 +2027,10 @@ def sources_report() -> dict:
     for a in sources.accounts():  # online libraries: no folder
         rows.append({"name": a.name, "path": None, "enabled": a.enabled, "skip": [], "kind": a.kind,
                      "role": "online" if a.enabled else "off", "documents": counts.get(a.prefix, 0) if a.enabled else 0})
-    output = next((f.name for f in LAYOUT.folders if f.main and f.path.resolve() == VAULT.resolve()), None)
-    return {"main": str(VAULT), "main_is_vault": LAYOUT.main_is_vault, "output": {"name": output, "path": str(VAULT)},
-            "main_documents": counts[""] if not LAYOUT.main_is_vault else None,
-            "zotero": str(LAYOUT.zotero) if LAYOUT.zotero else None, "folders": rows}
+    output = next((f.name for f in _layout().folders if f.main and f.path.resolve() == _vault().resolve()), None)
+    return {"main": str(_vault()), "main_is_vault": _layout().main_is_vault, "output": {"name": output, "path": str(_vault())},
+            "main_documents": counts[""] if not _layout().main_is_vault else None,
+            "zotero": str(_layout().zotero) if _layout().zotero else None, "folders": rows}
 
 
 def sources_cli(action: str, target: str | None, name: str | None) -> None:
@@ -2087,6 +2115,7 @@ def main() -> None:
     p.add_argument("--find", action="store_true", help="list the indexes found on this computer, as JSON")
     p.add_argument("--replace", action="store_true", help="overwrite this install's index")
     args = parser.parse_args()
+    ensure_layout()  # the folder list, read here rather than at import (review round 2, M1)
     if args.cmd == "index":
         import signal
 

@@ -2,6 +2,7 @@
 <user>/knowledgebase/zotero/index/{kb.sqlite,tantivy}. Embedders are fakes; no model is loaded."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import socket
@@ -650,3 +651,131 @@ def test_default_embedder_is_shared_per_model(isolated_kb, monkeypatch):
 
 def test_module_exports():
     assert set(veritas_kb.__all__) >= {"KnowledgeBase", "Document", "ConcurrentUseError", "ClosedError"}
+
+
+# ---------------------------------------------------------------- the host's folder list (review round 2, M1)
+
+# Fresh process: sources.resolved, the read of the host's folder list, records each call and fails as a blocked folder
+# (a stuck permission prompt) would. Importing the library and using an index of its own must never ask for it.
+BLOCKED_LAYOUT = r'''
+import re, sys, zlib
+from pathlib import Path
+import numpy as np
+sys.path.insert(0, sys.argv[1])
+import sources
+calls = []
+def blocked(*args, **kwargs):
+    calls.append("resolved")
+    raise PermissionError("the folder list is blocked")
+sources.resolved = blocked
+import veritas_kb, kb
+assert calls == [], calls
+assert "LAYOUT" not in vars(kb) and "VAULT" not in vars(kb)
+
+class Hash:
+    mlx = None
+    def __call__(self, texts, query=False, batch_size=16):
+        out = np.zeros((len(texts), kb.DIM), dtype=np.float32)
+        for row, text in zip(out, texts):
+            for word in re.findall(r"[a-z]+", text.lower()):
+                row[zlib.crc32(word.encode()) % kb.DIM] += 1
+            row /= max(np.linalg.norm(row), 1e-9)
+        return out
+
+filler = " Ordinary words about measurements and samples." * 4
+with veritas_kb.KnowledgeBase(Path(sys.argv[2]) / "kb.sqlite", embedder=Hash()) as index:
+    index.apply(add=[veritas_kb.Document("zotero/K1", "Excitons", "# Excitons\n\nExcitons in quantum dots." + filler)])
+    index.embed_pending()
+    assert index.search("excitons quantum dots")[0]["path"] == "zotero/K1"
+    assert index.similar_to_text("Excitons in quantum dots" + filler)[0]["path"] == "zotero/K1"
+    assert "Excitons" in index.read("zotero/K1")["text"]
+    assert list(index.documents()) == ["zotero/K1"]
+    assert index.stats()["notes"] == 1 and "vault" not in index.stats()
+assert calls == [], calls
+print("ok")
+'''
+
+
+def test_library_never_reads_the_hosts_folder_list(tmp_path):
+    env = {**os.environ, "KB_SOURCES": str(tmp_path / "sources.json"), "KB_DB": str(tmp_path / "global.sqlite")}
+    out = subprocess.run([sys.executable, "-c", BLOCKED_LAYOUT, str(SERVER), str(tmp_path)], cwd=tmp_path, env=env,
+                         capture_output=True, text=True, timeout=120)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip().splitlines()[-1] == "ok"
+    assert not (tmp_path / "global.sqlite").exists()
+
+
+# The CLI (kb.py, and the frozen server, which runs kb.main) still reads the folder list before it works.
+CLI_LAYOUT = r'''
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import sources
+calls = []
+real = sources.resolved
+def counted(*args, **kwargs):
+    calls.append("resolved")
+    return real(*args, **kwargs)
+sources.resolved = counted
+import kb
+assert calls == [], calls
+sys.argv = ["kb.py", "stats"]
+kb.main()
+assert calls == ["resolved"], calls
+assert kb.VAULT == kb.LAYOUT.main
+print(json.dumps({"calls": calls}))
+'''
+
+
+def test_cli_reads_the_folder_list(tmp_path):
+    env = {**os.environ, "KB_SOURCES": str(tmp_path / "sources.json"), "KB_DB": str(tmp_path / "kb.sqlite"),
+           "KB_ZOTERO": str(tmp_path / "Zotero")}
+    out = subprocess.run([sys.executable, "-c", CLI_LAYOUT, str(SERVER)], cwd=tmp_path, env=env, capture_output=True,
+                         text=True, timeout=120)
+    assert out.returncode == 0, out.stderr
+    assert '"calls": ["resolved"]' in out.stdout
+
+
+def test_kb_script_still_loads_the_layout(tmp_path):
+    vault = tmp_path / "Vault"
+    (vault / ".obsidian").mkdir(parents=True)
+    (tmp_path / "sources.json").write_text(
+        '{"version": 1, "folders": [{"name": "vault", "path": "%s", "enabled": true, "skip": [], "main": true}]}'
+        % vault.as_posix())
+    env = {**os.environ, "KB_SOURCES": str(tmp_path / "sources.json"), "KB_DB": str(tmp_path / "kb.sqlite"),
+           "KB_ZOTERO": str(tmp_path / "Zotero")}
+    out = subprocess.run([sys.executable, str(SERVER / "kb.py"), "stats"], cwd=tmp_path, env=env, capture_output=True,
+                         text=True, timeout=120)
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout)["vault"] == str(vault)
+
+
+def test_layout_loads_on_first_use(monkeypatch):
+    """Modules that read kb.VAULT / kb.LAYOUT (web_app, radar_api, eval, ...) still get the folder list."""
+    monkeypatch.delitem(vars(kb), "LAYOUT", raising=False)
+    monkeypatch.delitem(vars(kb), "VAULT", raising=False)
+    assert kb.VAULT == kb.LAYOUT.main
+    monkeypatch.delitem(vars(kb), "LAYOUT")
+    monkeypatch.delitem(vars(kb), "VAULT")
+    assert kb.roots()[0].path == kb.LAYOUT.main  # kb's own functions too
+
+
+def test_server_start_reads_the_folder_list(monkeypatch):
+    import http_api
+    import listen_first
+
+    order = []
+
+    class Started(Exception):
+        pass
+
+    monkeypatch.setattr(listen_first, "listen", lambda port: order.append("listen"))
+    monkeypatch.setattr(kb, "ensure_layout", lambda: order.append("layout"))
+
+    def token():
+        order.append("token")
+        raise Started
+
+    monkeypatch.setattr(http_api, "token", token)
+    with pytest.raises(Started):
+        http_api.serve(0)
+    assert order == ["listen", "layout", "token"]

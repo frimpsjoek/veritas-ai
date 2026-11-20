@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import kb  # opens no port: only `kb.py serve` run as a script listens early (listen_first)
+import kb  # opens no port (only `kb.py serve` run as a script listens early) and reads no folder list (kb.ensure_layout)
 
 __all__ = ["KnowledgeBase", "Document", "ConcurrentUseError", "ClosedError"]
 
@@ -258,6 +258,4 @@ class KnowledgeBase:
 
     def stats(self) -> dict:
         """Counts of documents, passages and passages with vectors, documents per source, last write."""
-        result = self._read(kb.stats)
-        result.pop("vault", None)
-        return result
+        return self._read(lambda db: kb.stats(db, vault=False))  # vault=False: kb's folder list stays unread
