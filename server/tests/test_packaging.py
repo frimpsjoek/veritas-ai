@@ -69,7 +69,10 @@ def test_dependencies_and_extras_are_in_requirements():
             if "sys_platform == 'darwin'" in requirement:
                 continue  # MLX: never in requirements.txt (the app bundles exclude it; installed by hand on Macs)
             assert _name(requirement) in pinned, f"[{extra}] {requirement}"
-    assert all("sys_platform == 'darwin'" in r for r in project["optional-dependencies"]["mlx"])
+    mlx = project["optional-dependencies"]["mlx"]
+    # kb.Embedder falls back to onnxruntime when MLX fails (or off macOS), so [mlx] carries it everywhere (round 2, M2)
+    assert "onnxruntime>=1.20" in mlx and "onnxruntime>=1.20" in project["optional-dependencies"]["onnx"]
+    assert all("sys_platform == 'darwin'" in r for r in mlx if _name(r) != "onnxruntime")
 
 
 def test_version_is_the_librarys_own():

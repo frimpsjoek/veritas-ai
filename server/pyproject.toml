@@ -16,7 +16,8 @@ dependencies = ["numpy>=2", "tantivy>=0.25", "tokenizers>=0.20"]
 
 [project.optional-dependencies]
 onnx = ["onnxruntime>=1.20"]  # the embedder off macOS (and on macOS without MLX)
-mlx = ["mlx>=0.20; sys_platform == 'darwin'", "onnx>=1.16; sys_platform == 'darwin'"]  # onnx: MLX weight extraction
+# onnx: MLX weight extraction; onnxruntime: kb.Embedder's fallback when MLX fails to load (and off macOS)
+mlx = ["mlx>=0.20; sys_platform == 'darwin'", "onnx>=1.16; sys_platform == 'darwin'", "onnxruntime>=1.20"]
 media = ["pypdfium2>=4", "pillow>=10"]  # only kb.index()'s PDF and image stage
 test = ["pytest>=8", "onnxruntime>=1.20"]
 
