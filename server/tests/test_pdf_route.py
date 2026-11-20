@@ -145,7 +145,8 @@ def linked(env, monkeypatch):
     base = tmp / "base dir"
     (base / "sub").mkdir(parents=True)
     (profiles / "Profiles" / "p1.default" / "prefs.js").write_text(
-        f'user_pref("extensions.zotero.baseAttachmentPath", "{base}");\n')
+        # prefs.js holds the path as a JS string: on Windows its backslashes are escaped
+        f'user_pref("extensions.zotero.baseAttachmentPath", {json.dumps(str(base))});\n')
     monkeypatch.setattr(pdf_route, "PROFILES_DIR", profiles)
     monkeypatch.setattr(pdf_route, "_base_cache", [])
     return base, rows, tmp

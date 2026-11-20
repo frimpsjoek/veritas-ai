@@ -222,8 +222,8 @@ def conflicts() -> dict:
     identical, different, orphaned = [], [], []
     for copy in sorted(found):
         original = CONFLICT.sub(".md", copy)
-        rel_copy = os.path.relpath(copy, kb.VAULT)
-        rel_original = os.path.relpath(original, kb.VAULT)
+        rel_copy = kb.posix(os.path.relpath(copy, kb.VAULT))
+        rel_original = kb.posix(os.path.relpath(original, kb.VAULT))
         if not os.path.exists(original):
             orphaned.append({"copy": rel_copy})
             continue

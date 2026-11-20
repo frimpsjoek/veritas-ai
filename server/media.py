@@ -39,7 +39,7 @@ def media_files(vault: Path) -> dict[str, os.stat_result]:
             ext = os.path.splitext(name)[1].lower()
             if ext in IMAGE_EXTENSIONS or ext in PDF_EXTENSIONS:
                 path = os.path.join(root, name)
-                files[os.path.relpath(path, vault)] = os.stat(path)
+                files[os.path.relpath(path, vault).replace(os.sep, "/")] = os.stat(path)  # spec 034: `/` everywhere
     return files
 
 

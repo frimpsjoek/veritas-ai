@@ -242,7 +242,7 @@ def create_ai_note(folder: str, title: str, markdown: str, review_id: str, front
     with paper_notes.WRITE_LOCK:
         existing = _existing_by_review_id(target_dir, review_id)
         if existing is not None:
-            return {"path": str(existing.relative_to(vault))}
+            return {"path": existing.relative_to(vault).as_posix()}
 
         target_dir.mkdir(parents=True, exist_ok=True)
         base_name = f"{time.strftime('%Y-%m-%d')} {_sanitize_title(title)}"
@@ -260,4 +260,4 @@ def create_ai_note(folder: str, title: str, markdown: str, review_id: str, front
         }
         lines = ["---", *(f"{k}: {_yaml_value(v)}" for k, v in fields.items()), "---", ""]
         path.write_text("\n".join(lines) + "\n" + markdown, encoding="utf-8")
-        return {"path": str(path.relative_to(vault))}
+        return {"path": path.relative_to(vault).as_posix()}

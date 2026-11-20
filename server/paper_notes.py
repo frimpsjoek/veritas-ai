@@ -97,7 +97,7 @@ def find(key: str, thorough: bool = False) -> str | None:
             except OSError:
                 continue
             if pattern.search(head):
-                return str(path.relative_to(_vault()))
+                return path.relative_to(_vault()).as_posix()
     import kb
     db = kb.connect()
     try:
@@ -116,7 +116,7 @@ def find(key: str, thorough: bool = False) -> str | None:
             except OSError:
                 continue
             if head.startswith("---") and pattern.search(head):
-                return str(path.relative_to(_vault()))
+                return path.relative_to(_vault()).as_posix()
     return None
 
 
@@ -396,7 +396,7 @@ def _create_locked(key: str) -> dict:
     content = _render(detail)
     path.write_text(content, encoding="utf-8")
     _remember(key, parse_block(content))
-    return {"path": str(path.relative_to(_vault())), "created": True}
+    return {"path": path.relative_to(_vault()).as_posix(), "created": True}
 
 
 def refresh(key: str, rel: str | None = None, fresh: bool = False) -> bool:
@@ -546,7 +546,7 @@ def _pending_edits_locked(folder: Path, started: float) -> list[dict]:
                 continue
             m = re.search(r"^zotero-key:\s*\"?([A-Z0-9]{8})\"?\s*$", head[:2000], re.M)
             if m:
-                queue_edits(m.group(1), str(path.relative_to(_vault())), head)
+                queue_edits(m.group(1), path.relative_to(_vault()).as_posix(), head)
     _scan["at"] = started - 1
     return _load(EDITS)
 
@@ -699,7 +699,7 @@ def refresh_changed(keys: list[str]) -> int:
         m = re.search(r"^zotero-key:\s*\"?([A-Z0-9]{8})\"?\s*$", head, re.M)
         if m and m.group(1) in wanted:
             try:
-                count += refresh(m.group(1), str(path.relative_to(_vault())))
+                count += refresh(m.group(1), path.relative_to(_vault()).as_posix())
             except Exception:  # noqa: BLE001 - one bad note must not stop indexing
                 continue
     return count

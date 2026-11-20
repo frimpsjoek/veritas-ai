@@ -148,7 +148,37 @@ def connect(*, keep: bool = False) -> sqlite3.Connection:
         db.execute("ALTER TABLE notes ADD COLUMN meta TEXT")  # Zotero details: authors, year, citekey, DOI
     if "vec" in {r[1] for r in db.execute("PRAGMA table_info(chunks)")}:
         _move_vectors_out(db)
+    if os.sep == "\\":
+        posix_paths(db)
     return db
+
+
+def posix(rel: str | Path) -> str:
+    """An index path with `/` between its parts, on every system (spec 034 R1): links, citations and the plugins compare
+    paths as text, so Windows' `\\` would make the same note two different paths."""
+    return Path(rel).as_posix() if isinstance(rel, Path) else str(rel).replace(os.sep, "/") if os.sep != "/" else str(rel)
+
+
+PATH_COLUMNS = (("notes", "path"), ("chunks", "path"), ("vecs", "path"), ("links", "src"), ("links", "dst"), ("media_cache", "path"))
+
+
+def posix_paths(db: sqlite3.Connection, force: bool = False) -> int:
+    """Spec 034 R2: an index made on Windows before spec 034 stored paths with `\\`; each becomes the same path with
+    `/`, once (meta paths_posix). A note already stored under both keeps the `/` one. Nothing is read again. Returns the
+    number of rows changed. Only called on Windows (`force` for tests): elsewhere `\\` is a legal file-name character."""
+    if not force and db.execute("SELECT 1 FROM meta WHERE key='paths_posix'").fetchone():
+        return 0
+    changed = 0
+    # a note stored under both forms: its `\\` copy goes, with its chunks, vectors and links (the `/` one stays)
+    twins = [r[0] for r in db.execute("SELECT path FROM notes WHERE instr(path, '\\') > 0 AND replace(path, '\\', '/') IN (SELECT path FROM notes)")]
+    for old in twins:
+        delete_note(db, old)
+    db.execute("DELETE FROM media_cache WHERE instr(path, '\\') > 0 AND replace(path, '\\', '/') IN (SELECT path FROM media_cache)")
+    for table, column in PATH_COLUMNS:
+        changed += db.execute(f"UPDATE {table} SET {column} = replace({column}, '\\', '/') WHERE instr({column}, '\\') > 0").rowcount
+    db.execute("INSERT OR REPLACE INTO meta VALUES ('paths_posix', '1')")
+    db.commit()
+    return changed
 
 
 class request_scope:
@@ -328,7 +358,7 @@ def vault_files(top: Path | None = None, kind: str = "obsidian", skip: list[str]
     extensions = (".md",) if kind == "obsidian" else PLAIN_EXTENSIONS
     files = {}
     for root, dirs, names in os.walk(top):
-        rel_root = os.path.relpath(root, top)
+        rel_root = posix(os.path.relpath(root, top))
         dirs[:] = [d for d in dirs if not d.startswith(".") and (kind != "obsidian" or d not in SKIP_DIRS)]
         for name in names:
             if name.lower().endswith(extensions) and not SKIP_NAME.search(name):
@@ -1547,7 +1577,7 @@ def index_path(file: Path) -> str:
     """The index path of a file in the main folder or a listed one."""
     for root in sorted(roots(), key=lambda r: -len(str(r.path))):  # a listed folder inside the main one wins
         try:
-            return root.prefix + str(file.relative_to(root.path.resolve()))
+            return root.prefix + file.relative_to(root.path.resolve()).as_posix()
         except ValueError:
             continue
     raise ValueError(f"{file} is not in a listed folder")
