@@ -93,16 +93,20 @@ index.close()                                          # or `with KnowledgeBase(
 ```
 
 - **Shared:** only the embedding model, one per (model folder, backend), loaded on first use, read-only (the ONNX
-  path only reads `tokenizer.json` and `onnx/model.onnx`, so the folder may be read-only). Everything else (database,
+  path only reads `tokenizer.json` and `onnx/model.onnx`, so the folder may be read-only; MLX also caches
+  `mlx-weights.npz` there when it may write). Everything else (database,
   Tantivy folder, vectors in memory) belongs to one instance; a second instance on the same files in one process is
   refused. kb's module settings (`KB_DB`, the data folder, the folder list) are never read for these files; only the
   default `model_dir` is kb's (`VERITAS_DATA`/models or `server/models`).
-- **Threads:** calls block. On one instance, searches wait for each other (up to `search_timeout`, default 60 s, then
-  `ConcurrentUseError`), `apply` and `embed_pending` wait for each other, reads take no lock; different instances never
-  wait for each other. `apply` is all or nothing. `close()` waits for running calls and the background vector reload.
-- **MLX:** `mlx_embed` reads the model from `server/models/` whatever `model_dir` says, and writes `mlx-weights.npz`
-  there on first use; several instances on the MLX backend in one process are untested. Off macOS, `"auto"` never
-  tries MLX.
+- **Threads:** calls block. On one instance, `apply` and `embed_pending` wait for each other; a search waits for
+  other searches and for writes, so it always sees one committed version of the index (up to `search_timeout`,
+  default 60 s, for everything it waits on together, then `ConcurrentUseError`). `embed_pending` holds the write lock
+  while it embeds, so searches on that instance wait for it, or time out: embed in batches (`batch=`) if searches must
+  stay responsive. Reads (`read`, `documents`, `get_meta`, `stats`) take no lock. Different instances never wait for
+  each other. `apply` is all or nothing. `close()` refuses new calls, waits for running ones (reads too) and the
+  background vector reload.
+- **MLX:** the weights come from `model_dir`, like the tokenizer; several instances on the MLX backend in one process
+  are untested. Off macOS, `"auto"` never tries MLX.
 - Needs SQLite >= 3.43 in Python's `sqlite3`.
 
 ## Obsidian plugin (Mac and phone)

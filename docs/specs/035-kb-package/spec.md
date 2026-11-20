@@ -32,11 +32,14 @@ there is no `pyproject.toml` to install the engine as a library.
 
 - D1. Flat modules (`py-modules`), as the server's modules import each other top-level. Trinity runs Veritas in a
   separate worker subprocess with its own venv, so module names cannot collide and kb's import-time side effects stay
-  out of Trinity's process. `veritas_kb` still imports kb with a neutral `sys.argv` (kb opens port 27182 at import
-  when `argv[1] == "serve"`).
+  out of Trinity's process. Importing kb never opens a port: only `kb.py serve` run as a script (and the frozen
+  server's entry) listens early, so `veritas_kb` leaves `sys.argv` alone (review round 1; it used to swap in a
+  neutral one around the import).
 - D2. Package version 0.1.0, independent of the app's version (no release-script change).
 - D3. `mlx_embed`'s own `MODEL_DIR` (ignores `VERITAS_DATA`) is left untouched; an upstream issue is drafted below, not
-  filed. No MLX change in slice 0.
+  filed. No MLX change in slice 0. Superseded by review round 1 (M3): `kb.Embedder` passes `model_dir` to
+  `ArcticMLX`, which loads (and, when it may write, caches) the weights there; the draft below is now what the
+  branch does.
 - D4. Default backend `"auto"`.
 - D5. kb's read-only folder-layout probe at import is acceptable (it runs in the worker).
 - D6. Synchronous, simple API. No process-wide mutex is held while a model loads (per-key in-flight construction).
@@ -63,14 +66,21 @@ there is no `pyproject.toml` to install the engine as a library.
   by chunk id, and SQLite reuses the highest rowid after a delete (`INTEGER PRIMARY KEY` without `AUTOINCREMENT`), so a
   concurrent removal plus insert would give a new chunk the old chunk's vector. Upstream prevents the same with its
   one-indexer file lock (`kb.LOCK_FILE`). The lock is per instance, so it never stalls another tenant.
-- `stats`, `read`, `documents`, `get_meta` use their own short-lived read connections and no lock.
+- Review round 1 (M1, adopted by the driver): searches also take the write lock, before the search lock (the order
+  `close()` uses), so an `apply` cannot commit between a search's vector refresh and its row reads (with reused chunk
+  ids that scored one document's vector and returned another; Tantivy and SQLite could disagree too). One
+  `search_timeout` covers both locks. Searches therefore wait during `embed_pending`, which holds the write lock while
+  it embeds; accepted for now, documented in the README.
+- `stats`, `read`, `documents`, `get_meta` use their own short-lived read connections and no lock. They register as
+  running reads (M2): once `close()` begins they raise `ClosedError`, and `close()` waits for those already running
+  before it releases the files. Reads never wait for each other.
 - Every call is blocking I/O; an async host runs them in worker threads (Trinity: the worker subprocess).
 
 ## Out of scope
 
 Moving code out of `kb.py`; multi-index versions of the folder/vault indexing, desktop Zotero, media/OCR, paper notes,
 privacy rules, collections, `similar_notes`/`related`/`duplicates`; per-user HTTP API or auth; the incremental Zotero
-Web sync (planned interface only, plan Task 7); MLX changes; PyPI publishing; Trinity's worker, path authorisation
+Web sync (planned interface only, plan Task 7); MLX changes beyond honouring `model_dir` (M3); PyPI publishing; Trinity's worker, path authorisation
 and tenant mapping (checked in Trinity's own lane).
 
 ## Way of working
