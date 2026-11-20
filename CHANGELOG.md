@@ -3,6 +3,10 @@
 Each release of Veritas AI. `node tools/release.mjs <version>` adds the next section (the commit subjects since the
 last tag, to edit before pushing); the GitHub Release shows that section as its notes.
 
+## 0.54.6 (2026-11-20)
+
+- Spec 030 R12: a report asked in a chat reads the conversation it was asked in
+
 ## 0.54.5 (2026-11-20)
 
 - Test: allow one Windows clock tick in the arXiv spacing check

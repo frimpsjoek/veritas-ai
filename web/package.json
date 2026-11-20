@@ -1,6 +1,6 @@
 {
   "name": "second-brain-web",
-  "version": "0.54.5",
+  "version": "0.54.6",
   "private": true,
   "type": "module",
   "scripts": {
