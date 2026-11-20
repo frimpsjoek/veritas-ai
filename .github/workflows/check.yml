@@ -13,9 +13,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    # Known Windows bugs (index paths with backslashes, linked PDFs not found; docs/specs/ROADMAP.md): its job still runs
-    # and shows them, but does not hold back a release until they are fixed (spec 033 follow-up, user's choice 2026-11-19)
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     defaults:
       run:
         shell: bash  # check.sh is sh; on Windows this is Git Bash

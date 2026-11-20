@@ -10,12 +10,10 @@ Updated 2026-10-12. Live version: **0.50.3** (Zotero and Obsidian, published in 
 
 ## To do
 
-### Known Windows bugs (found 2026-11-19, the first Check on Windows; spec 033 follow-up)
-- [ ] Index paths from listed folders use backslashes (`papers:/sub\\note.md`), so a note's path differs from macOS/Linux
-  and from what links expect (`tests/test_folder_index.py`, `tests/test_note_path.py`); the fix needs a re-index step
-  for existing Windows indexes.
-- [ ] Zotero linked PDFs relative to the base folder are not found (404) on Windows (`tests/test_pdf_route.py`).
-- Until then the Windows job in check.yml runs but does not hold back a release.
+### Windows bugs (found 2026-11-19 by the first Check on Windows; fixed 2026-11-20, spec 034)
+- [x] Index paths use `/` on every system, an older Windows index moved over once at start [4db9c71]
+- [x] The linked-PDF failures were a test writing an unescaped Windows path into prefs.js, not a bug [4db9c71]
+- [x] Check passes on Windows, macOS and Linux; Windows blocks a release again [fa4888d]
 
 ### Next: spec 012 Reading radar (approved 2026-10-11, in progress)
 - [x] Approve decisions D1-D5 and answer the open questions (name, Obsidian note, sites without RSS, MCP sources, sizes) [2026-10-11, see spec Status line]
