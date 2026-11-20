@@ -71,3 +71,14 @@ test('spec 030 R11: a web link the thread already holds (any DOI spelling) is re
   assert.deepEqual(out[3], cited[3]);
   assert.equal(rescueFromThread(/** @type {any} */ (cited), new Map()), cited);
 });
+
+test('a web link a tool returned counts in any spelling: http/https, arXiv version, abs/pdf, DOI forms; an invented one does not', async () => {
+  const library = { async resolve() { return new Map(); } };
+  const seen = [{ kind: 'web', url: 'http://arxiv.org/abs/2610.00636v1' }, { kind: 'web', url: 'https://doi.org/10.1107/S1' }, { kind: 'web', url: 'https://www.example.org/paper/' }];
+  const text = 'A https://arxiv.org/abs/2610.00636 B https://arxiv.org/pdf/2610.00636v2 C http://dx.doi.org/10.1107/s1 D https://example.org/paper E https://arxiv.org/abs/2611.99999';
+  const got = Object.fromEntries((await validateCitations(text, /** @type {any} */ (library), /** @type {any} */ (seen))).map((c) => [c.ref.url, c.status]));
+  assert.deepEqual(got, {
+    'https://arxiv.org/abs/2610.00636': 'resolved', 'https://arxiv.org/pdf/2610.00636v2': 'resolved', 'http://dx.doi.org/10.1107/s1': 'resolved',
+    'https://example.org/paper': 'resolved', 'https://arxiv.org/abs/2611.99999': 'unknown',
+  });
+});

@@ -252,7 +252,8 @@ function builtinRows(library, fetchFn, settings) {
       async run(args, ctx) {
         const papers = await searchScholarly(fetchFn, String(args.query ?? ''), { limit: clamp(args.limit, 1, 20, 10), sources: settings.scholarly, ...(ctx.since ? { since: ctx.since } : {}) });
         /** @type {import("./domain").CitationRef[]} */
-        const seen = papers.filter((p) => p.url).map((p) => ({ kind: 'web', url: p.url }));
+        // each paper is seen by its link and by its DOI link, so an answer may cite it either way
+        const seen = papers.flatMap((p) => [...(p.url ? [{ kind: /** @type {const} */ ('web'), url: p.url }] : []), ...(p.doi ? [{ kind: /** @type {const} */ ('web'), url: `https://doi.org/${p.doi}` }] : [])]);
         const text = papers.length
           ? papers.map((p, i) => `${i + 1}. ${p.title}${p.year ? ` (${p.year})` : ''} — ${p.venue || p.source}${p.doi ? ` doi:${p.doi}` : ''}${p.url ? `\n   ${p.url}` : ''}`).join('\n')
           : 'No results.';

@@ -35,13 +35,15 @@ export async function validateCitations(text, library, seen) {
   const refs = extractCitationRefs(text);
   if (!refs.length) return [];
   const seenKeys = new Set(seen.map(citationKey));
+  // a web link counts as seen in any of its spellings (http/https, arXiv version, abs/pdf, DOI forms)
+  const seenLinks = new Set(seen.filter((r) => r.kind === 'web').map((r) => linkKey(r.url)));
   const nonWeb = refs.filter((r) => r.kind !== 'web');
   const resolved = nonWeb.length ? await library.resolve(nonWeb) : new Map();
 
   return refs.map((ref) => {
     const key = citationKey(ref);
     if (ref.kind === 'web') {
-      return seenKeys.has(key)
+      return seenKeys.has(key) || seenLinks.has(linkKey(ref.url))
         ? { ref, status: 'resolved', title: ref.url, retrievedThisTurn: true }
         : { ref, status: 'unknown' };
     }
@@ -50,6 +52,19 @@ export async function validateCitations(text, library, seen) {
       ? { ref, status: 'resolved', title: hit.title, retrievedThisTurn: seenKeys.has(key) }
       : { ref, status: 'unknown' };
   });
+}
+
+/** One key for the spellings of the same paper's link: a DOI link in any form -> doi:<doi>; an arXiv abs or pdf page,
+ *  with or without its version -> arxiv:<id>; any other link without its scheme, "www." and a trailing slash. A search
+ *  returning http://arxiv.org/abs/2610.00636v1 and an answer citing https://arxiv.org/abs/2610.00636 are the same paper
+ *  (seen live: 16 real papers marked "couldn't be found"). @param {string} url */
+export function linkKey(url) {
+  const u = String(url ?? '').trim();
+  const doi = /^https?:\/\/(?:dx\.)?doi\.org\/(.+)$/i.exec(u);
+  if (doi) return `doi:${decodeURIComponent(doi[1]).toLowerCase()}`;
+  const arxiv = /^https?:\/\/(?:www\.|export\.)?arxiv\.org\/(?:abs|pdf)\/([^?#]+?)(?:v\d+)?(?:\.pdf)?\/?(?:[?#].*)?$/i.exec(u);
+  if (arxiv) return `arxiv:${arxiv[1].toLowerCase()}`;
+  return u.replace(/^https?:\/\//i, '').replace(/^www\./i, '').replace(/\/+$/, '').toLowerCase();
 }
 
 /** A DOI link in any of its usual spellings maps to one key, so "https://doi.org/10.1/X" and "http://dx.doi.org/10.1/x"
