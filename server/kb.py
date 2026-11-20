@@ -24,7 +24,10 @@ import sys
 import listen_first
 
 # `kb.py serve`: the port opens before the imports below, and before the folder list is looked at (reload_layout).
-listen_first.if_serving(sys.argv)
+# Only when run as the command (the frozen entry decides the same before it imports kb): importing kb as a library
+# (veritas_kb, http_api, tests) never opens a port, whatever the host's sys.argv says.
+if __name__ == "__main__":
+    listen_first.if_serving(sys.argv)
 
 import argparse
 import ctypes

@@ -9,6 +9,10 @@ import sys
 if len(sys.argv) > 1 and os.path.basename(sys.argv[1]) == "kb.py":
     del sys.argv[1]
 
+import listen_first  # noqa: E402
+
+listen_first.if_serving(sys.argv)  # `serve`: the port opens before kb's imports, as at the top of kb.py run as a script
+
 import kb  # noqa: E402  (after the argv fix, since kb parses arguments only in main())
 
 kb.main()

@@ -593,9 +593,13 @@ def test_import_never_listens(tmp_path):
     script = (
         "import socket, sys\n"
         f"sys.path.insert(0, {str(SERVER)!r})\n"
-        f"sys.argv = ['host', 'serve', '--port', '{port}']\n"
+        f"sys.argv = argv = ['host', 'serve', '--port', '{port}']\n"
+        "swapped = []\n"  # review minor: not even for a moment (an audit hook sees every import)
+        "sys.addaudithook(lambda event, args: swapped.append(args[0]) "
+        "if event == 'import' and sys.argv is not argv else None)\n"
         "import veritas_kb, kb\n"
-        "assert sys.argv == ['host', 'serve', '--port', '%d']\n"
+        "assert not swapped, swapped\n"
+        "assert sys.argv is argv and sys.argv == ['host', 'serve', '--port', '%d']\n"
         "s = socket.socket(); s.bind(('127.0.0.1', %d)); s.close()\n"
         "print('free')\n" % (port, port))
     env = {**os.environ, "KB_SOURCES": str(tmp_path / "sources.json"), "KB_ZOTERO": str(tmp_path / "Zotero"),

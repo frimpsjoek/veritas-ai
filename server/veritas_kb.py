@@ -17,17 +17,12 @@ Different instances never wait for each other, except on the shared model while 
 from __future__ import annotations
 
 import sqlite3
-import sys
 import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-_argv, sys.argv = sys.argv, sys.argv[:1]  # kb opens its port at import when argv[1] is "serve" (listen_first)
-try:
-    import kb
-finally:
-    sys.argv = _argv
+import kb  # opens no port: only `kb.py serve` run as a script listens early (listen_first)
 
 __all__ = ["KnowledgeBase", "Document", "ConcurrentUseError", "ClosedError"]
 

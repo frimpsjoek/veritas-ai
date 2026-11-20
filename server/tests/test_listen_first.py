@@ -173,17 +173,19 @@ def stuck():
 sources.resolved = stuck
 import listen_first
 listen_first.WAIT_SECONDS = 0.2
-sys.argv = ["kb.py", "serve", "--port", sys.argv[2]]
-import kb
-kb.main()
+import runpy
+entry = sys.argv[3]
+sys.argv = [entry, "serve", "--port", sys.argv[2]]
+runpy.run_path(entry, run_name="__main__")  # as `python kb.py serve` (or the frozen entry) runs it
 """
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="SIGTERM")
-def test_a_blocked_folder_list_leaves_the_server_answering(tmp_path):
+@pytest.mark.parametrize("entry", [SERVER / "kb.py", FROZEN_ENTRY], ids=["source-and-homebrew", "desktop-entry"])
+def test_a_blocked_folder_list_leaves_the_server_answering(tmp_path, entry):
     port, release, log = free_port(), tmp_path / "release", tmp_path / "server.log"
     with open(log, "ab") as out:
-        process = subprocess.Popen([sys.executable, "-c", BLOCKED, str(release), str(port)], cwd=tmp_path, env=scratch_env(tmp_path),
+        process = subprocess.Popen([sys.executable, "-c", BLOCKED, str(release), str(port), str(entry)], cwd=tmp_path, env=scratch_env(tmp_path),
                                    stdout=out, stderr=out)
     try:
         assert wait_for(lambda: call(port, "GET", "/ping")) == (200, {"ok": True, "ready": False})

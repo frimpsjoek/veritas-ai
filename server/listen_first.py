@@ -111,7 +111,8 @@ def ready(server: Listener, handler: type[BaseHTTPRequestHandler]) -> None:
 
 
 def if_serving(argv: list[str]) -> None:
-    """Called at the very top of kb.py, the one module every entry point starts with."""
+    """Called by the entry points before anything else: the top of kb.py when it runs as the command, and the frozen
+    server's entry. Never at import: a library importing kb must not open the host's port."""
     if argv[1:2] != ["serve"]:
         return
     parser = argparse.ArgumentParser(add_help=False)
