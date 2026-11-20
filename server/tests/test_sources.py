@@ -45,10 +45,11 @@ def test_zotero_data_dir_follows_prefs(home):
     prefs = home / "Profiles" / "abc.default" / "prefs.js"
     prefs.parent.mkdir(parents=True)
     custom = library(home / "Elsewhere" / "Zotero")
-    prefs.write_text(f'user_pref("extensions.zotero.dataDir", "{custom}");\n'
+    # prefs.js holds the path as a JS string: on Windows its backslashes are escaped
+    prefs.write_text(f'user_pref("extensions.zotero.dataDir", {json.dumps(str(custom))});\n'
                      'user_pref("extensions.zotero.useDataDir", true);\n')
     assert sources.discover_zotero() == custom
-    prefs.write_text(f'user_pref("extensions.zotero.dataDir", "{custom}");\n'
+    prefs.write_text(f'user_pref("extensions.zotero.dataDir", {json.dumps(str(custom))});\n'
                      'user_pref("extensions.zotero.useDataDir", false);\n')
     assert sources.zotero_data_dir(prefs) == home / "Zotero"
     assert sources.discover_zotero() is None  # ~/Zotero has no database here
