@@ -3,6 +3,10 @@
 Each release of Veritas AI. `node tools/release.mjs <version>` adds the next section (the commit subjects since the
 last tag, to edit before pushing); the GitHub Release shows that section as its notes.
 
+## 0.54.12 (2026-11-20)
+
+- Spec 035: an arXiv paper's first figure from its source files
+
 ## 0.54.11 (2026-11-20)
 
 - Figures: an arXiv paper's first figure may be an SVG object
