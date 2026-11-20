@@ -53,17 +53,22 @@ class KeywordIndex:
 
     def sync(self, db: sqlite3.Connection, replaced: set[int] | frozenset[int] = frozenset()) -> int:
         """Adds new chunks and removes deleted ones. `replaced`: chunk ids whose rows were deleted since the last sync;
-        one that exists again (SQLite reused the id for other text) is indexed afresh. Returns how many documents
+        one that exists again (SQLite reused the id for other text) is indexed afresh. The ids in the keyword_dirty
+        table count as replaced too, and are dropped from it once Tantivy has committed. Returns how many documents
         changed."""
         if not self.can_write:
             if self.index is not None:
                 self.index.reload()
             return 0
+        dirty = self._dirty(db)
         live = {r[0] for r in db.execute("SELECT id FROM chunks")}
         if self.index is None or (self.ids and not self.ids & live and live):
-            return self._rebuild(db, live)
-        new, gone = (live - self.ids) | (set(replaced) & live), self.ids - live
+            changed = self._rebuild(db, live)
+            self._clean(db, dirty)
+            return changed
+        new, gone = (live - self.ids) | ((set(replaced) | dirty) & live), self.ids - live
         if not new and not gone:
+            self._clean(db, dirty)
             return 0
         writer = self.index.writer(heap_size=200_000_000, num_threads=2)
         for cid in gone:
@@ -74,7 +79,23 @@ class KeywordIndex:
         self.ids = (self.ids - gone) | new
         self._save_ids()
         self.index.reload()
+        self._clean(db, dirty)
         return len(new) + len(gone)
+
+    @staticmethod
+    def _dirty(db: sqlite3.Connection) -> set[int]:
+        try:
+            return {r[0] for r in db.execute("SELECT id FROM keyword_dirty")}
+        except sqlite3.OperationalError:  # a database made before the table (kb.connect adds it)
+            return set()
+
+    @staticmethod
+    def _clean(db: sqlite3.Connection, dirty: set[int]) -> None:
+        """Drops the ids read before the commit. KnowledgeBase runs no apply() during a sync (searches hold its write
+        lock), so none is marked again in between."""
+        if dirty:
+            db.executemany("DELETE FROM keyword_dirty WHERE id=?", [(cid,) for cid in dirty])
+            db.commit()
 
     def _rebuild(self, db: sqlite3.Connection, live: set[int]) -> int:
         shutil.rmtree(self.path, ignore_errors=True)

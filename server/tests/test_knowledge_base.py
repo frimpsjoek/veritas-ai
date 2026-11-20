@@ -530,6 +530,74 @@ def test_close_waits_for_reads(open_kb, monkeypatch):
     KnowledgeBase(a.db_path, embedder=HashEmbedder()).close()  # the files were released
 
 
+def test_second_close_waits_for_the_first(open_kb):
+    """Review round 3 minor: a close() called while another runs returns only once the files are released."""
+    a = open_kb()
+    a.apply(add=[doc("zotero/1", "first xenon")])
+    searcher, real_close = a._searcher, a._searcher.close
+    inside, release = threading.Event(), threading.Event()
+
+    def slow_close():
+        inside.set()
+        assert release.wait(10)
+        real_close()
+
+    searcher.close = slow_close
+    first, first_box = in_thread(a.close)
+    assert inside.wait(5)
+    second, second_box = in_thread(a.close)
+    second.join(0.3)
+    assert second.is_alive()  # waits for the first close to finish
+    release.set()
+    first.join(5), second.join(5)
+    assert not first.is_alive() and not second.is_alive()
+    assert "error" not in first_box and "error" not in second_box
+    KnowledgeBase(a.db_path, embedder=HashEmbedder()).close()  # the files were released
+
+
+def test_reused_ids_reindexed_after_reopen(open_kb):
+    """Review round 3 M1: ids deleted by apply() reach the keyword index even when the instance closes before the next
+    search; a reopened index must not keep the old text's words for an id SQLite handed to new text."""
+    a = open_kb()
+    a.apply(add=[doc("zotero/A", "Xenon lamps glow brightly")])
+    assert paths(a.search("xenon")) == {"zotero/A"}  # the keyword index now holds A's ids
+    old_ids = _chunk_ids(a.db_path, "zotero/A")
+    a.apply(add=[doc("zotero/B", "Yttrium garnets are hard")], remove=["zotero/A"])
+    assert _chunk_ids(a.db_path, "zotero/B") & old_ids  # the setup really reused ids
+    a.close()  # before any search
+    again = open_kb()
+    assert paths(again.search("xenon")) == set()
+    assert paths(again.search("yttrium")) == {"zotero/B"}
+    assert count(again.db_path, "SELECT count(*) FROM keyword_dirty") == 0  # consumed after the Tantivy commit
+    again.close()
+    third = open_kb()
+    assert paths(third.search("xenon")) == set() and paths(third.search("yttrium")) == {"zotero/B"}
+
+
+def test_failed_keyword_sync_keeps_dirty_ids(open_kb, monkeypatch):
+    """The pending ids are dropped only after a successful Tantivy commit."""
+    a = open_kb()
+    a.apply(add=[doc("zotero/A", "Xenon lamps glow brightly")])
+    a.search("xenon")
+    a.apply(add=[doc("zotero/B", "Yttrium garnets are hard")], remove=["zotero/A"])
+    a.close()
+    import keyword_index
+
+    def fail(self, writer, db, ids):
+        raise RuntimeError("disk full")
+
+    real_add = keyword_index.KeywordIndex._add
+    monkeypatch.setattr(keyword_index.KeywordIndex, "_add", fail)
+    again = open_kb()
+    with pytest.raises(RuntimeError):
+        again.search("xenon")
+    assert count(again.db_path, "SELECT count(*) FROM keyword_dirty") > 0
+    again.close()
+    monkeypatch.setattr(keyword_index.KeywordIndex, "_add", real_add)
+    third = open_kb()
+    assert paths(third.search("xenon")) == set() and paths(third.search("yttrium")) == {"zotero/B"}
+
+
 def test_embed_pending_serialised_with_apply(open_kb):
     embedder = BlockingEmbedder()
     a = open_kb(embedder=embedder)
@@ -625,6 +693,27 @@ def test_read_and_documents(open_kb):
     assert a.read("zotero/K1", heading="methods")["text"].startswith("## Paper > Methods")
     assert a.read("zotero/missing")["chars"] == 0
     assert a.documents() == {"zotero/K1": (123.0, len(text))}
+
+
+def test_read_sees_one_version_across_a_write(open_kb, monkeypatch):
+    """Review round 3 M2: an apply() committed between read()'s chunk query and its note_info query must not mix the
+    old text with the new title."""
+    a = open_kb()
+    a.apply(add=[doc("zotero/K1", "Xenon lamps glow brightly", title="Old title")])
+    real_info, wrote = kb.note_info, []
+
+    def note_info(db, rel):
+        if not wrote:
+            wrote.append(a.apply(add=[doc("zotero/K1", "Yttrium garnets are hard", title="New title")]))
+        return real_info(db, rel)
+
+    monkeypatch.setattr(kb, "note_info", note_info)
+    page = a.read("zotero/K1")
+    assert wrote == [{"added": 1, "removed": 0}]  # the write committed between the two queries
+    assert page["title"] == "Old title" and "Xenon" in page["text"] and "Yttrium" not in page["text"]
+    monkeypatch.setattr(kb, "note_info", real_info)
+    page = a.read("zotero/K1")
+    assert page["title"] == "New title" and "Yttrium" in page["text"]
 
 
 def test_default_embedder_is_shared_per_model(isolated_kb, monkeypatch):

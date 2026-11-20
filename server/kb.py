@@ -156,7 +156,10 @@ CREATE INDEX IF NOT EXISTS links_src ON links(src);
 CREATE INDEX IF NOT EXISTS links_dst ON links(dst);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS collections (key TEXT PRIMARY KEY, name TEXT, parent TEXT);
+CREATE TABLE IF NOT EXISTS keyword_dirty (id INTEGER PRIMARY KEY);
 """
+# keyword_dirty: chunk ids deleted by veritas_kb.KnowledgeBase.apply (SQLite may hand them to other text), re-indexed by
+# the next keyword sync and dropped after its Tantivy commit, even if the instance was closed and reopened in between.
 # Pandoc citations in notes, [@citekey] or [see @a; @b], link a note to the Zotero item with that citation key.
 CITATION = re.compile(r"(?<![\w@])@([A-Za-z][\w:.#$%&+?<>~/-]*[\w])")
 CITATION_BLOCK = re.compile(r"\[[^\[\]]*@[^\[\]]*\]")

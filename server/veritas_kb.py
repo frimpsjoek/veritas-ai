@@ -11,7 +11,9 @@ Calls are blocking: an async host runs them in worker threads. Thread-safety con
   `search_timeout` seconds for both together, then ConcurrentUseError. embed_pending holds the write lock while it
   embeds, so searches wait for (or time out on) a running embed_pending;
 - reads (read, documents, get_meta, stats) take no lock, open their own connection and run alongside everything;
-- close() refuses new calls (ClosedError), waits for running reads, writes and searches, then releases the files.
+  read() makes its two queries in one read transaction, so it sees one committed version;
+- close() refuses new calls (ClosedError), waits for running reads, writes and searches, then releases the files; a
+  second close() waits for the first.
 Different instances never wait for each other, except on the shared model while it is first built.
 """
 from __future__ import annotations
@@ -74,8 +76,9 @@ class KnowledgeBase:
         # for either.
         self._write_lock = threading.Lock()  # apply + embed_pending, and searches: one version of the index per search
         self._search_lock = threading.Lock()  # search + similar_to_text: the Searcher is not for parallel use
-        self._state = threading.Condition()  # guards _closed and _reads; notified when the last read ends
+        self._state = threading.Condition()  # guards _closed, _close_done, _reads; notified on the last read, close end
         self._closed = False
+        self._close_done = False  # close() has released the files
         self._reads = 0  # reads running now (they take no other lock)
         self._claim()
         try:
@@ -104,16 +107,24 @@ class KnowledgeBase:
 
     def close(self) -> None:
         """Refuses new calls, waits for in-flight ones (reads too) and the searcher's background rebuild, then
-        releases the files. Idempotent; later calls raise ClosedError."""
+        releases the files. Idempotent: a call while another runs returns when that one has finished. Other methods
+        raise ClosedError once close() has begun."""
         with self._state:
             if self._closed:
+                while not self._close_done:
+                    self._state.wait()
                 return
             self._closed = True
             while self._reads:
                 self._state.wait()
-        with self._write_lock, self._search_lock:
-            self._searcher.close()
-        self._release()
+        try:
+            with self._write_lock, self._search_lock:
+                self._searcher.close()
+            self._release()
+        finally:
+            with self._state:
+                self._close_done = True
+                self._state.notify_all()
 
     def __enter__(self) -> "KnowledgeBase":
         return self
@@ -140,6 +151,8 @@ class KnowledgeBase:
                 deleted: set[int] = set()  # chunk ids SQLite may hand out again to other text
                 for path in dict.fromkeys(remove + [kb.posix(d.path) for d in add]):
                     deleted.update(r[0] for r in db.execute("SELECT id FROM chunks WHERE path=?", (path,)))
+                # kept until the keyword index has re-indexed them, across a close and reopen (review round 3 M1)
+                db.executemany("INSERT OR IGNORE INTO keyword_dirty VALUES (?)", [(i,) for i in deleted])
                 removed = 0
                 for path in remove:
                     removed += db.execute("SELECT 1 FROM notes WHERE path=?", (path,)).fetchone() is not None
@@ -234,6 +247,7 @@ class KnowledgeBase:
         rel = kb.posix(path)
 
         def query(db):
+            db.execute("BEGIN")  # one snapshot for both queries: an apply() committing between them is not seen
             rows = db.execute("SELECT heading, text FROM chunks WHERE path=? ORDER BY ord", (rel,)).fetchall()
             wanted = heading.lower().strip("# ") if heading else None
             parts, last = [], None
@@ -244,7 +258,9 @@ class KnowledgeBase:
                     parts.append(f"## {h}" if h else "")
                     last = h
                 parts.append(t)
-            return {**kb.note_info(db, rel), **kb._page("\n\n".join(p for p in parts if p), offset, max_chars)}
+            info = kb.note_info(db, rel)
+            db.commit()  # ends the read transaction
+            return {**info, **kb._page("\n\n".join(p for p in parts if p), offset, max_chars)}
 
         return self._read(query)
 
