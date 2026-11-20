@@ -1,6 +1,6 @@
 {
   "name": "obsidian-plugin",
-  "version": "0.54.4",
+  "version": "0.54.5",
   "description": "",
   "main": "index.js",
   "scripts": {
