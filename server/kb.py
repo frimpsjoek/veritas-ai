@@ -41,6 +41,9 @@ else:
 import threading
 import time
 import urllib.parse
+from concurrent.futures import Future
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -133,11 +136,12 @@ CITATION_BLOCK = re.compile(r"\[[^\[\]]*@[^\[\]]*\]")
 _request = threading.local()
 
 
-def connect(*, keep: bool = False) -> sqlite3.Connection:
+def connect(*, keep: bool = False, path: Path | None = None) -> sqlite3.Connection:
     """A connection to the index. Inside `request_scope` it is closed when the request ends; `keep` is for the few
-    that live as long as the process (the searcher's)."""
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(DB_PATH, timeout=60, check_same_thread=False)
+    that live as long as the process (the searcher's). `path`: another index file than DB_PATH (spec 035)."""
+    path = Path(path) if path is not None else DB_PATH  # DB_PATH read now: tests rebind it
+    path.parent.mkdir(parents=True, exist_ok=True)
+    db = sqlite3.connect(path, timeout=60, check_same_thread=False)
     tracked = getattr(_request, "dbs", None)
     if tracked is not None and not keep:
         tracked.append(db)
@@ -412,17 +416,32 @@ def note_title(fields: dict, body: str, stem: str) -> str:
 
 # ---------------------------------------------------------------- embeddings
 
+def resolve_backend(backend: str | None = None) -> str:
+    """'mlx' or 'onnx'. None keeps the module's choice (KB_BACKEND, default mlx with a CPU fallback); 'auto' is MLX on
+    macOS only, so other systems never try it (spec 035 R3)."""
+    if not backend:
+        return "mlx" if USE_MLX else "onnx"
+    if backend == "auto":
+        return "mlx" if sys.platform == "darwin" else "onnx"
+    if backend not in ("mlx", "onnx"):
+        raise ValueError(f"unknown embedding backend {backend!r}")
+    return backend
+
+
 class Embedder:
-    def __init__(self) -> None:
+    def __init__(self, model_dir: Path | None = None, backend: str | None = None) -> None:
+        """`model_dir` (default MODEL_DIR) is only read on the onnxruntime path; `backend`: see resolve_backend. The
+        tokenizer is configured here only, so one Embedder can encode from several threads."""
         from tokenizers import Tokenizer
 
-        self.tokenizer = Tokenizer.from_file(str(MODEL_DIR / "tokenizer.json"))
+        model_dir = Path(model_dir) if model_dir is not None else MODEL_DIR
+        self.tokenizer = Tokenizer.from_file(str(model_dir / "tokenizer.json"))
         self.tokenizer.enable_truncation(max_length=512)
         # Lengths padded to a multiple of 32 keep the number of distinct batch shapes small.
         self.tokenizer.enable_padding(pad_id=self.tokenizer.token_to_id("[PAD]") or 0, pad_token="[PAD]",
                                       pad_to_multiple_of=32)
         self.mlx = None
-        if USE_MLX:
+        if resolve_backend(backend) == "mlx":
             try:
                 from mlx_embed import ArcticMLX
 
@@ -436,7 +455,7 @@ class Embedder:
         options.log_severity_level = 3
         options.enable_cpu_mem_arena = False  # batches vary in length; the arena would keep every size it saw
         options.intra_op_num_threads = int(os.environ.get("KB_THREADS", "4"))
-        self.session = onnxruntime.InferenceSession(str(MODEL_DIR / "onnx" / "model.onnx"), options,
+        self.session = onnxruntime.InferenceSession(str(model_dir / "onnx" / "model.onnx"), options,
                                                     providers=["CPUExecutionProvider"])
         self.inputs = {i.name for i in self.session.get_inputs()}
 
@@ -462,12 +481,51 @@ class Embedder:
         return out
 
 
+# Read-only models shared by every index in the process (spec 035 R2), one per (model folder, backend). The lock
+# guards the dict only: a model loads outside it, and callers asking for a model that is still loading wait on that
+# model's Future, never on the lock, so other models (and indexes) are not held up.
+_EMBEDDERS: dict[tuple[str, str], Future] = {}
+_EMBEDDERS_LOCK = threading.Lock()
+
+
+def shared_embedder(model_dir: Path | None = None, backend: str | None = None) -> "Embedder":
+    """The process's one Embedder for this model folder and backend, built on first use. A failed build is not kept:
+    the callers waiting on it get its error and the next call tries again."""
+    key = (str(Path(model_dir if model_dir is not None else MODEL_DIR).resolve()), resolve_backend(backend))
+    with _EMBEDDERS_LOCK:
+        future = _EMBEDDERS.get(key)
+        builder = future is None
+        if builder:
+            future = _EMBEDDERS[key] = Future()
+    if builder:
+        try:
+            future.set_result(Embedder(Path(key[0]), key[1]))  # Embedder looked up now: tests replace it
+        except BaseException as error:
+            with _EMBEDDERS_LOCK:
+                _EMBEDDERS.pop(key, None)
+            future.set_exception(error)
+            raise
+    return future.result()
+
+
 # ---------------------------------------------------------------- indexing
 
-# During an index run, the vectors of deleted rows, keyed by the exact text they were made from. A note re-stored
-# under a new path (its folder became the output or stopped being it) or with only some sections edited gets the
-# vectors of its unchanged passages back instead of re-embedding them. None outside an index run.
-_VEC_STASH: dict[str, bytes] | None = None
+# During a write (an index run, or veritas_kb.KnowledgeBase.apply), the vectors of deleted rows, keyed by the exact
+# text they were made from. A note re-stored under a new path (its folder became the output or stopped being it) or
+# with only some sections edited gets the vectors of its unchanged passages back instead of re-embedding them. None
+# outside a write. Per context (spec 035), so two indexes written at once never hand vectors to each other: each write
+# scope sets a fresh dict (vector_stash); never spawn tasks that write inside one.
+_VEC_STASH: ContextVar[dict[str, bytes] | None] = ContextVar("kb_vec_stash", default=None)
+
+
+@contextmanager
+def vector_stash():
+    """A fresh vector stash for the writes inside this block (see _VEC_STASH)."""
+    token = _VEC_STASH.set({})
+    try:
+        yield
+    finally:
+        _VEC_STASH.reset(token)
 
 
 def _embed_text(title: str, heading: str, text: str) -> str:
@@ -476,11 +534,12 @@ def _embed_text(title: str, heading: str, text: str) -> str:
 
 
 def delete_note(db: sqlite3.Connection, rel: str) -> None:
-    if _VEC_STASH is not None:
+    stash = _VEC_STASH.get()
+    if stash is not None:
         for title, heading, text, vec in db.execute(
                 "SELECT n.title, c.heading, c.text, v.vec FROM chunks c JOIN notes n ON n.path=c.path "
                 "JOIN vecs v ON v.id=c.id WHERE c.path=?", (rel,)):
-            _VEC_STASH[_embed_text(title, heading, text)] = vec
+            stash[_embed_text(title, heading, text)] = vec
     ids = [r[0] for r in db.execute("SELECT id FROM chunks WHERE path=?", (rel,))]
     db.executemany("DELETE FROM chunks_fts WHERE rowid=?", [(i,) for i in ids])
     db.execute("DELETE FROM chunks WHERE path=?", (rel,))
@@ -655,12 +714,8 @@ def index(full: bool = False, verbose: bool = True, reread_zotero: bool = False,
 
 
 def _index(full: bool, verbose: bool, progress: Progress) -> dict:
-    global _VEC_STASH
-    _VEC_STASH = {}
-    try:
+    with vector_stash():
         return _index_stages(full, verbose, progress)
-    finally:
-        _VEC_STASH = None
 
 
 def _index_stages(full: bool, verbose: bool, progress: Progress) -> dict:
@@ -776,13 +831,14 @@ def store_note(db: sqlite3.Connection, rel: str, title: str, folder: str, source
                (rel, title, folder, source, " ".join(tags), mtime, size, frontmatter,
                 json.dumps(meta, ensure_ascii=False) if meta else None))
     db.executemany("INSERT INTO links VALUES (?,?)", [(rel, dst) for dst in links])
+    stash = _VEC_STASH.get()
     for ord_, chunk in enumerate(chunk_note(body) or [Chunk("", title)]):
         cur = db.execute("INSERT INTO chunks (path, ord, heading, text) VALUES (?,?,?,?)",
                          (rel, ord_, chunk.heading, chunk.text))
         db.execute("INSERT INTO chunks_fts (rowid, title, heading, text, tags) VALUES (?,?,?,?,?)",
                    (cur.lastrowid, title, chunk.heading, chunk.text, " ".join(tags)))
         # pop: a re-chunk of the whole index would otherwise hold every vector in memory until the run ends
-        vec = _VEC_STASH.pop(_embed_text(title, chunk.heading, chunk.text), None) if _VEC_STASH is not None else None
+        vec = stash.pop(_embed_text(title, chunk.heading, chunk.text), None) if stash is not None else None
         if vec is not None:
             db.execute("INSERT OR REPLACE INTO vecs VALUES (?,?,?)", (cur.lastrowid, rel, vec))
 
@@ -1059,13 +1115,13 @@ def stamp(db: sqlite3.Connection, key: str) -> None:
 
 
 def embed_pending(db: sqlite3.Connection, verbose: bool = True, batch: int = 256,
-                  progress: Progress | None = None) -> int:
+                  progress: Progress | None = None, *, embedder: "Embedder | None" = None) -> int:
     todo = db.execute("SELECT (SELECT count(*) FROM chunks) - (SELECT count(*) FROM vecs)").fetchone()[0]
     if not todo:
         return 0
     if progress:
         progress.stage("embedding", todo)
-    embed = Embedder()
+    embed = embedder if embedder is not None else Embedder()
     done, started, last_stamp = 0, time.time(), time.time()
     while True:
         rows = db.execute(f"SELECT c.id, n.title, c.heading, c.text, c.path FROM chunks c JOIN notes n ON n.path=c.path "
@@ -1125,14 +1181,30 @@ def same_paper_key(title: str, meta: dict) -> tuple | None:
 
 
 class Searcher:
-    """Holds the vector matrix in memory; reloads it when the index changes."""
+    """Holds the vector matrix in memory; reloads it when the index changes. Not for parallel use: callers serialise
+    their calls (http_api.LOCK, veritas_kb.KnowledgeBase)."""
 
-    def __init__(self, writer: bool = False) -> None:
-        """`writer`: this process maintains the Tantivy keyword index (the index server does; others read it)."""
+    def __init__(self, writer: bool = False, *, db_path: Path | None = None, keyword_dir: Path | None = None,
+                 embed_factory=None, vector_gate: float | None = None) -> None:
+        """`writer`: this process maintains the Tantivy keyword index (the index server does; others read it).
+        The rest name another index than the module's (spec 035): `db_path` (default DB_PATH), `keyword_dir`
+        (default data_dir()/tantivy), `embed_factory` (makes the query embedder; default Embedder), `vector_gate`
+        (default VECTOR_GATE, read at search time)."""
         from keyword_index import KeywordIndex
 
-        self.db = connect(keep=True)
-        self.keywords = KeywordIndex(data_dir() / "tantivy", writer)
+        self.db_path = db_path
+        self.db = connect(keep=True, path=db_path)
+        self.keywords = KeywordIndex(Path(keyword_dir) if keyword_dir is not None else data_dir() / "tantivy", writer)
+        self._embed_factory, self.vector_gate = embed_factory, vector_gate
+        # Writes that removed rows bump the generation (changed(full=True)): SQLite reuses the highest chunk id after
+        # a delete, so vectors and keywords loaded for an id may now belong to other text. A refresh that sees a new
+        # generation reloads every vector, and a background rebuild begun under an older one is thrown away.
+        self._generation, self._loaded_generation = 0, -1
+        self._replaced: set[int] = set()  # chunk ids written again since the keyword index last synced
+        self._changes = threading.Lock()  # guards _generation and _replaced against a writer thread
+        self._lifecycle = threading.Lock()  # guards _closed and starting the rebuild thread
+        self._rebuild_thread: threading.Thread | None = None
+        self._closed = False
         self.embed: Embedder | None = None
         self._query_vectors: dict[str, np.ndarray] = {}
         self.loaded_at = None
@@ -1146,7 +1218,7 @@ class Searcher:
         self.note_index: dict[str, int] = {}
         self.note_matrix = np.zeros((0, DIM), dtype=np.float16)
         self._duplicates: tuple | None = None
-        self._rebuilt: Searcher | None = None
+        self._rebuilt: tuple[int, Searcher] | None = None
         self._rebuilding = threading.Event()
 
     _VECTOR_STATE = ("ids", "max_id", "full_at", "vectors", "note_sums", "note_paths", "note_index", "note_matrix")
@@ -1156,38 +1228,80 @@ class Searcher:
         use, hourly, or when many loaded chunks have been deleted, since deleted rows linger until then. Only the
         first load runs on the caller's thread: later full reloads (1-2 s) are built in the background and swapped
         in here, on the request thread, so no search ever sees half of the old state and half of the new."""
+        with self._changes:
+            generation, replaced, self._replaced = self._generation, self._replaced, set()
         rebuilt, self._rebuilt = self._rebuilt, None
-        if rebuilt is not None:
+        if rebuilt is not None and rebuilt[0] == generation:  # else rows were replaced after it began: dropped
             for name in self._VECTOR_STATE:
-                setattr(self, name, getattr(rebuilt, name))
+                setattr(self, name, getattr(rebuilt[1], name))
             self.loaded_at = ("rebuilt",)  # appends whatever arrived while the rebuild ran
             self.checked_at = 0.0
         version = tuple(r[0] for r in self.db.execute(
             "SELECT value FROM meta WHERE key IN ('indexed_at', 'vectors_at') ORDER BY key"))
-        if version == self.loaded_at or (self.loaded_at is not None and time.time() - self.checked_at < 60):
+        if generation == self._loaded_generation and not replaced and (
+                version == self.loaded_at or (self.loaded_at is not None and time.time() - self.checked_at < 60)):
             return
         self.checked_at = time.time()
-        self.keywords.sync(self.db)
+        if replaced:
+            try:
+                self.keywords.sync(self.db, replaced)
+            except BaseException:
+                with self._changes:
+                    self._replaced |= replaced  # kept for the next refresh
+                raise
+        else:
+            self.keywords.sync(self.db)  # stand-ins (bench.py) take only the connection
         live = self.db.execute("SELECT count(*) FROM vecs").fetchone()[0]
         stale = len(self.ids) - live
-        if self.loaded_at is None:
+        if self.loaded_at is None or generation != self._loaded_generation:
             self._load(full=True)
         else:
             if (time.time() - self.full_at > 3600 or stale > max(2000, live // 20)) and not self._rebuilding.is_set():
-                self._rebuilding.set()
-                threading.Thread(target=self._rebuild, daemon=True).start()
+                self._start_rebuild()
             self._load(full=False)
         self.loaded_at = version
+        self._loaded_generation = generation  # one read at the start: a bump during this refresh is seen next time
+
+    def changed(self, full: bool = False, replaced=()) -> None:
+        """Look at the index again on the next call instead of within a minute. `full`: rows were removed, so chunk
+        ids may have been reused; reload every vector and drop a background rebuild that began before this.
+        `replaced`: chunk ids whose rows were deleted, re-indexed in the keyword index if they exist again."""
+        with self._changes:
+            if full:
+                self._generation += 1
+            self._replaced.update(int(i) for i in replaced)
+        self.checked_at = 0.0
+
+    def _start_rebuild(self) -> None:
+        with self._lifecycle:
+            if self._closed:
+                return
+            self._rebuilding.set()
+            self._rebuild_thread = threading.Thread(target=self._rebuild, daemon=True)
+            self._rebuild_thread.start()
+
+    def close(self) -> None:
+        """Waits for a background rebuild, then closes the connection. Idempotent; not to be called while a search
+        runs on another thread."""
+        with self._lifecycle:
+            if self._closed:
+                return
+            self._closed = True
+            thread = self._rebuild_thread
+        if thread is not None:
+            thread.join()
+        self.db.close()
 
     def _rebuild(self) -> None:
         background_priority()
         try:
+            generation = self._generation
             shadow = Searcher.__new__(Searcher)
-            shadow.db = connect(keep=True)
+            shadow.db = connect(keep=True, path=self.db_path)
             shadow.ids, shadow.max_id, shadow.vectors = np.zeros(0, dtype=np.int64), 0, None
             shadow._load(full=True)
             shadow.db.close()
-            self._rebuilt = shadow
+            self._rebuilt = (generation, shadow)
         finally:
             self._rebuilding.clear()
 
@@ -1231,8 +1345,13 @@ class Searcher:
         if vector is None:
             if len(self._query_vectors) > 512:
                 self._query_vectors.clear()
-            vector = self._query_vectors[query] = self.embed([query], query=True)[0]
+            vector = self._query_vectors[query] = self._embedder()([query], query=True)[0]
         return vector
+
+    def _embedder(self) -> "Embedder":
+        if self.embed is None:
+            self.embed = self._embed_factory() if self._embed_factory is not None else Embedder()
+        return self.embed
 
     def _scores(self, vector: np.ndarray) -> np.ndarray:
         """Cosine of `vector` against every loaded chunk: on the GPU when MLX is available (2 ms for 290k chunks
@@ -1301,12 +1420,11 @@ class Searcher:
 
         # Meaning side.
         if len(self.ids):
-            if self.embed is None:
-                self.embed = Embedder()
             scores = self._scores(self._query_vector(query))
             top = np.argpartition(-scores, min(pool * 3, len(scores) - 1))[:pool * 3]
             top = top[np.argsort(-scores[top])]
-            vec_ids = [int(self.ids[i]) for i in top if scores[i] >= VECTOR_GATE]
+            gate = VECTOR_GATE if self.vector_gate is None else self.vector_gate
+            vec_ids = [int(self.ids[i]) for i in top if scores[i] >= gate]
             if allowed is not None:
                 vec_ids = self._filter_ids(vec_ids, allowed)
             for rank, cid in enumerate(vec_ids[:pool]):
@@ -1390,9 +1508,7 @@ class Searcher:
         text = clean(text)[:4000]
         if len(text) < 40 or not len(self.ids):
             return []
-        if self.embed is None:
-            self.embed = Embedder()
-        scores = self._scores(self.embed([text])[0])  # passage-to-passage: no query prefix
+        scores = self._scores(self._embedder()([text])[0])  # passage-to-passage: no query prefix
         top = np.argsort(-scores)[:limit * 12]
         chunk_ids = [int(self.ids[i]) for i in top]
         placeholders = ",".join("?" * len(chunk_ids))
@@ -1820,8 +1936,8 @@ def coverage() -> list[dict]:
                     "with_vectors": 0}]
 
 
-def stats() -> dict:
-    db = connect()
+def stats(db: sqlite3.Connection | None = None) -> dict:
+    db = db if db is not None else connect()
     stamp = db.execute("SELECT value FROM meta WHERE key='indexed_at'").fetchone()
     return {
         "vault": str(VAULT),

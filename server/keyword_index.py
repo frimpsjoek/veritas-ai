@@ -51,8 +51,10 @@ class KeywordIndex:
     def usable(self) -> bool:
         return self.index is not None
 
-    def sync(self, db: sqlite3.Connection) -> int:
-        """Adds new chunks and removes deleted ones. Returns how many documents changed."""
+    def sync(self, db: sqlite3.Connection, replaced: set[int] | frozenset[int] = frozenset()) -> int:
+        """Adds new chunks and removes deleted ones. `replaced`: chunk ids whose rows were deleted since the last sync;
+        one that exists again (SQLite reused the id for other text) is indexed afresh. Returns how many documents
+        changed."""
         if not self.can_write:
             if self.index is not None:
                 self.index.reload()
@@ -60,7 +62,7 @@ class KeywordIndex:
         live = {r[0] for r in db.execute("SELECT id FROM chunks")}
         if self.index is None or (self.ids and not self.ids & live and live):
             return self._rebuild(db, live)
-        new, gone = live - self.ids, self.ids - live
+        new, gone = (live - self.ids) | (set(replaced) & live), self.ids - live
         if not new and not gone:
             return 0
         writer = self.index.writer(heap_size=200_000_000, num_threads=2)
