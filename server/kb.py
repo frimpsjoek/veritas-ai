@@ -1912,7 +1912,22 @@ def sources_cli(action: str, target: str | None, name: str | None) -> None:
         print(f"{'(Veritas folder)':<20} {'main':<8} {'plain':<9} {report['main_documents']:>7}  {report['main']}")
 
 
+def trust_system_certificates() -> bool:
+    """HTTPS checks a site against the system's own certificates (macOS keychain, Windows store) through truststore.
+
+    A Python built elsewhere looks for its OpenSSL certificate folder where it was built: the release app's server,
+    built on a CI machine, found none on the user's Mac and every download failed (figures, paper text, abstracts).
+    False when truststore is not installed; then Python's own certificate search stays."""
+    try:
+        import truststore
+    except ImportError:
+        return False
+    truststore.inject_into_ssl()
+    return True
+
+
 def main() -> None:
+    trust_system_certificates()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("index")
