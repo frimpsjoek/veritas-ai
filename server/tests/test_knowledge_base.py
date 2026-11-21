@@ -224,6 +224,37 @@ def test_apply_rolls_back_removals_too(open_kb, monkeypatch):
     assert paths(a.search("persistent xenon")) == {"zotero/P"}
 
 
+class FailsOnSecondBatch(HashEmbedder):
+    """Embeds the first batch of passages, raises on the second; queries always work."""
+
+    def __init__(self):
+        super().__init__()
+        self.batches = 0
+
+    def __call__(self, texts, query=False, batch_size=16):
+        if not query:
+            self.batches += 1
+            if self.batches == 2:
+                raise RuntimeError("embedder died on batch 2")
+        return super().__call__(texts, query, batch_size)
+
+
+def test_failed_embed_pending_leaves_earlier_batches_searchable(open_kb):
+    """Review r4: batch 1 is committed before batch 2 raises; a searcher refreshed before the run must see it."""
+    a = open_kb(embedder=FailsOnSecondBatch())
+    a.apply(add=[doc("zotero/AAAA1111", "Quasiparticle energies from the GW approximation"),
+                 doc("zotero/BBBB2222", "Superconducting xenon lamps in cryogenic chambers")])
+    probes = {"zotero/AAAA1111": "Quasiparticle energies from the GW approximation, measured in the laboratory.",
+              "zotero/BBBB2222": "Superconducting xenon lamps in cryogenic chambers, measured in the laboratory."}
+    assert a.similar_to_text(probes["zotero/AAAA1111"]) == []  # the searcher has loaded: no vectors yet
+    with pytest.raises(RuntimeError, match="batch 2"):
+        a.embed_pending(batch=1)
+    embedded = {r[0] for r in sqlite3.connect(a.db_path).execute("SELECT DISTINCT path FROM vecs")}
+    assert len(embedded) == 1
+    (path,) = embedded
+    assert path in paths(a.similar_to_text(probes[path]))
+
+
 def test_reapply_reuses_vectors(open_kb):
     embedder = HashEmbedder()
     a = open_kb(embedder=embedder)

@@ -1157,26 +1157,39 @@ def embed_pending(db: sqlite3.Connection, verbose: bool = True, batch: int = 256
         progress.stage("embedding", todo)
     embed = embedder if embedder is not None else Embedder()
     done, started, last_stamp = 0, time.time(), time.time()
-    while True:
-        rows = db.execute(f"SELECT c.id, n.title, c.heading, c.text, c.path FROM chunks c JOIN notes n ON n.path=c.path "
-                          f"WHERE c.id NOT IN (SELECT id FROM vecs) ORDER BY {EMBED_ORDER} LIMIT ?", (batch,)).fetchall()
-        if not rows:
-            break
-        texts = [_embed_text(title, heading, text) for _, title, heading, text, _ in rows]
-        vectors = embed(texts, batch_size=64 if embed.mlx is not None else 16).astype(np.float16)
-        db.executemany("INSERT OR REPLACE INTO vecs VALUES (?,?,?)",
-                       [(r[0], r[4], v.tobytes()) for r, v in zip(rows, vectors)])
-        done += len(rows)
-        if time.time() - last_stamp > 300:  # lets a running server pick up new vectors every few minutes
-            stamp(db, "vectors_at")
-            last_stamp = time.time()
-        db.commit()
-        if progress:
-            progress.advance(done)
-        if verbose:
-            rate = done / (time.time() - started)
-            eta = (todo - done) / max(rate, 1e-9) / 60
-            print(f"  vectors: {done}/{todo}, {rate:.1f} chunks/s, ~{eta:.0f} min left", file=sys.stderr, flush=True)
+    unstamped = 0  # vectors committed since vectors_at was last stamped
+    try:
+        while True:
+            rows = db.execute(f"SELECT c.id, n.title, c.heading, c.text, c.path FROM chunks c JOIN notes n ON n.path=c.path "
+                              f"WHERE c.id NOT IN (SELECT id FROM vecs) ORDER BY {EMBED_ORDER} LIMIT ?", (batch,)).fetchall()
+            if not rows:
+                break
+            texts = [_embed_text(title, heading, text) for _, title, heading, text, _ in rows]
+            vectors = embed(texts, batch_size=64 if embed.mlx is not None else 16).astype(np.float16)
+            db.executemany("INSERT OR REPLACE INTO vecs VALUES (?,?,?)",
+                           [(r[0], r[4], v.tobytes()) for r, v in zip(rows, vectors)])
+            done += len(rows)
+            stamped = time.time() - last_stamp > 300  # lets a running server pick up new vectors every few minutes
+            if stamped:
+                stamp(db, "vectors_at")
+                last_stamp = time.time()
+            db.commit()
+            unstamped = 0 if stamped else unstamped + len(rows)
+            if progress:
+                progress.advance(done)
+            if verbose:
+                rate = done / (time.time() - started)
+                eta = (todo - done) / max(rate, 1e-9) / 60
+                print(f"  vectors: {done}/{todo}, {rate:.1f} chunks/s, ~{eta:.0f} min left", file=sys.stderr, flush=True)
+    except BaseException:
+        if unstamped:  # searchers compare vectors_at: unstamped, the committed batches stay unseen (review r4)
+            try:
+                db.rollback()  # the failed batch only; earlier ones are committed
+                stamp(db, "vectors_at")
+                db.commit()
+            except sqlite3.Error:
+                pass  # the original error matters more; the next stamp shows these vectors
+        raise
     stamp(db, "vectors_at")
     db.commit()
     return done

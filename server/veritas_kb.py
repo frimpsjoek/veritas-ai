@@ -189,8 +189,10 @@ class KnowledgeBase:
                     return 0  # nothing to do: no model load
                 done = kb.embed_pending(db, verbose=False, batch=batch, embedder=self.embedder)
             finally:
-                db.close()
-            self._searcher.changed()
+                try:
+                    db.close()
+                finally:  # batches commit one by one: a later batch failing leaves earlier vectors to show (review r4)
+                    self._searcher.changed()
         return done
 
     # ------------------------------------------------------------ search
