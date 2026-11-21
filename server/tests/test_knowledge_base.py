@@ -529,6 +529,76 @@ def test_module_default_folder_rebound_not_refused(open_kb, isolated_kb, monkeyp
         searcher.close()
 
 
+def _identityless_database(db_path: Path, path: str, words: str) -> None:
+    """A database made by kb.connect and store_note alone (as `kb index` does): it has no db_uuid until a writer
+    opens it, and its chunk ids start at 1 like every other database's."""
+    db = kb.connect(keep=True, path=db_path)
+    try:
+        kb.store_note(db, path, path, "", "zotero", [], [], 0.0, 0, "", None, f"# {path}\n\n{words}.{FILLER}")
+        db.commit()
+        assert db.execute("SELECT value FROM meta WHERE key='db_uuid'").fetchone() is None
+    finally:
+        db.close()
+
+
+def _bound_keyword_folder(open_kb) -> Path:
+    """Alice's keyword folder, bound to her database, whose chunk 1 is about xenon."""
+    a = open_kb()
+    a.apply(add=[doc("zotero/A", "Xenon lamps glow brightly")])
+    assert paths(a.search("xenon")) == {"zotero/A"}
+    a.close()
+    return a.keyword_dir
+
+
+def test_named_bound_folder_refused_for_a_database_without_identity(open_kb, isolated_kb):
+    """Review r8: a database no writer has opened has no db_uuid. A read-only searcher naming another database's
+    keyword folder would load it, and a word only in that database's chunk 1 would return this database's chunk 1. It
+    is refused, untouched, read-only too."""
+    import keyword_index
+
+    keyword_dir = _bound_keyword_folder(open_kb)
+    bob = isolated_kb / "bob" / "kb.sqlite"
+    _identityless_database(bob, "zotero/B", "Yttrium garnets are hard")
+    before = _folder_state(keyword_dir)
+    for writer in (False, True):
+        with pytest.raises(keyword_index.KeywordIndexBindingError, match="another database"):
+            kb.Searcher(writer=writer, db_path=bob, keyword_dir=keyword_dir, embed_factory=HashEmbedder)
+        assert _folder_state(keyword_dir) == before
+        if not writer:  # a reader makes no identity (a writer does, then finds the folder bound to another)
+            assert count(bob, "SELECT count(*) FROM meta WHERE key='db_uuid'") == 0
+
+
+def test_default_bound_folder_unused_for_a_database_without_identity(open_kb, isolated_kb):
+    """Review r8: the module's own pair (kb.DB_PATH with data/tantivy) is rebuilt, not refused, when the folder is
+    bound to another database; a reader cannot rebuild, so it leaves the folder unloaded and searches SQLite FTS."""
+    keyword_dir = _bound_keyword_folder(open_kb)
+    _identityless_database(kb.DB_PATH, "zotero/B", "Yttrium garnets are hard")
+    shutil.copytree(keyword_dir, kb.data_dir() / "tantivy")
+    reader = kb.Searcher(embed_factory=HashEmbedder)
+    try:
+        assert not reader.keywords.usable()
+        assert reader.search("xenon") == []
+        assert paths(reader.search("yttrium")) == {"zotero/B"}
+    finally:
+        reader.close()
+
+
+def test_writer_opened_database_reads_its_own_bound_folder(open_kb, isolated_kb):
+    """The binding check refuses nothing it should not: once a writer has given a database its identity and bound its
+    folder, a read-only searcher of that pair uses Tantivy."""
+    _identityless_database(index_dir(isolated_kb, "alice") / "kb.sqlite", "zotero/B", "Yttrium garnets are hard")
+    a = open_kb()
+    assert paths(a.search("yttrium")) == {"zotero/B"}
+    a.close()
+    reader = kb.Searcher(db_path=a.db_path, keyword_dir=a.keyword_dir, embed_factory=HashEmbedder)
+    try:
+        assert reader.keywords.usable()
+        assert paths(reader.search("yttrium")) == {"zotero/B"}
+        assert reader.search("xenon") == []
+    finally:
+        reader.close()
+
+
 def test_recognition_rule(tmp_path):
     """Only regular index files are allowed; an unmarked folder also needs a valid legacy Tantivy schema."""
     import keyword_index

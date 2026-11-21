@@ -8,8 +8,9 @@ The Tantivy index is derived data: it lives in data/tantivy, is rebuilt from SQL
 (~7 s), and only the index server writes to it (`writer=True`); every other process reads.
 
 A keyword folder is bound to one database: MARKER names the database's identity (a random id in its meta table, key
-db_uuid), since chunk ids are only row numbers and two databases share them. A folder bound to another database is
-refused, untouched; one bound to none (made before the binding) is rebuilt once from the database and bound.
+db_uuid), since chunk ids are only row numbers and two databases share them. A folder bound to another database (or
+bound at all, when the database has no identity yet) is refused, untouched; one bound to none (made before the
+binding) is rebuilt once from the database and bound.
 """
 from __future__ import annotations
 
@@ -119,8 +120,10 @@ def _schema() -> tantivy.Schema:
 class KeywordIndex:
     def __init__(self, path: Path, writer: bool, db: sqlite3.Connection | None = None, rebind: bool = False) -> None:
         """`db`: the database this index belongs to; the folder's binding is checked against it now
-        (KeywordIndexBindingError for a folder bound to another), otherwise at the first sync. `rebind`: the folder is the module's own
-        (data/tantivy beside kb.DB_PATH), rebuilt for this database instead of refused when bound to another."""
+        (KeywordIndexBindingError for a folder bound to another), otherwise at the first sync. A database no writer
+        has opened has no identity yet, so a bound folder cannot be shown to be its own: it counts as another's, for a
+        reader too. `rebind`: the folder is the module's own (data/tantivy beside kb.DB_PATH), rebuilt for this
+        database instead of refused when bound to another (a reader leaves it unloaded and searches SQLite FTS)."""
         self.path = path
         self.can_write = writer
         self.rebind = rebind
@@ -129,11 +132,12 @@ class KeywordIndex:
         self.ids: set[int] = set()
         if db is not None:
             mine, bound = database_id(db, create=writer), bound_to(path)
-            if mine is not None and bound != mine:
-                if bound is not None and not rebind:
+            if bound is not None and bound != mine:  # bound to another database, or this one has no identity
+                if not rebind:
                     raise self._foreign(db, mine, bound)
-                if writer or bound is not None:
-                    return  # not loaded: the writer's first sync rebuilds and binds it (a reader keeps an unbound one)
+                return  # not loaded: the writer's first sync rebuilds and binds it
+            if bound is None and mine is not None and writer:
+                return  # not loaded: the writer's first sync rebuilds and binds it (a reader keeps an unbound one)
         try:
             version = (path / "schema-version").read_text().strip() if (path / "schema-version").exists() else ""
             if (path / "meta.json").exists() and version == SCHEMA_VERSION:
@@ -179,10 +183,11 @@ class KeywordIndex:
         self._clean(db, dirty)
         return len(new) + len(gone)
 
-    def _foreign(self, db: sqlite3.Connection, mine: str, bound: str) -> KeywordIndexBindingError:
+    def _foreign(self, db: sqlite3.Connection, mine: str | None, bound: str) -> KeywordIndexBindingError:
         name = next((r[2] for r in db.execute("PRAGMA database_list") if r[1] == "main"), "") or "this database"
+        ident = f"id {mine}" if mine is not None else "no id yet: no writer has opened it"
         return KeywordIndexBindingError(
-            f"{self.path} is the keyword index of another database (id {bound}), not of {name} (id {mine}); refusing "
+            f"{self.path} is the keyword index of another database (id {bound}), not of {name} ({ident}); refusing "
             f"to use or rebuild it. Give each database its own keyword folder (or delete this one if its database is "
             f"gone).")
 

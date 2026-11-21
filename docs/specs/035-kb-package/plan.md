@@ -1,7 +1,13 @@
 # Plan: spec 035, the index as a reusable package (slice 0)
 
 Status: IMPLEMENTED (Tasks 1-6), revision 2 plus driver answers, 2026-11-20. Spec: `spec.md` (goals R1-R7, driver decisions D1-D8, concurrency
-contract). Branch `feat/kb-package` from `d7d48ae` (Release 0.54.8). Plan only; no product code yet.
+contract). Branch `feat/kb-package` from `d7d48ae` (Release 0.54.8).
+
+This file is the plan as written before implementation, kept as history: the task checklists and code sketches below
+are not updated. Where they differ from the code, the implemented contract is `spec.md` ("Concurrency contract") and
+"Driver answers and implementation notes" at the end. In particular, a search does not fail fast: searches and writes
+on one instance wait on per-instance locks (`_write_lock`, then `_search_lock`), bounded by `search_timeout`, then raise
+`ConcurrentUseError` (a `TimeoutError`); `close()` also waits for in-flight reads.
 
 ## Revision 2 changelog
 
@@ -13,7 +19,8 @@ Driven by the independent plan review (argo-openai/gpt6sol, "DO NOT PROCEED") an
   `Future`: the first caller builds it outside the lock, concurrent callers for that key wait on the result, other
   keys never wait, and a failed build is dropped so the next call retries (review B1, option A).
 - Task 5: no instance mutex around searches or model I/O. Searches take a non-blocking guard (a concurrent search on
-  one instance raises `ConcurrentUseError`; it never waits). Writes and `embed_pending` open their own short-lived
+  one instance raises `ConcurrentUseError`; it never waits; *superseded by driver answer 1: searches wait, bounded by
+  `search_timeout`*). Writes and `embed_pending` open their own short-lived
   connections and share a per-instance write lock, kept because it is needed for correctness (chunk-id reuse; see
   "Verified repo facts"). Reads use their own connections. The calling contract (caller sequences one instance's calls
   and runs them off its event loop) is in spec.md (review B2, adapted per D6).
@@ -420,7 +427,8 @@ Compatibility and import
       `veritas_kb`; the port is still free.
 - [ ] `test_read_and_documents`: `read()` pages indexed text like `read_note`; `documents()` maps path → (version, size).
 
-Implementation sketch:
+Implementation sketch (historical, pre-implementation: its fail-fast `_search_guard`, `_searching` and `close()` are
+superseded by driver answer 1; see `server/veritas_kb.py` for the implemented locking and lifecycle):
 
 ```python
 """The search index as a library: one KnowledgeBase per index, many in one process (spec 035).
@@ -692,7 +700,7 @@ Found while implementing (beyond the plan):
 
 Original open questions:
 
-1. **Search guard behaviour.** The plan makes a second concurrent search on one instance raise
+1. **Search guard behaviour** (answered: searches wait; driver answer 1). The plan makes a second concurrent search on one instance raise
    `ConcurrentUseError` rather than wait (no mutex across I/O). If you'd rather it waited (a blocking per-instance
    search lock, as upstream's `http_api.LOCK` does globally), say so; Trinity's worker sequencing makes the two
    equivalent in correct use.
