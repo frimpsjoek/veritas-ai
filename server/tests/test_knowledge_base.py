@@ -1472,6 +1472,36 @@ def test_path_prefixes_are_case_sensitive_for_tantivy_and_sqlite(open_kb, sqlite
     assert upper["total"] == 1 and paths(upper["results"]) == {"zotero/g/ACTIVE/item/2"}
 
 
+def test_prefix_iterable_is_consumed_before_any_lock(open_kb):
+    """Review L3E r2 M1: a lazy caller iterable is snapshotted before the search takes its locks."""
+    a = open_kb(vector_gate=2.0)
+    a.apply(add=[visible_doc("zotero/g/active/item/1", "locktopic ", 1)])
+    held = []
+
+    def manifest():
+        for lock in (a._write_lock, a._search_lock):
+            free = lock.acquire(blocking=False)
+            held.append(not free)
+            if free:
+                lock.release()
+        yield "zotero/g/active/"
+
+    found = a.search("locktopic", allowed_path_prefixes=manifest(), include_total=True)
+    assert held == [False, False]
+    assert found["total"] == 1 and paths(found["results"]) == {"zotero/g/active/item/1"}
+
+
+@pytest.mark.parametrize("sqlite_fallback", [False, True])
+def test_path_prefix_suffix_may_contain_a_newline(open_kb, sqlite_fallback):
+    """Review L3E r2 nit: Tantivy's regex `.` skipped newlines, so engines disagreed on a legal path."""
+    a = open_kb(vector_gate=2.0)
+    a.apply(add=[visible_doc("zotero/g/active/item\nline/1", "newlinetopic ", 1)])
+    ran = force_sqlite_fts(a) if sqlite_fallback else None
+    found = a.search("newlinetopic", allowed_path_prefixes=("zotero/g/active/",), include_total=True)
+    assert ran is None or ran
+    assert found["total"] == 1 and paths(found["results"]) == {"zotero/g/active/item\nline/1"}
+
+
 def _v2_keyword_schema():
     """The keyword schema before L3E added the raw path term (SCHEMA_VERSION 2)."""
     import tantivy

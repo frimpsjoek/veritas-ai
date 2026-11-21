@@ -253,7 +253,8 @@ class KeywordIndex:
         if path_prefixes is None:
             return query
         # RegexQuery full-matches a raw term. re.escape also handles spaces and Tantivy/Rust regex metacharacters.
-        pattern = "(?:" + "|".join(re.escape(prefix) for prefix in path_prefixes) + ")(.+)?"
+        # (?s:.*): the suffix may contain newlines, as for the SQLite and vector filters (review L3E r2).
+        pattern = "(?:" + "|".join(re.escape(prefix) for prefix in path_prefixes) + ")(?s:.*)"
         paths = tantivy.Query.regex_query(self.index.schema, "path", pattern)
         return query.and_must_match(tantivy.Query.const_score_query(paths, 0.0))
 

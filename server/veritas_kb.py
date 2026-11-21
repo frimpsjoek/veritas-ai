@@ -235,7 +235,9 @@ class KnowledgeBase:
         number of fused documents after all path filtering, paper/text deduplication, and before `limit`.
         `filters`: source, folder, tag, per_note, exclude_source, collections, year_from, year_to.
         """
-        return self._searching(lambda s: s.search(query, limit, allowed_path_prefixes=allowed_path_prefixes,
+        # Review L3E r2: snapshot a caller's iterable (maybe a lazy manifest generator) before taking any lock.
+        prefixes = kb._normalise_path_prefixes(allowed_path_prefixes)
+        return self._searching(lambda s: s.search(query, limit, allowed_path_prefixes=prefixes,
                                                   include_total=include_total, **filters))
 
     def similar_to_text(self, text: str, exclude: str | None = None, limit: int = 8) -> list[dict]:
