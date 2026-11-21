@@ -1244,7 +1244,12 @@ def _normalise_path_prefixes(prefixes) -> tuple[str, ...] | None:
         return None
     if isinstance(prefixes, (str, bytes, Path)):
         raise TypeError("allowed_path_prefixes must be an iterable of path prefixes, not one string")
-    result = tuple(dict.fromkeys(posix(prefix) for prefix in prefixes))
+    items = tuple(prefixes)
+    # Review L3E r3: a Path has already dropped a trailing "/", so "zotero/g/active/" would widen to "zotero/g/active"
+    # and admit "zotero/g/active-staged/..."; only literal strings carry the boundary the caller meant.
+    if any(not isinstance(prefix, str) for prefix in items):
+        raise TypeError("each allowed path prefix must be a str (a Path drops a trailing '/')")
+    result = tuple(dict.fromkeys(posix(prefix) for prefix in items))
     if any(not prefix for prefix in result):
         raise ValueError("an allowed path prefix must not be empty")
     return result
@@ -1736,9 +1741,11 @@ class Searcher:
     @staticmethod
     def _path_clause(path_prefixes: tuple[str, ...]) -> tuple[str, list[str]]:
         # Python's case-sensitive, literal startswith: LIKE folds ASCII case (and needs wildcard escaping), so compare
-        # the path's leading characters to the bound prefix instead. Each prefix is bound twice, never interpolated.
-        args = [value for prefix in path_prefixes for value in (prefix, prefix)]
-        return " AND (" + " OR ".join("substr(c.path, 1, length(?)) = ?" for _ in path_prefixes) + ")", args
+        # the path's leading characters to each prefix instead. Review L3E r3: the whole allow set is ONE bound JSON
+        # array, so a large visibility snapshot cannot exceed SQLite's host-parameter limit (which _fts would swallow
+        # as "no keyword candidates").
+        return (" AND EXISTS (SELECT 1 FROM json_each(?) p WHERE substr(c.path, 1, length(p.value)) = p.value)",
+                [json.dumps(list(path_prefixes))])
 
     def _fts(self, match: str, limit: int | None, path_prefixes: tuple[str, ...] | None = None) -> list[int]:
         if path_prefixes == ():

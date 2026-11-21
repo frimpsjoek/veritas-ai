@@ -1502,6 +1502,30 @@ def test_path_prefix_suffix_may_contain_a_newline(open_kb, sqlite_fallback):
     assert found["total"] == 1 and paths(found["results"]) == {"zotero/g/active/item\nline/1"}
 
 
+def test_path_prefix_elements_must_be_strings(open_kb):
+    """Review L3E r3 M1: Path("zotero/g/active/") is "zotero/g/active", which would admit "active-staged"."""
+    a = open_kb(vector_gate=2.0)
+    a.apply(add=[visible_doc("zotero/g/active-staged/item/1", "pathtypetopic ", 1)])
+    for bad in ([Path("zotero/g/active/")], ["zotero/g/active/", Path("zotero/g/other/")], [b"zotero/g/active/"]):
+        with pytest.raises(TypeError, match="must be a str"):
+            a.search("pathtypetopic", allowed_path_prefixes=bad, include_total=True)
+    found = a.search("pathtypetopic", allowed_path_prefixes=["zotero/g/active/"], include_total=True)
+    assert found == {"results": [], "total": 0}
+
+
+def test_sqlite_fallback_takes_more_prefixes_than_host_parameters(open_kb):
+    """Review L3E r3 M2: two bound parameters per prefix overflowed SQLite's limit (32766), and _fts swallowed the
+    OperationalError as "no keyword candidates"; the allow set is now one bound JSON array."""
+    a = open_kb(vector_gate=2.0)
+    a.apply(add=[visible_doc("zotero/g/active/item/1", "manyprefixtopic ", 1),
+                 visible_doc("zotero/g/hidden/item/2", "manyprefixtopic ", 2)])
+    ran = force_sqlite_fts(a)
+    prefixes = [f"zotero/g/unused{i}/" for i in range(40_000)] + ["zotero/g/active/"]
+    found = a.search("manyprefixtopic", allowed_path_prefixes=prefixes, include_total=True)
+    assert ran
+    assert found["total"] == 1 and paths(found["results"]) == {"zotero/g/active/item/1"}
+
+
 def _v2_keyword_schema():
     """The keyword schema before L3E added the raw path term (SCHEMA_VERSION 2)."""
     import tantivy

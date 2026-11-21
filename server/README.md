@@ -85,8 +85,10 @@ from veritas_kb import Document, KnowledgeBase
 index = KnowledgeBase("/srv/u/alice/knowledgebase/zotero/index/kb.sqlite",  # Tantivy goes to tantivy/ beside it
                       model_dir="/srv/models/snowflake-arctic-embed-s")      # backend="auto": MLX on macOS, else onnx
 paper = Document("zotero/ABCD1234", "A paper", "# A paper\n\n## Abstract\n\n...")
-index.apply(add=[paper], remove=["zotero/OLD00000"], meta={"zotero_web_version:lib": "1234"})  # one transaction
 chunks = index.count_chunks(paper)                     # exact output of the installed chunker (title fallback included)
+if chunks > 2000:                                      # so a caller can enforce its own cap before writing anything
+    raise ValueError("paper too large for this index")
+index.apply(add=[paper], remove=["zotero/OLD00000"], meta={"zotero_web_version:lib": "1234"})  # one transaction
 index.embed_pending(batch=64, max_chunks=64)           # bounded, resumable drain; omit max_chunks for legacy drain-all
 hits = index.search("spin waves in garnets", limit=8)  # same results as kb.py search
 visible = index.search("spin waves", limit=8, allowed_path_prefixes=("zotero/current/",), include_total=True)
