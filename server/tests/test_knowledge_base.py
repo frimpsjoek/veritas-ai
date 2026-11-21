@@ -1429,7 +1429,7 @@ def test_large_replacement_searches_see_complete_visible_generations(open_kb):
     old = {f"zotero/g/old/item/{i}" for i in range(25)}
     new = {f"zotero/g/new/item/{i}" for i in range(25)}
     a.apply(add=[visible_doc(p, "replacementtopic ", i) for i, p in enumerate(sorted(old))])
-    stop, snapshots, errors = threading.Event(), [], []
+    stop, started, snapshots, errors = threading.Event(), threading.Event(), [], []
 
     def searching():
         try:
@@ -1438,11 +1438,15 @@ def test_large_replacement_searches_see_complete_visible_generations(open_kb):
                     found = a.search("replacementtopic", limit=50,
                                      allowed_path_prefixes=(f"zotero/g/{generation}/",), include_total=True)
                     snapshots.append((generation, found))
+                    started.set()
         except BaseException as error:  # noqa: BLE001
             errors.append(error)
+        finally:
+            started.set()  # never leave the main thread waiting on a searcher that failed before its first snapshot
 
     thread = threading.Thread(target=searching)
     thread.start()
+    assert started.wait(30)  # review L3E r6 nit: replacements start only once the searcher is running
     for _ in range(2):
         a.apply(remove=sorted(old), add=[visible_doc(p, "replacementtopic ", 1000 + i)
                                         for i, p in enumerate(sorted(new))])
@@ -1450,6 +1454,7 @@ def test_large_replacement_searches_see_complete_visible_generations(open_kb):
                                         for i, p in enumerate(sorted(old))])
     stop.set()
     thread.join(30)
+    assert not thread.is_alive()
     assert not errors and snapshots
     for generation, found in snapshots:
         wanted = old if generation == "old" else new
