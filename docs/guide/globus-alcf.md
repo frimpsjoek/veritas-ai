@@ -154,6 +154,67 @@ of the default library use its unprefixed index paths. Paper-note reads addition
 before reading its content. Zotero status responses omit private item keys without changing the shared status cache;
 administrator reads and PDF Range support retain their existing behavior. Collection metadata policy is unchanged.
 
+## Optional hosted Zotero WebDAV attachments
+
+This feature is default-disabled. It is only personal Zotero **attachment file** synchronization; Zotero item
+metadata remains at `zotero.org`, and the shared administrator library stays read-only as described above. Zotero
+personal-library metadata delta sync and personal search indexes are separate follow-up work. Group-library files,
+remote Obsidian vaults, a replacement Zotero data server, and Veritas-side Zotero metadata writes are not supported.
+
+Configure a canonical public parent URL, not a URL derived from request headers:
+
+```sh
+VERITAS_WEBDAV_PUBLIC_URL=https://veritas.trinityscience.org/webdav
+# Optional positive-integer byte limits; defaults are 50 GiB and 5 GiB respectively.
+VERITAS_ZOTERO_STORAGE_BYTES=53687091200
+VERITAS_ZOTERO_USER_QUOTA_BYTES=5368709120
+```
+
+The URL must be absolute HTTPS and end in `/webdav`, with no credentials, query, or fragment. Invalid/absent
+configuration makes management GET return `{enabled:false}`, issuance/revocation return 503, and native DAV paths
+return 404. If the URL is valid but the store cannot be opened at startup (for example, an unreadable ledger),
+only WebDAV is disabled: the server logs `Zotero WebDAV disabled: ...`, management GET returns `{enabled:false}` with
+`error: "Zotero file storage is unavailable"`, and the same 503/404 responses apply. Quota zero, negative,
+malformed, or overflow values do not enable unlimited storage.
+
+In **Settings → Folders → Zotero file sync**, a verified Globus user can issue a random Basic username/password once,
+rotate it, or revoke it. The parent address has the form `https://veritas.trinityscience.org/webdav/<username>`.
+Enter that parent and its Basic credentials in desktop Zotero's WebDAV settings; Zotero appends `zotero/` itself.
+Veritas accepts native Basic authentication only in the exact `/webdav/` namespace and requires the URL username to
+match the Basic username. Browser/admin/A2A credentials are not alternatives. Rotation/revocation blocks new
+authentications but does not cancel an already authenticated bounded upload or delete stored bytes.
+
+Authentication is accepted only from loopback development or the canonical HTTPS proxy Host with exactly one
+`X-Forwarded-Proto: https`; the HTTP process still binds only to `127.0.0.1`. The intended production example is
+`Host: veritas.trinityscience.org` for the public default HTTPS port, **not** the internal proxy port 4443. Host or
+scheme mismatches fail closed. Credentials are PBKDF2-HMAC-SHA256-hashed. Verification and concurrent uploads have
+admission limits, and an upload without read progress for 60 seconds aborts and releases its reservation.
+
+Blobs are stored under `data/users/<tenant>/zotero-storage/{uploads,objects}`; metadata lives in
+`data/zotero-storage.sqlite` beside its ledger lock. Directories are mode `0700`, the ledger and blobs are `0600`,
+and the data tree is outside `data/web`. The service takes an exclusive process-lifetime lock before recovery and uses
+local SQLite WAL with full synchronous commits. Run only one Python service process per ledger, on a supported local
+filesystem. Backup the ledger and blobs consistently (with the service stopped or a storage-consistent snapshot), not
+one without the other.
+
+Pool usage is active + reserved + awaiting-cleanup bytes; replacements temporarily require old + new space.
+Each tenant is also limited to 10,000 distinct active/pending attachment names, preventing zero-byte/tiny-file metadata
+and PROPFIND exhaustion while permitting replacement at that limit. Tenant status exposes only the tenant's own usage and the fixed pool capacity, never exact aggregate activity of other
+users. New object versions become visible only after the active-row publication commit. Garbage accounting persists
+until old-byte cleanup finishes, and startup recovery handles upload/publication/DELETE crash points. Missing or
+inconsistent active blobs fail closed. Search-index rebuilds and chat/agent state do not own or delete these blobs.
+
+**The GB10 deployment is not ready to enable this by default.** Its current nginx proxy has
+`client_max_body_size 45m`. Before rollout, deliberately change that cap and verify DAV method/header forwarding,
+request buffering, streaming behavior, and upload/read timeouts. The app-level 50-GiB pool is not a proxy body limit.
+Available disk, I/O limits, and backup capacity also need room for replacement temporary copies in addition to the
+active-library quota.
+
+Unit coverage exercises a source-derived Zotero WebDAV probe, multi-chunk upload/download, two-tenant authorization,
+exact quota/concurrency boundaries, process death at publication stages, and recovery. Before enabling tenant access,
+also record real desktop Zotero verification plus a two-client upload/download test through the intended HTTPS proxy.
+Those desktop/proxy tests are not established by unit tests alone.
+
 ## Checks
 
 After authorized deployment, test both successful Globus sign-in and cancellation in a browser. Confirm that only

@@ -108,6 +108,7 @@ export const ROWS = [
 
   // ------------------------------------------------------------------ Search index
   { id: 'folders.list', section: 'folders', label: 'Folders the search reads', help: 'Any folder of notes, PDFs and images on the computer that runs Veritas. An Obsidian vault and your Zotero library are recognised by what is in them.', kind: 'custom', hosts: WEB, store: 'none', custom: 'folders', keywords: 'folders vault obsidian zotero library add folder markdown pdf' },
+  { id: 'folders.zoteroStorage', section: 'folders', label: 'Zotero file sync', help: 'Store personal Zotero attachments on Veritas through desktop Zotero WebDAV. Zotero metadata stays at zotero.org.', kind: 'custom', hosts: ['web'], store: 'none', custom: 'zoteroStorage', keywords: 'zotero webdav attachment sync file storage credentials quota' },
   { id: 'index.status', section: 'index', label: 'What the search covers', help: 'What is indexed, and whether it is up to date.', kind: 'custom', hosts: WEB, store: 'none', custom: 'indexStatus', keywords: 'index update coverage documents' },
   { id: 'index.open', section: 'index', label: 'Index status', help: "What's indexed, what's running now, and buttons to update, stop or re-read sources.", kind: 'action', hosts: OBSIDIAN, store: 'none', action: 'openIndexStatus', buttonLabel: 'Open' },
 

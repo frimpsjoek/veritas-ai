@@ -73,6 +73,9 @@ GET  /auth/globus/me                           safe Globus principal and inferen
 POST /auth/globus/logout                       revoke only this independent Globus application session
 GET  /auth/globus/agent-token                  current sidecar-secret + tenant only; fresh ALCF credentials
 POST /a2a                                      A2A message/send; dedicated `data/a2a-token` only, never local/cookie auth
+GET  /zotero-storage                            status for the verified Globus user's own quota/credential state
+POST|DELETE /zotero-storage/credentials          issue/rotate/revoke one-time native Basic credentials (Globus only)
+/webdav/<username>[/zotero[/<FILE>]]             independent Zotero personal attachment WebDAV, Basic + HTTPS edge
 
 Listens on 127.0.0.1 only. The phone reaches it through `tailscale serve`, which forwards tailnet requests to this
 port with the Tailscale host name in the Host header. `request_class` sorts every request by its headers:
@@ -86,6 +89,10 @@ nothing. No CORS headers are sent. POST /a2a always requires its independent dat
 The only cross-site navigation exception is exact GET /auth/globus/callback, which still consumes one-use state and a
 browser-binding cookie. Globus `vg_session` requests get read-only shared-library routes plus private interactive
 workspaces; the sidecar proxy derives tenant from that verified session, never from an inbound tenant header.
+Native `/webdav/` traffic is dispatched separately, before this ordinary gate, and still uses the foreign-origin
+refusal. It requires its own route-scoped random Basic credential even on loopback; no cookie/admin/A2A fallback is
+allowed. Native credential issuance is separately limited to the existing verified Globus principal, and the whole
+feature is disabled unless the operator configures a canonical HTTPS `/webdav` parent URL.
 """
 from __future__ import annotations
 
@@ -125,7 +132,9 @@ import pdf_route
 import tickets
 import web_origins
 import web_app
+import zotero_storage
 import web_page
+import webdav
 
 LOCK = threading.Lock()
 # What the agents' MCP tools may call; every other route (note editing, files, the Zotero plugin's own routes,
@@ -139,6 +148,8 @@ TOKEN_FILE = kb.data_dir() / "api-token"
 LOCAL_HOSTS = ("127.0.0.1", "localhost")
 CONFLICT = re.compile(r"\.conflict-macos-(\d{8}T\d{6}Z)\.md$")
 AGENT_SIDECAR: agent_api.Sidecar | None = None  # set by serve(); None means /agent/* answers 503
+ZOTERO_STORAGE: zotero_storage.StorageService | None = None
+ZOTERO_STORAGE_CONFIG = zotero_storage.PublicConfig(None)
 
 
 def token() -> str:
@@ -178,6 +189,10 @@ def globus_route_allowed(method: str, path: str) -> bool:
                           ("GET", "/auth/globus/status"), ("GET", "/auth/globus/login"),
                           ("GET", "/auth/globus/callback"), ("POST", "/web/state")}:
         return True
+    if path == "/zotero-storage":
+        return method == "GET"
+    if path == "/zotero-storage/credentials":
+        return method in {"POST", "DELETE"}
     if path.startswith("/agent/"):
         relative = path[len("/agent"):]
         if (relative.startswith(("/reviews", "/routines"))
@@ -302,6 +317,37 @@ def _web_state_path(identity: dict | None) -> Path | None:
     if not identity or identity.get("kind") != "globus":
         return None
     return _require_globus().store.root / identity["tenant"] / "web-state.json"
+
+
+def _storage_tenant(identity: dict | None) -> str:
+    if identity is None:
+        raise globus_auth.AuthError(401, "Globus sign-in is required")
+    if identity.get("kind") != "globus":
+        raise globus_auth.AuthError(403, "personal Zotero storage requires Globus sign-in")
+    return identity["tenant"]
+
+
+def _storage_mutation(handler: Handler, identity: dict | None) -> tuple[zotero_storage.StorageService, str]:
+    tenant = _storage_tenant(identity)
+    service = ZOTERO_STORAGE
+    if service is None:
+        raise globus_auth.AuthError(503, "Zotero WebDAV is not configured")
+    if not zotero_storage.trusted_transport(handler.headers, handler.client_address[0], ZOTERO_STORAGE_CONFIG):
+        raise globus_auth.AuthError(403, "Zotero credentials require the configured HTTPS endpoint")
+    return service, tenant
+
+
+def _storage_status(identity: dict | None) -> dict:
+    tenant = _storage_tenant(identity)
+    if ZOTERO_STORAGE is None:
+        status = {"enabled": False, "issued": False, "user_used": 0,
+                  "user_quota": ZOTERO_STORAGE_CONFIG.user_bytes,
+                  "pool_quota": ZOTERO_STORAGE_CONFIG.pool_bytes}
+        if ZOTERO_STORAGE_CONFIG.enabled:
+            # Configured, but serve() could not open the store (e.g. an unreadable ledger).
+            status["error"] = "Zotero file storage is unavailable"
+        return status
+    return ZOTERO_STORAGE.status(tenant)
 
 
 def searcher() -> kb.Searcher:
@@ -562,8 +608,28 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Vary", "Origin")
         super().end_headers()
 
+    def _native_dav(self) -> bool:
+        """Independently authenticated native DAV; never fall through with its identity into Veritas routes."""
+        if not webdav.matches(self.path):
+            return False
+
+        def handle() -> None:
+            if request_class(self.headers) == "foreign":
+                self._send(403, {"error": "requests from other websites are refused"})
+                return
+            service = ZOTERO_STORAGE
+            if service is None:
+                self._send(404, {"error": "not found"})
+                return
+            webdav.dispatch(self, service, ZOTERO_STORAGE_CONFIG)
+
+        self._run(handle)
+        return True
+
     def do_OPTIONS(self) -> None:
-        """CORS preflight: answered for listed web-app origins only."""
+        """CORS preflight, or tenant-independent native DAV capabilities for Zotero."""
+        if self._native_dav():
+            return
         self._cors_origin = None
         if request_class(self.headers) != "app":
             return self._send(403, {"error": "requests from other websites are refused"})
@@ -690,6 +756,8 @@ class Handler(BaseHTTPRequestHandler):
         return True
 
     def do_GET(self) -> None:
+        if self._native_dav():
+            return
         if not self._allowed():
             return
         route, q = urlparse(self.path).path, self._query()
@@ -764,6 +832,8 @@ class Handler(BaseHTTPRequestHandler):
                 globus_identity = _require_globus_principal(self.headers)
                 return self._send(200, {**globus_identity, "inference": manager.inference_status(globus_identity["tenant"])},
                                   AUTH_HEADERS)
+            if route == "/zotero-storage":
+                return self._send(200, _storage_status(getattr(self, "_identity", None)), AUTH_HEADERS)
             if route == "/.well-known/agent-card.json":
                 return self._send(200, a2a_api.agent_card())
             if self._forward_to_agent_sidecar(route):
@@ -950,6 +1020,8 @@ class Handler(BaseHTTPRequestHandler):
         self._run(handle)
 
     def do_POST(self) -> None:
+        if self._native_dav():
+            return
         if not self._allowed():
             return
         route = urlparse(self.path).path
@@ -964,6 +1036,14 @@ class Handler(BaseHTTPRequestHandler):
                 manager.logout(_cookie(self.headers, GLOBUS_SESSION_COOKIE))
                 cleared = globus_cookie(GLOBUS_SESSION_COOKIE, "", 0, manager.config.secure_cookie, "Strict", "/")
                 return self._send(200, {"ok": True}, {**AUTH_HEADERS, "Set-Cookie": cleared})
+            if route == "/zotero-storage/credentials":
+                service, tenant = _storage_mutation(self, getattr(self, "_identity", None))
+                try:
+                    self._body(limit=4096)
+                except json.JSONDecodeError:
+                    return self._send(400, {"error": "invalid JSON"})
+                previous = service.status(tenant)["issued"]
+                return self._send(200 if previous else 201, service.issue_credentials(tenant), AUTH_HEADERS)
             if route == "/a2a":
                 return a2a_api.message_send(self, AGENT_SIDECAR)
             if self._forward_to_agent_sidecar(route):
@@ -1108,7 +1188,9 @@ class Handler(BaseHTTPRequestHandler):
         self._run(handle)
 
     def do_PUT(self) -> None:
-        """Only /skills/<name> and /digests/<file> use PUT."""
+        """Zotero native WebDAV, /skills/<name>, and /digests/<file> use PUT."""
+        if self._native_dav():
+            return
         if not self._allowed():
             return
         route = urlparse(self.path).path
@@ -1137,7 +1219,9 @@ class Handler(BaseHTTPRequestHandler):
         self._run(handle)
 
     def do_DELETE(self) -> None:
-        """/agent/* (removing a conversation or an MCP server) and /skills/<name> use DELETE; nothing else does."""
+        """Native WebDAV and the existing agent/skill/source deletion routes."""
+        if self._native_dav():
+            return
         if not self._allowed():
             return
         route = urlparse(self.path).path
@@ -1148,6 +1232,13 @@ class Handler(BaseHTTPRequestHandler):
                 raise PermissionError("not available to agents")
             if self._forward_to_agent_sidecar(route):
                 return
+            if route == "/zotero-storage/credentials":
+                service, tenant = _storage_mutation(self, getattr(self, "_identity", None))
+                try:
+                    self._body(limit=4096)
+                except json.JSONDecodeError:
+                    return self._send(400, {"error": "invalid JSON"})
+                return self._send(200, {"ok": service.revoke_credentials(tenant)}, AUTH_HEADERS)
             if route.startswith("/sources/"):
                 try:
                     sources.remove(unquote(route[len("/sources/"):]))
@@ -1169,6 +1260,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PATCH(self) -> None:
         """Only /sources/<name> uses PATCH: {"enabled"?, "skip"?}; /sources/output takes {"name": str | null}."""
+        if self._native_dav():
+            return
         if not self._allowed():
             return
         route = urlparse(self.path).path
@@ -1199,6 +1292,18 @@ class Handler(BaseHTTPRequestHandler):
 
         self._run(handle)
 
+    def do_HEAD(self) -> None:
+        if not self._native_dav():
+            self.send_error(501, "Unsupported method")
+
+    def do_PROPFIND(self) -> None:
+        if not self._native_dav():
+            self.send_error(501, "Unsupported method")
+
+    def do_MKCOL(self) -> None:
+        if not self._native_dav():
+            self.send_error(501, "Unsupported method")
+
     def log_message(self, *args) -> None:  # quiet
         pass
 
@@ -1206,7 +1311,7 @@ class Handler(BaseHTTPRequestHandler):
 def restart_when_code_changes() -> None:
     """A server outlives the Obsidian that started it and serves the phone, so after an update it replaces itself
     with the new code (same process, same port) instead of leaving the phone with nothing."""
-    files = [kb.HOME / name for name in ("kb.py", "http_api.py", "zotero.py", "mlx_embed.py", "keyword_index.py", "media.py", "zotero_files.py", "paper_notes.py", "agent_api.py", "a2a_api.py", "globus_auth.py", "user_store.py", "plugin_updates.py", "skills.py", "radar_api.py", "web_app.py", "pdf_route.py", "pending_adds.py", "paper_figures.py", "sources.py", "site_icons.py")]
+    files = [kb.HOME / name for name in ("kb.py", "http_api.py", "zotero.py", "mlx_embed.py", "keyword_index.py", "media.py", "zotero_files.py", "paper_notes.py", "agent_api.py", "a2a_api.py", "globus_auth.py", "user_store.py", "plugin_updates.py", "skills.py", "radar_api.py", "web_app.py", "pdf_route.py", "pending_adds.py", "paper_figures.py", "sources.py", "site_icons.py", "zotero_storage.py", "webdav.py")]
     files.append(kb.HOME / agent_api.AGENTD_ENTRY)  # a rebuilt sidecar is an update too
     started = {f: f.stat().st_mtime for f in files if f.exists()}
     while True:
@@ -1222,7 +1327,7 @@ def sidecar_kb_url(port: int) -> str:
 
 
 def serve(port: int) -> None:
-    global AGENT_SIDECAR, GLOBUS_AUTH
+    global AGENT_SIDECAR, GLOBUS_AUTH, ZOTERO_STORAGE, ZOTERO_STORAGE_CONFIG
     token()  # create it on first start, so the Mac plugin can hand it to the phone
     a2a_api.ensure_token()  # the A2A-only credential is independent of browser sign-in
     try:
@@ -1230,6 +1335,14 @@ def serve(port: int) -> None:
     except globus_auth.AuthError:
         GLOBUS_AUTH = None
         print("Globus sign-in disabled: invalid Globus configuration", file=sys.stderr)
+    ZOTERO_STORAGE = None
+    try:
+        ZOTERO_STORAGE_CONFIG = zotero_storage.public_config_from_environment()
+        if ZOTERO_STORAGE_CONFIG.enabled:
+            ZOTERO_STORAGE = zotero_storage.StorageService(
+                kb.data_dir() / "users", kb.data_dir() / "zotero-storage.sqlite", ZOTERO_STORAGE_CONFIG)
+    except (OSError, ValueError, zotero_storage.StorageError) as error:
+        print(f"Zotero WebDAV disabled: {type(error).__name__}", file=sys.stderr)
     try:
         # The sidecar reaches the library through this server, on the port it actually runs on (it used to be told
         # 27182 whatever the port, so a server on another port gave an AI that could not see the library).
