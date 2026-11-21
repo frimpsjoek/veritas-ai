@@ -29,10 +29,12 @@ there is no `pyproject.toml` to install the engine as a library.
   unmarked folder from before the marker must additionally have both `meta.json` and `schema-version`, open as a
   Tantivy index, and carry the keyword schema; anything else, a subfolder or a link refuses the rebuild untouched.
 - R5b. A keyword folder is bound to its database (chunk ids are row numbers that two databases share): the database
-  keeps a random id in `meta` (`db_uuid`, added on first open) and the marker names it. A `keyword_dir` bound to
-  another database is refused (`keyword_index.KeywordIndexBindingError`, a RuntimeError) and left untouched; an
-  unbound one (from before the binding) is rebuilt once from the database and bound. `kb.Searcher` with neither
-  path named (the legacy server's `data/tantivy`) rebuilds a folder bound to another database instead, as before.
+  keeps a random id in `meta` (`db_uuid`, added when a writer first opens it) and the marker names it. A
+  `keyword_dir` bound to another database is refused (`keyword_index.KeywordIndexBindingError`, a RuntimeError) and
+  left untouched; so is any bound one, for a reader too, while the database has no id yet (no writer has opened it).
+  An unbound one (from before the binding) is rebuilt once from the database and bound. `kb.Searcher` with neither
+  path named (the legacy server's `data/tantivy`) rebuilds a folder bound to another database instead, as before; a
+  reader of that pair leaves such a folder unloaded and searches SQLite FTS.
 - R6. Back-compatibility: `kb.py` keeps its whole API and CLI, `kb.py serve`, `bin/veritas`, the LaunchAgent,
   Homebrew and PyInstaller builds are unchanged, the on-disk format is unchanged (a database written by a
   `KnowledgeBase` is a Veritas database), and every existing test passes without edits.
