@@ -70,7 +70,9 @@ class KnowledgeBase:
         callable `(texts, query=False, batch_size=16) -> float32[n, 384]` with an `mlx` attribute). `vector_gate`:
         the cosine below which meaning-only hits are dropped (default kb.VECTOR_GATE). RuntimeError when this process
         already has either path open; ValueError when `keyword_dir` contains the database or lies inside it, or either
-        path contains or lies inside one an open KnowledgeBase holds (a keyword rebuild empties its folder)."""
+        path contains or lies inside one an open KnowledgeBase holds (a keyword rebuild empties its folder);
+        keyword_index.KeywordIndexBindingError (a RuntimeError) when `keyword_dir` is another database's keyword index
+        (the folder is bound to its database's id, kept in meta db_uuid; an unbound legacy folder is rebuilt and bound)."""
         self.db_path = Path(db_path).resolve()
         self.keyword_dir = Path(keyword_dir).resolve() if keyword_dir is not None else self.db_path.parent / "tantivy"
         if _nested(self.keyword_dir, self.db_path):  # also covers the -wal/-shm files beside the database

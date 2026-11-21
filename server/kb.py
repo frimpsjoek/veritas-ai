@@ -1241,7 +1241,14 @@ class Searcher:
 
         self.db_path = db_path
         self.db = connect(keep=True, path=db_path)
-        self.keywords = KeywordIndex(Path(keyword_dir) if keyword_dir is not None else data_dir() / "tantivy", writer)
+        # The module's own pair (no paths named) rebuilds a keyword folder bound to another database, as the legacy
+        # server always has (an import may replace kb.sqlite alone); a named folder of another database is refused.
+        try:
+            self.keywords = KeywordIndex(Path(keyword_dir) if keyword_dir is not None else data_dir() / "tantivy",
+                                         writer, self.db, rebind=keyword_dir is None and db_path is None)
+        except BaseException:
+            self.db.close()
+            raise
         self._embed_factory, self.vector_gate = embed_factory, vector_gate
         # Writes that removed rows bump the generation (changed(full=True)): SQLite reuses the highest chunk id after
         # a delete, so vectors and keywords loaded for an id may now belong to other text. A refresh that sees a new

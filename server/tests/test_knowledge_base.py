@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import socket
 import sqlite3
 import subprocess
@@ -372,6 +373,120 @@ def test_rebuild_marks_the_folder_and_rebuilds_marked_or_legacy_ones(open_kb, is
         assert (keyword_dir / "schema-version").read_text() == keyword_index.SCHEMA_VERSION
         assert (keyword_dir / keyword_index.MARKER).is_file()
         again.close()
+
+
+def _folder_state(folder: Path) -> dict[str, bytes]:
+    return {p.name: p.read_bytes() for p in sorted(folder.iterdir())}
+
+
+def _db_uuid(db_path: Path) -> str:
+    db = sqlite3.connect(db_path)
+    try:
+        return db.execute("SELECT value FROM meta WHERE key='db_uuid'").fetchone()[0]
+    finally:
+        db.close()
+
+
+def _count_rebuilds(monkeypatch) -> list[Path]:
+    import keyword_index
+
+    calls, real = [], keyword_index.KeywordIndex._rebuild
+
+    def spy(self, *args, **kwargs):
+        calls.append(self.path)
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(keyword_index.KeywordIndex, "_rebuild", spy)
+    return calls
+
+
+def test_keyword_folder_of_another_database_refused(open_kb, isolated_kb):
+    """Review r6: a keyword folder is bound to its database. Bob's database opened with Alice's folder would load her
+    ids.npy, count his overlapping chunk ids as indexed and rank them with her words; it is refused, untouched."""
+    import keyword_index
+
+    a = open_kb()
+    a.apply(add=[doc("zotero/A", "Xenon lamps glow brightly")])
+    assert paths(a.search("xenon")) == {"zotero/A"}
+    keyword_dir = a.keyword_dir
+    assert _db_uuid(a.db_path) in (keyword_dir / keyword_index.MARKER).read_text()
+    a.close()
+    before = _folder_state(keyword_dir)
+    bob = index_dir(isolated_kb, "bob") / "kb.sqlite"
+    seed = KnowledgeBase(bob, embedder=HashEmbedder())  # bob's own database, chunk ids overlapping alice's
+    seed.apply(add=[doc("zotero/B", "Yttrium garnets are hard")])
+    seed.close()
+    with pytest.raises(keyword_index.KeywordIndexBindingError, match="another database"):
+        KnowledgeBase(bob, keyword_dir=keyword_dir, embedder=HashEmbedder())
+    with pytest.raises(RuntimeError, match="another database"):  # a fresh database too
+        KnowledgeBase(isolated_kb / "carol" / "kb.sqlite", keyword_dir=keyword_dir, embedder=HashEmbedder())
+    assert _folder_state(keyword_dir) == before
+    again = open_kb()  # the refusals claimed nothing, and alice's folder still serves her
+    assert paths(again.search("xenon")) == {"zotero/A"}
+
+
+def test_unbound_legacy_folder_rebuilt_once_and_bound(open_kb, monkeypatch):
+    """A folder without a database identity (legacy marker, or none) is rebuilt from the database once and bound;
+    a normal reopen loads it without rebuilding."""
+    import keyword_index
+
+    a = open_kb()
+    a.apply(add=[doc("zotero/A", "Xenon lamps glow brightly")])
+    assert paths(a.search("xenon")) == {"zotero/A"}
+    keyword_dir, db_path = a.keyword_dir, a.db_path
+    a.close()
+    rebuilds = _count_rebuilds(monkeypatch)
+    reopened = open_kb()
+    assert paths(reopened.search("xenon")) == {"zotero/A"}
+    assert rebuilds == []  # bound to this database: loaded as it is
+    reopened.close()
+    for legacy_marker in (True, False):  # the pre-binding marker text; no marker at all (legacy data/tantivy)
+        if legacy_marker:
+            (keyword_dir / keyword_index.MARKER).write_text(
+                "Tantivy keyword index of a Veritas kb.sqlite; rebuilt from it when needed.\n")
+        else:
+            (keyword_dir / keyword_index.MARKER).unlink()
+        legacy = open_kb()
+        assert paths(legacy.search("xenon")) == {"zotero/A"}
+        assert rebuilds == [keyword_dir]
+        assert _db_uuid(db_path) in (keyword_dir / keyword_index.MARKER).read_text()
+        legacy.close()
+        rebuilds.clear()
+        bound = open_kb()
+        assert paths(bound.search("xenon")) == {"zotero/A"}
+        assert rebuilds == []
+        bound.close()
+
+
+def test_module_default_folder_rebound_not_refused(open_kb, isolated_kb, monkeypatch):
+    """The legacy server's own pair (kb.DB_PATH with data/tantivy) is rebuilt when the folder is bound to another
+    database (an import replaced kb.sqlite but not tantivy/), as before: only a named keyword folder is refused."""
+    import keyword_index
+
+    a = open_kb()
+    a.apply(add=[doc("zotero/A", "Xenon lamps glow brightly")])
+    a.search("xenon")
+    a.close()
+    data = kb.data_dir()
+    data.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(a.db_path, kb.DB_PATH)
+    shutil.copytree(a.keyword_dir, data / "tantivy")
+    db = sqlite3.connect(kb.DB_PATH)
+    db.execute("UPDATE meta SET value='an-imported-database' WHERE key='db_uuid'")
+    db.commit()
+    db.close()
+    rebuilds = _count_rebuilds(monkeypatch)
+    searcher = kb.Searcher(writer=True)
+    try:
+        searcher.keywords.sync(searcher.db)
+        assert rebuilds == [data / "tantivy"]
+        assert "an-imported-database" in (data / "tantivy" / keyword_index.MARKER).read_text()
+        assert searcher.keywords.search(["xenon"], 10)
+        rebuilds.clear()
+        searcher.keywords.sync(searcher.db)
+        assert rebuilds == []
+    finally:
+        searcher.close()
 
 
 def test_recognition_rule(tmp_path):

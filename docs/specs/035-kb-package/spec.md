@@ -27,6 +27,11 @@ there is no `pyproject.toml` to install the engine as a library.
   open instance holds. A rebuild empties the folder only when it holds nothing but Tantivy's files, `schema-version`,
   `ids.npy` and the `.veritas-keyword-index` marker it writes (an unmarked folder from before the marker must also
   hold `meta.json` or `schema-version`); anything else, a subfolder or a link refuses the rebuild and stays as it is.
+- R5b. A keyword folder is bound to its database (chunk ids are row numbers that two databases share): the database
+  keeps a random id in `meta` (`db_uuid`, added on first open) and the marker names it. A `keyword_dir` bound to
+  another database is refused (`keyword_index.KeywordIndexBindingError`, a RuntimeError) and left untouched; an
+  unbound one (from before the binding) is rebuilt once from the database and bound. `kb.Searcher` with neither
+  path named (the legacy server's `data/tantivy`) rebuilds a folder bound to another database instead, as before.
 - R6. Back-compatibility: `kb.py` keeps its whole API and CLI, `kb.py serve`, `bin/veritas`, the LaunchAgent,
   Homebrew and PyInstaller builds are unchanged, the on-disk format is unchanged (a database written by a
   `KnowledgeBase` is a Veritas database), and every existing test passes without edits.

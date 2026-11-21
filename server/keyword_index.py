@@ -6,12 +6,17 @@ SQLite FTS5 has to score every chunk that contains a query word before it can ra
 
 The Tantivy index is derived data: it lives in data/tantivy, is rebuilt from SQLite when missing or broken
 (~7 s), and only the index server writes to it (`writer=True`); every other process reads.
+
+A keyword folder is bound to one database: MARKER names the database's identity (a random id in its meta table, key
+db_uuid), since chunk ids are only row numbers and two databases share them. A folder bound to another database is
+refused, untouched; one bound to none (made before the binding) is rebuilt once from the database and bound.
 """
 from __future__ import annotations
 
 import os
 import re
 import sqlite3
+import uuid
 from pathlib import Path
 
 import numpy as np
@@ -35,8 +40,38 @@ _TANTIVY_FILE = re.compile(r"[0-9a-f]{32}(\.\d+)?\.(idx|pos|term|store|fast|fiel
                            r"|\.tmp[A-Za-z0-9]{6}")  # an atomic write's temporary file, left by a crash
 
 
+_BOUND_TO = re.compile(r"^database: (\S+)$", re.MULTILINE)  # the MARKER line naming the database's identity
+
+
 class NotAKeywordIndexError(RuntimeError):
     """The keyword folder holds files this index did not write; it is left as it is."""
+
+
+class KeywordIndexBindingError(RuntimeError):
+    """The keyword folder is the index of another database; it is left as it is."""
+
+
+def database_id(db: sqlite3.Connection, create: bool) -> str | None:
+    """The database's identity (meta db_uuid), made on first use when `create`. None when there is none (yet), or no
+    meta table to keep it in."""
+    try:
+        row = db.execute("SELECT value FROM meta WHERE key='db_uuid'").fetchone()
+        if row is None and create:
+            db.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('db_uuid', ?)", (uuid.uuid4().hex,))
+            db.commit()
+            row = db.execute("SELECT value FROM meta WHERE key='db_uuid'").fetchone()
+    except sqlite3.OperationalError:
+        return None
+    return row[0] if row else None
+
+
+def bound_to(path: Path) -> str | None:
+    """The identity of the database the folder is bound to; None for an unbound (or missing) folder."""
+    try:
+        found = _BOUND_TO.search((path / MARKER).read_text())
+    except (OSError, UnicodeDecodeError):
+        return None
+    return found.group(1) if found else None
 
 
 def owned_by_index(path: Path) -> bool:
@@ -74,12 +109,23 @@ def _schema() -> tantivy.Schema:
 
 
 class KeywordIndex:
-    def __init__(self, path: Path, writer: bool) -> None:
+    def __init__(self, path: Path, writer: bool, db: sqlite3.Connection | None = None, rebind: bool = False) -> None:
+        """`db`: the database this index belongs to; the folder's binding is checked against it now
+        (KeywordIndexBindingError for a folder bound to another), otherwise at the first sync. `rebind`: the folder is the module's own
+        (data/tantivy beside kb.DB_PATH), rebuilt for this database instead of refused when bound to another."""
         self.path = path
         self.can_write = writer
+        self.rebind = rebind
         self.ids_file = path / "ids.npy"
         self.index: tantivy.Index | None = None
         self.ids: set[int] = set()
+        if db is not None:
+            mine, bound = database_id(db, create=writer), bound_to(path)
+            if mine is not None and bound != mine:
+                if bound is not None and not rebind:
+                    raise self._foreign(db, mine, bound)
+                if writer or bound is not None:
+                    return  # not loaded: the writer's first sync rebuilds and binds it (a reader keeps an unbound one)
         try:
             version = (path / "schema-version").read_text().strip() if (path / "schema-version").exists() else ""
             if (path / "meta.json").exists() and version == SCHEMA_VERSION:
@@ -100,10 +146,13 @@ class KeywordIndex:
             if self.index is not None:
                 self.index.reload()
             return 0
+        mine, bound = database_id(db, create=True), bound_to(self.path)
+        if mine is not None and bound is not None and bound != mine and not self.rebind:
+            raise self._foreign(db, mine, bound)  # checked before any rebuild, which would empty the folder
         dirty = self._dirty(db)
         live = {r[0] for r in db.execute("SELECT id FROM chunks")}
-        if self.index is None or (self.ids and not self.ids & live and live):
-            changed = self._rebuild(db, live)
+        if self.index is None or (mine is not None and bound != mine) or (self.ids and not self.ids & live and live):
+            changed = self._rebuild(db, live, mine)
             self._clean(db, dirty)
             return changed
         new, gone = (live - self.ids) | ((set(replaced) | dirty) & live), self.ids - live
@@ -122,6 +171,13 @@ class KeywordIndex:
         self._clean(db, dirty)
         return len(new) + len(gone)
 
+    def _foreign(self, db: sqlite3.Connection, mine: str, bound: str) -> KeywordIndexBindingError:
+        name = next((r[2] for r in db.execute("PRAGMA database_list") if r[1] == "main"), "") or "this database"
+        return KeywordIndexBindingError(
+            f"{self.path} is the keyword index of another database (id {bound}), not of {name} (id {mine}); refusing "
+            f"to use or rebuild it. Give each database its own keyword folder (or delete this one if its database is "
+            f"gone).")
+
     @staticmethod
     def _dirty(db: sqlite3.Connection) -> set[int]:
         try:
@@ -137,10 +193,11 @@ class KeywordIndex:
             db.executemany("DELETE FROM keyword_dirty WHERE id=?", [(cid,) for cid in dirty])
             db.commit()
 
-    def _rebuild(self, db: sqlite3.Connection, live: set[int]) -> int:
+    def _rebuild(self, db: sqlite3.Connection, live: set[int], database: str | None = None) -> int:
         _clear(self.path)
         os.makedirs(self.path, exist_ok=True)
-        (self.path / MARKER).write_text("Tantivy keyword index of a Veritas kb.sqlite; rebuilt from it when needed.\n")
+        (self.path / MARKER).write_text("Tantivy keyword index of a Veritas kb.sqlite; rebuilt from it when needed.\n"
+                                        + (f"database: {database}\n" if database else ""))
         self.index = tantivy.Index(_schema(), path=str(self.path))
         (self.path / "schema-version").write_text(SCHEMA_VERSION)
         writer = self.index.writer(heap_size=300_000_000, num_threads=4)
