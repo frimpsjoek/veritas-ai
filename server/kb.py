@@ -1169,7 +1169,9 @@ def embed_pending(db: sqlite3.Connection, verbose: bool = True, batch: int = 256
     done, started, last_stamp = 0, time.time(), time.time()
     unstamped = 0  # vectors committed since vectors_at was last stamped
     try:
-        while done < todo:
+        # Review L3E r5 nit: drain-all (max_chunks None) keeps the legacy "until nothing is pending", so chunks another
+        # process adds mid-call are embedded too; only a bounded call stops at the count measured at entry.
+        while max_chunks is None or done < todo:
             count = min(batch, todo - done) if max_chunks is not None else batch
             rows = db.execute(f"SELECT c.id, n.title, c.heading, c.text, c.path FROM chunks c JOIN notes n ON n.path=c.path "
                               f"WHERE c.id NOT IN (SELECT id FROM vecs) ORDER BY {EMBED_ORDER} LIMIT ?", (count,)).fetchall()
@@ -1190,7 +1192,7 @@ def embed_pending(db: sqlite3.Connection, verbose: bool = True, batch: int = 256
                 progress.advance(done)
             if verbose:
                 rate = done / (time.time() - started)
-                eta = (todo - done) / max(rate, 1e-9) / 60
+                eta = max(todo - done, 0) / max(rate, 1e-9) / 60
                 print(f"  vectors: {done}/{todo}, {rate:.1f} chunks/s, ~{eta:.0f} min left", file=sys.stderr, flush=True)
     except BaseException:
         if unstamped:  # searchers compare vectors_at: unstamped, the committed batches stay unseen (review r4)
@@ -1524,12 +1526,15 @@ class Searcher:
                 visible = np.fromiter((p.startswith(path_prefixes) for p in self.note_paths), dtype=bool,
                                       count=len(self.note_paths))
                 scores = np.where(visible[self.vec_notes], scores, -np.inf)
+            gate = VECTOR_GATE if self.vector_gate is None else self.vector_gate
             if pool is None:
-                top = np.argsort(-scores)
+                # Review L3E r5: sort only vectors past the gate (masked ones are -inf), not the whole index, so an
+                # exact total over a small visible generation does not pay for every staged vector under the locks.
+                top = np.flatnonzero(scores >= gate)
+                top = top[np.argsort(-scores[top])]
             else:
                 top = np.argpartition(-scores, min(pool * 3, len(scores) - 1))[:pool * 3]
                 top = top[np.argsort(-scores[top])]
-            gate = VECTOR_GATE if self.vector_gate is None else self.vector_gate
             vec_ids = [int(self.ids[i]) for i in top if scores[i] >= gate]
             if allowed is not None:
                 vec_ids = self._filter_ids(vec_ids, allowed)

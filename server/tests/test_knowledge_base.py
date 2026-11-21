@@ -1526,6 +1526,53 @@ def test_sqlite_fallback_takes_more_prefixes_than_host_parameters(open_kb):
     assert found["total"] == 1 and paths(found["results"]) == {"zotero/g/active/item/1"}
 
 
+def test_exact_total_sorts_only_vectors_past_the_gate(open_kb, monkeypatch):
+    """Review L3E r5 M1: include_total sorted every loaded vector, masked staged ones too, under the search locks."""
+    a = open_kb(embedder=VisibilityEmbedder())
+    staged = [visible_doc(f"zotero/g/staged/item/{i}", "zzalphazz ", i) for i in range(300)]
+    active = [visible_doc(f"zotero/g/active/item/{i}", "zzalphazz zzbetazz ", 1000 + i) for i in range(3)]
+    a.apply(add=staged + active)
+    assert a.embed_pending(batch=256, max_chunks=400) == 303
+    a.search("near alpha", limit=2)  # load the vectors first: the load itself sorts by owner note
+    real, sorted_sizes = kb.np, []
+
+    class SortSpy:
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+        def argsort(self, values, *args, **kwargs):
+            sorted_sizes.append(len(values))
+            return real.argsort(values, *args, **kwargs)
+
+    monkeypatch.setattr(kb, "np", SortSpy())
+    found = a.search("near alpha", limit=2, allowed_path_prefixes=("zotero/g/active/",), include_total=True)
+    assert found["total"] == 3 and paths(found["results"]) <= {d.path for d in active}
+    assert sorted_sizes and max(sorted_sizes) <= len(active), sorted_sizes
+
+
+def test_unbounded_drain_embeds_chunks_added_during_the_call(open_kb):
+    """Review L3E r5 nit: drain-all runs until nothing is pending, not to the count measured at entry."""
+    a = open_kb()
+    a.apply(add=[doc(f"zotero/drain-{i}", f"bosonic drain item {i}") for i in range(3)])
+    db = kb.connect(keep=True, path=a.db_path)
+    try:
+        class AddsAChunk(HashEmbedder):
+            added = False
+
+            def __call__(self, texts, query=False, batch_size=16):
+                if not self.added:  # another writer lands a chunk while this drain is running
+                    self.added = True
+                    db.execute("INSERT INTO chunks(path, ord, heading, text) "
+                               "SELECT path, ord + 100, heading, text || ' late' FROM chunks LIMIT 1")
+                    db.commit()
+                return super().__call__(texts, query=query, batch_size=batch_size)
+
+        assert kb.embed_pending(db, verbose=False, batch=1, embedder=AddsAChunk()) == 4
+        assert db.execute("SELECT (SELECT count(*) FROM chunks) - (SELECT count(*) FROM vecs)").fetchone()[0] == 0
+    finally:
+        db.close()
+
+
 def _v2_keyword_schema():
     """The keyword schema before L3E added the raw path term (SCHEMA_VERSION 2)."""
     import tantivy
