@@ -9,7 +9,8 @@ Calls are blocking: an async host runs them in worker threads. Thread-safety con
 - searches (search, similar_to_text) take the write lock, then the search lock, so a search sees one committed version
   of the index (vectors, keyword index and rows alike) and never runs during a write. They wait at most
   `search_timeout` seconds for both together, then ConcurrentUseError. embed_pending holds the write lock while it
-  embeds, so searches wait for (or time out on) a running embed_pending;
+  embeds up to its optional max_chunks bound (or all pending passages when omitted), so searches wait for (or time out
+  on) a running embed_pending;
 - reads (read, documents, get_meta, stats) take no lock, open their own connection and run alongside everything;
   read() makes its two queries in one read transaction, so it sees one committed version;
 - close() refuses new calls (ClosedError), waits for running reads, writes and searches, then releases the files; a
@@ -152,6 +153,11 @@ class KnowledgeBase:
 
     # ------------------------------------------------------------ writes
 
+    @staticmethod
+    def count_chunks(document: Document) -> int:
+        """Exact number of passages `apply` will store for `document`, using the installed chunker and title fallback."""
+        return len(kb.chunk_note(document.text) or [kb.Chunk("", document.title)])
+
     def apply(self, add=(), remove=(), meta: dict | None = None) -> dict:
         """One transaction: delete the documents at `remove`, store `add` (replacing any at the same path), set the
         `meta` stamps. All or nothing: on any error nothing is written and the instance stays usable. Vectors of
@@ -193,15 +199,24 @@ class KnowledgeBase:
     def remove_document(self, path: str) -> bool:
         return self.apply(remove=[path])["removed"] == 1
 
-    def embed_pending(self, batch: int = 256) -> int:
-        """Embeds the passages that have no vector yet; returns how many. Loads the model on first use."""
+    def embed_pending(self, batch: int = 256, *, max_chunks: int | None = None) -> int:
+        """Embed at most `max_chunks` pending passages (None: all); return how many were committed.
+
+        Batches still commit independently, so a later failure leaves earlier work searchable and a bounded retry
+        resumes the remainder. Zero returns without loading the model; a negative bound is a ValueError.
+        """
         with self._write_lock:
             self._check_open()
+            if max_chunks is not None and max_chunks < 0:
+                raise ValueError("max_chunks must be non-negative or None")
+            if max_chunks is not None and batch < 1:
+                raise ValueError("batch must be positive when max_chunks bounds the drain")
             db = kb.connect(keep=True, path=self.db_path)
             try:
-                if not db.execute("SELECT (SELECT count(*) FROM chunks) - (SELECT count(*) FROM vecs)").fetchone()[0]:
+                if max_chunks == 0 or not db.execute(
+                        "SELECT (SELECT count(*) FROM chunks) - (SELECT count(*) FROM vecs)").fetchone()[0]:
                     return 0  # nothing to do: no model load
-                done = kb.embed_pending(db, verbose=False, batch=batch, embedder=self.embedder)
+                done = kb.embed_pending(db, verbose=False, batch=batch, embedder=self.embedder, max_chunks=max_chunks)
             finally:
                 try:
                     db.close()
@@ -211,10 +226,17 @@ class KnowledgeBase:
 
     # ------------------------------------------------------------ search
 
-    def search(self, query: str, limit: int = 8, **filters) -> list[dict]:
-        """kb.Searcher.search: keyword and meaning hits fused, one result per document. `filters`: source, folder,
-        tag, per_note, exclude_source, collections, year_from, year_to."""
-        return self._searching(lambda s: s.search(query, limit, **filters))
+    def search(self, query: str, limit: int = 8, *, allowed_path_prefixes=None, include_total: bool = False,
+               **filters) -> list[dict] | dict:
+        """Fuse keyword and meaning hits. Defaults return the existing result list.
+
+        `allowed_path_prefixes` is an immutable, literal allow set: None keeps legacy unfiltered behavior; an empty
+        collection returns nothing. With `include_total`, return {"results": [...], "total": N}, where N is the
+        number of fused documents after all path filtering, paper/text deduplication, and before `limit`.
+        `filters`: source, folder, tag, per_note, exclude_source, collections, year_from, year_to.
+        """
+        return self._searching(lambda s: s.search(query, limit, allowed_path_prefixes=allowed_path_prefixes,
+                                                  include_total=include_total, **filters))
 
     def similar_to_text(self, text: str, exclude: str | None = None, limit: int = 8) -> list[dict]:
         """Documents with passages closest in meaning to `text` (at least 40 characters)."""

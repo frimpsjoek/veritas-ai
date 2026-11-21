@@ -26,7 +26,7 @@ import tantivy
 # rarity per field, so a word in a title looked very rare and title matches swamped everything (right note first
 # 3/11 on eval.py); one field ranks like SQLite FTS5 did (6/11), with the repeated title as its title weight.
 FIELDS = ("body",)
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"  # + raw path term, used for native pre-limit path-prefix visibility
 RARE = 3000  # chunks; a word in more than this many is too common to find anything on its own
 
 # A rebuild empties the keyword folder first, and the folder may be one a caller named (veritas_kb.KnowledgeBase), so
@@ -113,6 +113,10 @@ def _schema() -> tantivy.Schema:
     builder = tantivy.SchemaBuilder()
     builder.add_integer_field("id", stored=True, indexed=True, fast=True)
     builder.add_text_field("body", stored=False, tokenizer_name="en_stem")
+    # One whole, literal path term. RegexQuery full-matches terms; `<escaped prefix>(.+)?` is therefore exactly
+    # Python's path.startswith(prefix), including a document whose path is the prefix itself. Do not anchor with ^:
+    # tantivy 0.26 rejects that as an empty-match operator.
+    builder.add_text_field("path", stored=False, tokenizer_name="raw")
     return builder.build()
 
 
@@ -218,29 +222,40 @@ class KeywordIndex:
         return len(live)
 
     def _add(self, writer, db: sqlite3.Connection, ids: list[int] | None) -> None:
-        sql = "SELECT c.id, n.title, c.heading, c.text, n.tags FROM chunks c JOIN notes n ON n.path=c.path"
+        sql = "SELECT c.id, c.path, n.title, c.heading, c.text, n.tags FROM chunks c JOIN notes n ON n.path=c.path"
         batches = [None] if ids is None else [ids[i:i + 900] for i in range(0, len(ids), 900)]
         for batch in batches:
             rows = db.execute(sql) if batch is None else db.execute(
                 f"{sql} WHERE c.id IN ({','.join('?' * len(batch))})", batch)
-            for cid, title, heading, text, tags in rows:
+            for cid, path, title, heading, text, tags in rows:
                 title = title or ""
                 # Delete before add: a crash between commit and ids.npy save can re-add an already-committed
                 # id on the next sync, and a delete-then-add makes that a no-op replace instead of a duplicate.
                 writer.delete_documents("id", cid)
                 writer.add_document(tantivy.Document(
-                    id=cid, body="\n".join((title, title, heading or "", text or "", tags or ""))))
+                    id=cid, path=path, body="\n".join((title, title, heading or "", text or "", tags or ""))))
 
     def _save_ids(self) -> None:
         np.save(self.ids_file, np.fromiter(self.ids, dtype=np.int64, count=len(self.ids)))
 
-    def search(self, terms: list[str], limit: int, enough: int = 200) -> list[int]:
+    def _with_paths(self, query: tantivy.Query, path_prefixes: tuple[str, ...] | None) -> tantivy.Query:
+        """AND a zero-score literal path-prefix predicate into a keyword query before Tantivy applies its limit."""
+        if path_prefixes is None:
+            return query
+        # RegexQuery full-matches a raw term. re.escape also handles spaces and Tantivy/Rust regex metacharacters.
+        pattern = "(?:" + "|".join(re.escape(prefix) for prefix in path_prefixes) + ")(.+)?"
+        paths = tantivy.Query.regex_query(self.index.schema, "path", pattern)
+        return query.and_must_match(tantivy.Query.const_score_query(paths, 0.0))
+
+    def search(self, terms: list[str], limit: int, enough: int = 200, *,
+               path_prefixes: tuple[str, ...] | None = None, exhaustive: bool = False) -> list[int]:
         """Chunk ids, best first, in stages: chunks with every word; if fewer than `enough`, chunks with all but
         one word; then chunks with any word (BM25 ranks rare words highest). Ranking on any word alone lets one
         rare word win (a note that merely mentions "photoshoots" beating the pricing note that answers the
-        question), which cost recall; each stage here is ~1 ms."""
+        question), which cost recall; each stage here is ~1 ms. Optional path filtering happens inside every query,
+        including term-frequency selection; `exhaustive` returns every candidate rather than the usual bounded pool."""
         words = [w for w in " ".join(re.sub(r"[^\w]", " ", t) for t in terms).split() if w][:8]
-        if not words or self.index is None:
+        if not words or self.index is None or path_prefixes == ():
             return []
         out: list[int] = []
         seen: set[int] = set()
@@ -248,30 +263,33 @@ class KeywordIndex:
 
         def run(query: str, n: int) -> None:
             try:
-                parsed = self.index.parse_query(query, list(FIELDS))
+                parsed = self._with_paths(self.index.parse_query(query, list(FIELDS)), path_prefixes)
             except ValueError:
                 return
-            hits = searcher.search(parsed, n, count=False).hits
+            result = searcher.search(parsed, 1 if exhaustive else n, count=exhaustive)
+            if exhaustive and result.count > len(result.hits):
+                result = searcher.search(parsed, result.count, count=False)
             # Ids come from the column store (fast field): reading stored documents instead cost ~20 ms per stage.
-            for cid in searcher.fast_field_values("id", [address for _, address in hits]):
+            for cid in searcher.fast_field_values("id", [address for _, address in result.hits]):
                 if cid not in seen:
                     seen.add(cid)
                     out.append(cid)
 
         run(" ".join(f"+{w}" for w in words), limit)
-        if len(out) < enough and len(words) > 2:
+        if (exhaustive or len(out) < enough) and len(words) > 2:
             for i in range(len(words)):
                 run(" ".join(f"+{w}" for j, w in enumerate(words) if j != i), enough)
-        if len(out) < enough:
+        if exhaustive or len(out) < enough:
             # Any of the rarer words only: a common word ("learning", "time") ORed in adds thousands of loosely
             # related chunks that outvote the meaning-based side in the fused ranking (tested: 6/11 → 3/11 top-1).
-            rare = [w for w in words if self._count(searcher, w) < RARE] or []
+            rare = [w for w in words if self._count(searcher, w, path_prefixes) < RARE] or []
             if rare:
                 run(" ".join(rare), limit)
-        return out[:limit]
+        return out if exhaustive else out[:limit]
 
-    def _count(self, searcher, word: str) -> int:
+    def _count(self, searcher, word: str, path_prefixes: tuple[str, ...] | None = None) -> int:
         try:
-            return searcher.search(self.index.parse_query(word, list(FIELDS)), 1, count=True).count
+            query = self._with_paths(self.index.parse_query(word, list(FIELDS)), path_prefixes)
+            return searcher.search(query, 1, count=True).count
         except ValueError:
             return RARE

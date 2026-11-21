@@ -84,10 +84,13 @@ from veritas_kb import Document, KnowledgeBase
 
 index = KnowledgeBase("/srv/u/alice/knowledgebase/zotero/index/kb.sqlite",  # Tantivy goes to tantivy/ beside it
                       model_dir="/srv/models/snowflake-arctic-embed-s")      # backend="auto": MLX on macOS, else onnx
-index.apply(add=[Document("zotero/ABCD1234", "A paper", "# A paper\n\n## Abstract\n\n...")],
-            remove=["zotero/OLD00000"], meta={"zotero_web_version:lib": "1234"})  # one transaction
-index.embed_pending()                                  # vectors for new passages
+paper = Document("zotero/ABCD1234", "A paper", "# A paper\n\n## Abstract\n\n...")
+index.apply(add=[paper], remove=["zotero/OLD00000"], meta={"zotero_web_version:lib": "1234"})  # one transaction
+chunks = index.count_chunks(paper)                     # exact output of the installed chunker (title fallback included)
+index.embed_pending(batch=64, max_chunks=64)           # bounded, resumable drain; omit max_chunks for legacy drain-all
 hits = index.search("spin waves in garnets", limit=8)  # same results as kb.py search
+visible = index.search("spin waves", limit=8, allowed_path_prefixes=("zotero/current/",), include_total=True)
+# visible == {"results": [...], "total": N}; prefixes filter both candidate engines before pooling, limit and total
 page = index.read("zotero/ABCD1234")                   # also documents(), get_meta(), stats(), similar_to_text()
 index.close()                                          # or `with KnowledgeBase(...) as index:`
 ```
@@ -101,9 +104,9 @@ index.close()                                          # or `with KnowledgeBase(
 - **Threads:** calls block. On one instance, `apply` and `embed_pending` wait for each other; a search waits for
   other searches and for writes, so it always sees one committed version of the index (up to `search_timeout`,
   default 60 s, for everything it waits on together, then `ConcurrentUseError`). `embed_pending` holds the write lock
-  for the whole call, until every pending passage has a vector (`batch=` only sets how many are embedded and committed
-  per round), so searches on that instance wait for it, or time out: run it when search latency matters less (after a
-  bulk `apply`, off-peak), or set `search_timeout` above the time one call takes. Reads (`read`, `documents`,
+  for the whole call, until every selected pending passage has a vector. `batch=` sets how many are embedded and
+  committed per round; optional `max_chunks=` caps the whole call (and makes a non-positive `batch` invalid), so searches
+  wait for at most that bounded window, or time out. Reads (`read`, `documents`,
   `get_meta`, `stats`) take no lock. Different instances never wait for each other. `apply` is all or nothing.
   `close()` refuses new calls, waits for running ones (reads too) and the background vector reload.
 - **MLX:** the weights come from `model_dir`, like the tokenizer; several instances on the MLX backend in one process

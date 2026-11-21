@@ -1165,3 +1165,209 @@ def test_server_start_reads_the_folder_list(monkeypatch):
     with pytest.raises(Started):
         http_api.serve(0)
     assert order == ["listen", "layout", "token"]
+
+
+# ---------------------------------------------------------------- T0-E: exact bounds and path-prefix visibility
+
+
+@pytest.mark.parametrize("text", [
+    "",
+    "# Heading with no body\n\n## Another empty heading",
+    "x" * (kb.CHUNK_CHARS * 4 + 37),
+    "# Results\n\n" + "Sentence with a measured value. " * 300,
+    "intro\n\n```sh\n# not a heading\n" + "print('x')\n" * 400 + "```",
+])
+def test_chunk_count_is_the_installed_chunkers_exact_count(open_kb, text):
+    a = open_kb()
+    document = Document("zotero/pathological", "Fallback title", text)
+    expected = len(kb.chunk_note(text) or [kb.Chunk("", document.title)])
+    assert a.count_chunks(document) == expected
+    a.apply(add=[document])
+    assert count(a.db_path, "SELECT count(*) FROM chunks WHERE path='zotero/pathological'") == expected
+    assert expected >= 1
+
+
+def test_bounded_embed_pending_drains_only_the_requested_chunks_and_refreshes_search(open_kb):
+    a = open_kb()
+    documents = [doc(f"zotero/pending-{i}", f"xenon pending item number {i}") for i in range(7)]
+    a.apply(add=documents)
+    probe = "xenon pending item number, measured in the laboratory samples."
+    assert a.similar_to_text(probe) == []  # load the empty vector state before any batch commits
+    assert a.embed_pending(batch=2, max_chunks=3) == 3
+    assert a.stats()["chunks_with_vectors"] == 3
+    assert a.similar_to_text(probe)  # committed bounded work is visible without a close/reopen
+    assert a.embed_pending(batch=2, max_chunks=3) == 3
+    assert a.stats()["chunks_with_vectors"] == 6
+    assert a.embed_pending(batch=2, max_chunks=3) == 1
+    assert a.stats()["chunks_with_vectors"] == a.stats()["chunks"] == 7
+    assert a.embed_pending(batch=2, max_chunks=3) == 0
+    assert a.embed_pending(max_chunks=0) == 0
+    with pytest.raises(ValueError, match="max_chunks"):
+        a.embed_pending(max_chunks=-1)
+    with pytest.raises(ValueError, match="batch"):
+        a.embed_pending(batch=0, max_chunks=2)
+    with pytest.raises(ValueError, match="batch"):
+        a.embed_pending(batch=-1, max_chunks=2)
+    assert a.stats()["chunks_with_vectors"] == 7
+
+
+def test_partial_embed_failure_preserves_committed_work_and_bounded_retry(open_kb):
+    embedder = FailsOnSecondBatch()
+    a = open_kb(embedder=embedder)
+    a.apply(add=[doc(f"zotero/retry-{i}", f"quasiparticle retry item {i}") for i in range(6)])
+    probe = "quasiparticle retry item, measured in the laboratory samples."
+    assert a.similar_to_text(probe) == []
+    with pytest.raises(RuntimeError, match="batch 2"):
+        a.embed_pending(batch=2, max_chunks=6)
+    assert a.stats()["chunks_with_vectors"] == 2
+    assert embedder.batches == 2
+    assert a.similar_to_text(probe)  # the batch committed before the failure has refreshed the searcher
+    assert a.embed_pending(batch=1, max_chunks=2) == 2
+    assert a.stats()["chunks_with_vectors"] == 4
+    assert a.embed_pending(batch=2, max_chunks=2) == 2
+    assert a.stats()["chunks_with_vectors"] == a.stats()["chunks"] == 6
+
+
+class VisibilityEmbedder(HashEmbedder):
+    """Marker vectors let vector-only queries use text that the keyword index cannot match."""
+
+    mlx = None
+
+    def __call__(self, texts, query=False, batch_size=16):
+        with self.lock:
+            self.calls += len(texts)
+        out = np.zeros((len(texts), kb.DIM), dtype=np.float32)
+        for row, text in zip(out, texts):
+            for i, marker in enumerate(("alpha", "beta", "gamma", "delta")):
+                if marker in text.lower():
+                    row[i] = 1.0
+            if not row.any():
+                row[-1] = 1.0
+            row /= np.linalg.norm(row)
+        return out
+
+
+def visible_doc(path: str, body: str, number: int) -> Document:
+    return Document(path, f"Visible item {number}", f"# Visible item {number}\n\n{body} unique{number}", source="personal")
+
+
+def test_keyword_visibility_is_before_the_candidate_limit_and_total(open_kb):
+    a = open_kb(vector_gate=2.0)  # keyword only
+    staged = [visible_doc(f"zotero/g/staged/item/{i}", "commonvisibility " * 20, i) for i in range(650)]
+    active = [visible_doc(f"zotero/g/active/item/{i}",
+                          f"activemarker{i} commonvisibility " + "unrelated padding " * 1500, 1000 + i) for i in range(3)]
+    a.apply(add=staged + active)
+    a._searcher._refresh()
+    unfiltered = a._searcher.keywords.search(["commonvisibility"], 600)
+    top_paths = dict(sqlite3.connect(a.db_path).execute("SELECT id, path FROM chunks"))
+    assert not {top_paths[cid] for cid in unfiltered} & {d.path for d in active}  # a >600-candidate fixture
+
+    found = a.search("commonvisibility", limit=2, allowed_path_prefixes=("zotero/g/active/",), include_total=True)
+    assert found["total"] == 3
+    assert len(found["results"]) == 2
+    assert {hit["path"] for hit in found["results"]} <= {d.path for d in active}
+
+
+def test_vector_visibility_is_before_the_candidate_limit_and_total(open_kb):
+    embedder = VisibilityEmbedder()
+    a = open_kb(embedder=embedder)
+    staged = [visible_doc(f"zotero/g/staged/item/{i}", "zzalphazz ", i) for i in range(650)]
+    active = [visible_doc(f"zotero/g/active/item/{i}", "zzalphazz zzbetazz ", 1000 + i) for i in range(3)]
+    a.apply(add=staged + active)
+    assert a.embed_pending(batch=256, max_chunks=700) == 653
+
+    found = a.search("near alpha", limit=2, allowed_path_prefixes=("zotero/g/active/",), include_total=True)
+    assert found["total"] == 3
+    assert len(found["results"]) == 2
+    assert {hit["path"] for hit in found["results"]} <= {d.path for d in active}
+
+
+def test_generation_views_exclude_staged_and_never_mix_old_and_new(open_kb):
+    a = open_kb(embedder=VisibilityEmbedder())
+    old = [visible_doc(f"zotero/g/old/item/{i}", "generationtopic zzalphazz ", i) for i in range(4)]
+    new = [visible_doc(f"zotero/g/new/item/{i}", "generationtopic zzalphazz ", 100 + i) for i in range(2)]
+    unrelated = [visible_doc("zotero/g/unrelated/item/1", "generationtopic zzalphazz ", 500)]
+    a.apply(add=old + new + unrelated)  # new and unrelated are physically present but inactive
+    a.embed_pending()
+
+    for query in ("generationtopic", "near alpha"):
+        old_found = a.search(query, limit=20, allowed_path_prefixes=("zotero/g/old/",), include_total=True)
+        assert old_found["total"] == 4
+        assert paths(old_found["results"]) == {d.path for d in old}
+        new_found = a.search(query, limit=20, allowed_path_prefixes=("zotero/g/new/",), include_total=True)
+        assert new_found["total"] == 2
+        assert paths(new_found["results"]) == {d.path for d in new}
+        empty = a.search(query, allowed_path_prefixes=(), include_total=True)
+        assert empty == {"results": [], "total": 0}
+        assert isinstance(a.search(query, allowed_path_prefixes=("zotero/g/old/",)), list)
+
+
+def test_visibility_also_applies_to_the_sqlite_fts_fallback(open_kb):
+    a = open_kb(vector_gate=2.0)
+    inactive = [visible_doc(f"zotero/g/inactive/item/{i}", "fallbacktopic " * 10, i) for i in range(10)]
+    active = [visible_doc(f"zotero/g/active/item/{i}", "fallbacktopic ", 100 + i) for i in range(2)]
+    a.apply(add=inactive + active)
+    a._searcher.keywords.index = None  # force the real SQLite FTS5 path, not a keyword-index stub
+    found = a.search("fallbacktopic", limit=1, allowed_path_prefixes=("zotero/g/active/",), include_total=True)
+    assert found["total"] == 2 and len(found["results"]) == 1
+    assert paths(found["results"]) <= {d.path for d in active}
+
+
+@pytest.mark.parametrize("sqlite_fallback", [False, True])
+def test_path_prefixes_are_literal_for_tantivy_and_sqlite(open_kb, sqlite_fallback):
+    a = open_kb(vector_gate=2.0)
+    prefix = "zotero/g/a generation+[old]_100%/[item]/"
+    a.apply(add=[visible_doc(prefix + "one", "literalprefix ", 1),
+                 visible_doc("zotero/g/axgenerationXoldY100Z/item/two", "literalprefix ", 2)])
+    if sqlite_fallback:
+        a._searcher.keywords.index = None
+    found = a.search("literalprefix", allowed_path_prefixes=(prefix,), include_total=True)
+    assert set(found) == {"results", "total"} and found["total"] == 1
+    assert paths(found["results"]) == {prefix + "one"}
+
+
+def test_total_is_opt_in_and_empty_visibility_does_not_load_the_query_embedder(open_kb):
+    embedder = VisibilityEmbedder()
+    a = open_kb(embedder=embedder)
+    a.apply(add=[visible_doc("zotero/g/active/item/1", "ordinarytopic zzalphazz ", 1)])
+    assert isinstance(a.search("ordinarytopic"), list)
+    found = a.search("ordinarytopic", allowed_path_prefixes=["zotero/g/active/"], include_total=True)
+    assert found["total"] == 1 and paths(found["results"]) == {"zotero/g/active/item/1"}
+    before = embedder.calls
+    assert a.search("near alpha", allowed_path_prefixes=[], include_total=True) == {"results": [], "total": 0}
+    assert embedder.calls == before
+    with pytest.raises(ValueError, match="prefix"):
+        a.search("ordinarytopic", allowed_path_prefixes=[""])
+
+
+def test_large_replacement_searches_see_complete_visible_generations(open_kb):
+    a = open_kb(vector_gate=2.0)
+    old = {f"zotero/g/old/item/{i}" for i in range(25)}
+    new = {f"zotero/g/new/item/{i}" for i in range(25)}
+    a.apply(add=[visible_doc(p, "replacementtopic ", i) for i, p in enumerate(sorted(old))])
+    stop, snapshots, errors = threading.Event(), [], []
+
+    def searching():
+        try:
+            while not stop.is_set():
+                for generation, wanted in (("old", old), ("new", new)):
+                    found = a.search("replacementtopic", limit=50,
+                                     allowed_path_prefixes=(f"zotero/g/{generation}/",), include_total=True)
+                    snapshots.append((generation, found))
+        except BaseException as error:  # noqa: BLE001
+            errors.append(error)
+
+    thread = threading.Thread(target=searching)
+    thread.start()
+    for _ in range(2):
+        a.apply(remove=sorted(old), add=[visible_doc(p, "replacementtopic ", 1000 + i)
+                                        for i, p in enumerate(sorted(new))])
+        a.apply(remove=sorted(new), add=[visible_doc(p, "replacementtopic ", 2000 + i)
+                                        for i, p in enumerate(sorted(old))])
+    stop.set()
+    thread.join(30)
+    assert not errors and snapshots
+    for generation, found in snapshots:
+        wanted = old if generation == "old" else new
+        assert found["total"] in (0, len(wanted)), (generation, found["total"])
+        assert paths(found["results"]) in (set(), wanted)

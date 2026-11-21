@@ -87,6 +87,55 @@ there is no `pyproject.toml` to install the engine as a library.
   before it releases the files. Reads never wait for each other.
 - Every call is blocking I/O; an async host runs them in worker threads (Trinity: the worker subprocess).
 
+## T0-E: exact bounds and path-prefix visibility (2026-11-20)
+
+Base inspected: `08bd2c3fb84b1ed9b9ba6ca4920f183851205ce8`. These are small, reusable engine additions, not a staged-generation implementation: the caller owns its durable visibility manifest and passes an immutable snapshot.
+
+Inspected behavior pinned before the additions:
+
+- `store_note` applies `chunk_note` to each document and, when that returns no chunks, stores one title-fallback chunk.
+  `chunk_note` is `split_sections` → `clean` → `pack`, with same-section tiny-tail merging. There is no character-count
+  estimator in that path.
+- Default `Searcher.search` uses a 200-chunk RRF pool per side after inspecting up to 600 candidates. Keyword candidates
+  are Tantivy all-words, all-but-one, then rare-word stages (SQLite FTS5 is the fallback). Vectors are cosine-gated
+  before RRF (`k=60`). Results are source-weighted, one per document after text/paper deduplication. The existing API
+  returned only a limited result list; it had no `total`.
+- `embed_pending(batch=N)` committed each N-chunk round independently but looped until no pending chunks remained.
+  `vectors_at` is stamped after success and on failure after rollback of the failed round, so committed earlier rounds
+  remain searchable. `batch` alone did not bound the call.
+
+New public API:
+
+```python
+KnowledgeBase.count_chunks(document: Document) -> int
+KnowledgeBase.embed_pending(batch: int = 256, *, max_chunks: int | None = None) -> int
+KnowledgeBase.search(query: str, limit: int = 8, *, allowed_path_prefixes=None,
+                     include_total: bool = False, **filters) -> list[dict] | dict
+```
+
+- `count_chunks` returns exactly `len(chunk_note(document.text) or [Chunk("", document.title)])`, the same count
+  `apply` stores, including empty/pathological input. It performs no I/O and uses no estimate.
+- `max_chunks=None` preserves drain-all behavior. A nonnegative value bounds work attempted by one call; zero performs
+  no model load. When bounded, `batch` must be positive, preventing SQLite's negative-LIMIT behavior from bypassing the
+  cap. Committed rounds and failure/search-refresh semantics are unchanged, and repeated calls resume remaining work.
+- `allowed_path_prefixes=None` preserves existing unfiltered behavior and the list return type. Otherwise the iterable
+  is copied into one immutable tuple of deduplicated, literal, nonempty prefixes. An empty iterable returns no hits;
+  an empty string prefix is rejected. Tantivy schema v3 indexes a raw path term and ANDs a zero-score prefix predicate
+  into every keyword/rare-term query before candidate limits. SQLite FTS joins the literal prefix predicate before its
+  limits. Vector scores for paths outside the snapshot are masked before top-candidate selection. This is not
+  post-filtering a result page.
+- `include_total=False` preserves the old 200/600 candidate pool and bare result list. `True` uses exhaustive visible
+  candidates and returns `{"results": [...], "total": N}`: `total` counts fused documents after source weights,
+  text/paper deduplication, and before `limit`; `results` is the requested page. It is therefore an expensive operation
+  bounded by the visible index/candidate size, not an unfiltered or estimated count.
+- Existing locks still pin one committed index version per search; no manifest or caller-owned predicate is evaluated
+  under a lock. Physically staged/inactive documents can coexist but cannot enter hits or totals from another snapshot.
+
+Tests use real SQLite/Tantivy with deterministic fake embedders for pathological chunking, a >600-candidate keyword
+fixture, a >600-candidate vector fixture, old/new and staged isolation, literal metacharacter prefixes, SQLite fallback,
+partial failure plus bounded retry, and concurrent large replacements. Real-ONNX latency/window measurement is not in
+this lane; T0-V owns it.
+
 ## Out of scope
 
 Moving code out of `kb.py`; multi-index versions of the folder/vault indexing, desktop Zotero, media/OCR, paper notes,

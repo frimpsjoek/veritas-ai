@@ -1149,8 +1149,18 @@ def stamp(db: sqlite3.Connection, key: str) -> None:
 
 
 def embed_pending(db: sqlite3.Connection, verbose: bool = True, batch: int = 256,
-                  progress: Progress | None = None, *, embedder: "Embedder | None" = None) -> int:
+                  progress: Progress | None = None, *, embedder: "Embedder | None" = None,
+                  max_chunks: int | None = None) -> int:
+    """Embed pending passages in committed `batch` rounds, at most `max_chunks` in this call (None: all)."""
+    if max_chunks is not None and max_chunks < 0:
+        raise ValueError("max_chunks must be non-negative or None")
+    if max_chunks is not None and batch < 1:
+        raise ValueError("batch must be positive when max_chunks bounds the drain")
+    if max_chunks == 0:
+        return 0
     todo = db.execute("SELECT (SELECT count(*) FROM chunks) - (SELECT count(*) FROM vecs)").fetchone()[0]
+    if max_chunks is not None:
+        todo = min(todo, max_chunks)
     if not todo:
         return 0
     if progress:
@@ -1159,9 +1169,10 @@ def embed_pending(db: sqlite3.Connection, verbose: bool = True, batch: int = 256
     done, started, last_stamp = 0, time.time(), time.time()
     unstamped = 0  # vectors committed since vectors_at was last stamped
     try:
-        while True:
+        while done < todo:
+            count = min(batch, todo - done) if max_chunks is not None else batch
             rows = db.execute(f"SELECT c.id, n.title, c.heading, c.text, c.path FROM chunks c JOIN notes n ON n.path=c.path "
-                              f"WHERE c.id NOT IN (SELECT id FROM vecs) ORDER BY {EMBED_ORDER} LIMIT ?", (batch,)).fetchall()
+                              f"WHERE c.id NOT IN (SELECT id FROM vecs) ORDER BY {EMBED_ORDER} LIMIT ?", (count,)).fetchall()
             if not rows:
                 break
             texts = [_embed_text(title, heading, text) for _, title, heading, text, _ in rows]
@@ -1225,6 +1236,18 @@ def same_paper_key(title: str, meta: dict) -> tuple | None:
         return ("doi", doi)
     words = re.sub(r"\W+", " ", zotero.plain_title(title).lower()).strip()
     return ("title", words, str(meta.get("year") or "")) if words else None
+
+
+def _normalise_path_prefixes(prefixes) -> tuple[str, ...] | None:
+    """One immutable snapshot of literal, nonempty index-path prefixes; None means legacy unfiltered search."""
+    if prefixes is None:
+        return None
+    if isinstance(prefixes, (str, bytes, Path)):
+        raise TypeError("allowed_path_prefixes must be an iterable of path prefixes, not one string")
+    result = tuple(dict.fromkeys(posix(prefix) for prefix in prefixes))
+    if any(not prefix for prefix in result):
+        raise ValueError("an allowed path prefix must not be empty")
+    return result
 
 
 class Searcher:
@@ -1457,39 +1480,63 @@ class Searcher:
     def search(self, query: str, limit: int = 8, source: str | None = None, folder: str | None = None,
                tag: str | None = None, per_note: int = 2,
                exclude_source: str | None = None, collections: list[str] | None = None,
-               year_from: int | None = None, year_to: int | None = None) -> list[dict]:
+               year_from: int | None = None, year_to: int | None = None, *,
+               allowed_path_prefixes=None, include_total: bool = False) -> list[dict] | dict:
+        """Hybrid search. Optional literal path visibility is applied to both candidate generators before their
+        pool/result limits. `include_total` makes those pools exhaustive and returns {"results", "total"}; the default
+        keeps the historical 200/600-candidate pools and bare result-list API exactly as before."""
+        path_prefixes = _normalise_path_prefixes(allowed_path_prefixes)
+        if path_prefixes == ():
+            return {"results": [], "total": 0} if include_total else []
         self._refresh()
         allowed = self._allowed(source, folder, tag, exclude_source, collections, year_from, year_to)
-        pool = 200
+        pool = None if include_total else 200
         ranks: dict[int, float] = {}
 
         # Keyword side: Tantivy BM25 over every query word (1-2 ms); SQLite FTS5 when no Tantivy index exists.
         terms = [t for t in re.findall(r"[\w][\w.+-]*", query.lower()) if t not in STOPWORDS]
         if terms:
-            kw = self.keywords.search(terms, pool * 3) if self.keywords.usable() else self._fts_candidates(terms, pool)
+            if self.keywords.usable():
+                kw = self.keywords.search(terms, 1 if pool is None else pool * 3,
+                                          path_prefixes=path_prefixes, exhaustive=pool is None)
+            else:
+                kw = self._fts_candidates(terms, pool, path_prefixes)
             if allowed is not None:
                 kw = self._filter_ids(kw, allowed)
-            for rank, cid in enumerate(kw[:pool]):
+            for rank, cid in enumerate(kw if pool is None else kw[:pool]):
                 ranks[cid] = ranks.get(cid, 0) + 1 / (60 + rank)
 
-        # Meaning side.
+        # Meaning side. Mask disallowed vectors before selecting the 600 candidates: filtering only the selected page
+        # would let staged or inactive generations starve valid active hits out of the fused ranking.
         if len(self.ids):
             scores = self._scores(self._query_vector(query))
-            top = np.argpartition(-scores, min(pool * 3, len(scores) - 1))[:pool * 3]
-            top = top[np.argsort(-scores[top])]
+            if path_prefixes is not None:
+                chunk_paths = dict(self.db.execute("SELECT id, path FROM chunks"))
+                visible = np.fromiter((chunk_paths.get(int(cid), "").startswith(path_prefixes) for cid in self.ids),
+                                      dtype=bool, count=len(self.ids))
+                scores = np.where(visible, scores, -np.inf)
+            if pool is None:
+                top = np.argsort(-scores)
+            else:
+                top = np.argpartition(-scores, min(pool * 3, len(scores) - 1))[:pool * 3]
+                top = top[np.argsort(-scores[top])]
             gate = VECTOR_GATE if self.vector_gate is None else self.vector_gate
             vec_ids = [int(self.ids[i]) for i in top if scores[i] >= gate]
             if allowed is not None:
                 vec_ids = self._filter_ids(vec_ids, allowed)
-            for rank, cid in enumerate(vec_ids[:pool]):
+            for rank, cid in enumerate(vec_ids if pool is None else vec_ids[:pool]):
                 ranks[cid] = ranks.get(cid, 0) + 1 / (60 + rank)
 
         if not ranks:
-            return []
-        placeholders = ",".join("?" * len(ranks))
-        info = {r[0]: r[1:] for r in self.db.execute(
-            f"SELECT c.id, c.path, c.heading, c.text, n.title, n.source, n.tags, n.mtime, n.meta FROM chunks c "
-            f"JOIN notes n ON n.path=c.path WHERE c.id IN ({placeholders})", list(ranks))}
+            return {"results": [], "total": 0} if include_total else []
+        info = {}
+        chunk_ids = list(ranks)
+        for start in range(0, len(chunk_ids), 900):  # stay below SQLite's host-parameter limit in exhaustive mode
+            batch = chunk_ids[start:start + 900]
+            placeholders = ",".join("?" * len(batch))
+            info.update({r[0]: r[1:] for r in self.db.execute(
+                f"SELECT c.id, c.path, c.heading, c.text, n.title, n.source, n.tags, n.mtime, n.meta FROM chunks c "
+                f"JOIN notes n ON n.path=c.path WHERE c.id IN ({placeholders})", batch)})
         scored = sorted(((score * SOURCE_WEIGHTS.get(info[cid][4], 1.0), cid) for cid, score in ranks.items()
                          if cid in info), reverse=True)
         # One result per note, carrying its best `per_note` passages. A passage whose text already appeared
@@ -1515,7 +1562,7 @@ class Searcher:
             seen_text.add(key)
             hit = results.get(path)
             if hit is None:
-                if len(results) >= limit:
+                if pool is not None and len(results) >= limit:
                     continue
                 results[path] = {"path": path, "title": title, "source": src, "tags": tags.split() if tags else [],
                                  "modified": time.strftime("%Y-%m-%d", time.localtime(mtime)),
@@ -1527,7 +1574,10 @@ class Searcher:
                     first_of[paper] = path
             elif len(hit["passages"]) < per_note:
                 hit["passages"].append({"heading": heading, "snippet": snippet(text, terms)})
-        return list(results.values())
+        if not include_total:
+            return list(results.values())
+        page = [] if limit <= 0 else list(results.values())[:limit]
+        return {"results": page, "total": len(results)}
 
     def similar_notes(self, path: str, limit: int = 10) -> list[dict]:
         """Notes whose overall meaning is closest to this note's, linked or not."""
@@ -1658,44 +1708,75 @@ class Searcher:
         refs = {p: note_info(self.db, p) for p in linked["links_to"] + linked["linked_from"] if not p.endswith("(no note)")}
         return {**linked, "refs": refs, "similar": self.similar_notes(path, limit), "shared_tags": shared_tags(path, limit)}
 
-    def _fts_candidates(self, terms: list[str], pool: int) -> list[int]:
+    def _fts_candidates(self, terms: list[str], pool: int | None,
+                        path_prefixes: tuple[str, ...] | None = None) -> list[int]:
         """SQLite fallback, cheapest first: chunks with all the words; if few, all but one of them (AND queries only
         touch the overlap of posting lists); then any of the rarer words. ORing every word would score ~150k
-        chunks when a query has "machine" or "learning" in it."""
+        chunks when a query has "machine" or "learning" in it. Path visibility joins before each LIMIT."""
         quoted = ['"' + t.replace('"', "") + '"' for t in terms][:8]
-        kw = self._fts(" AND ".join(quoted), pool * 3)
+        kw = self._fts(" AND ".join(quoted), None if pool is None else pool * 3, path_prefixes)
         seen = set(kw)
-        if len(kw) < pool and len(quoted) > 2:
+        if (pool is None or len(kw) < pool) and len(quoted) > 2:
             for i in range(len(quoted)):
-                kw += [cid for cid in self._fts(" AND ".join(quoted[:i] + quoted[i + 1:]), pool) if cid not in seen]
+                kw += [cid for cid in self._fts(" AND ".join(quoted[:i] + quoted[i + 1:]), pool, path_prefixes)
+                       if cid not in seen]
                 seen.update(kw)
-        if len(kw) < pool and len(quoted) > 1:
-            rare = [q for q in quoted if self._df(q) < 3000]
+        if (pool is None or len(kw) < pool) and len(quoted) > 1:
+            rare = [q for q in quoted if self._df(q, path_prefixes=path_prefixes) < 3000]
             if rare:
-                kw += [cid for cid in self._fts(" OR ".join(rare), pool * 3) if cid not in seen]
+                kw += [cid for cid in self._fts(" OR ".join(rare), None if pool is None else pool * 3, path_prefixes)
+                       if cid not in seen]
         return kw
 
-    def _fts(self, match: str, limit: int) -> list[int]:
+    @staticmethod
+    def _path_clause(path_prefixes: tuple[str, ...]) -> tuple[str, list[str]]:
+        # LIKE wildcards in a caller's literal prefix have no special meaning. Escape them instead of interpolating SQL.
+        escaped = [p.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%" for p in path_prefixes]
+        return " AND (" + " OR ".join("c.path LIKE ? ESCAPE '\\'" for _ in escaped) + ")", escaped
+
+    def _fts(self, match: str, limit: int | None, path_prefixes: tuple[str, ...] | None = None) -> list[int]:
+        if path_prefixes == ():
+            return []
+        if path_prefixes is None:
+            sql = ("SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ? "
+                   "ORDER BY bm25(chunks_fts, 4.0, 2.0, 1.0, 2.0)")
+            args = [match]
+        else:
+            clause, prefixes = self._path_clause(path_prefixes)
+            sql = ("SELECT chunks_fts.rowid FROM chunks_fts JOIN chunks c ON c.id=chunks_fts.rowid "
+                   "WHERE chunks_fts MATCH ?" + clause + " ORDER BY bm25(chunks_fts, 4.0, 2.0, 1.0, 2.0)")
+            args = [match, *prefixes]
+        if limit is not None:
+            sql += " LIMIT ?"
+            args.append(limit)
         try:
-            return [r[0] for r in self.db.execute(
-                "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY bm25(chunks_fts, 4.0, 2.0, 1.0, 2.0) "
-                "LIMIT ?", (match, limit))]
+            return [r[0] for r in self.db.execute(sql, args)]
         except sqlite3.OperationalError:
             return []
 
-    def _df(self, quoted_term: str, cap: int = 3000) -> int:
-        """How many chunks contain the term, counted only up to `cap` (a few ms)."""
+    def _df(self, quoted_term: str, cap: int = 3000,
+            path_prefixes: tuple[str, ...] | None = None) -> int:
+        """How many visible chunks contain the term, counted only up to `cap` (a few ms)."""
+        if path_prefixes == ():
+            return 0
+        if path_prefixes is None:
+            sql, args = "SELECT count(*) FROM (SELECT 1 FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT ?)", [quoted_term, cap]
+        else:
+            clause, prefixes = self._path_clause(path_prefixes)
+            sql = ("SELECT count(*) FROM (SELECT chunks_fts.rowid FROM chunks_fts "
+                   "JOIN chunks c ON c.id=chunks_fts.rowid WHERE chunks_fts MATCH ?" + clause + " LIMIT ?)")
+            args = [quoted_term, *prefixes, cap]
         try:
-            return self.db.execute("SELECT count(*) FROM (SELECT 1 FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT ?)",
-                                   (quoted_term, cap)).fetchone()[0]
+            return self.db.execute(sql, args).fetchone()[0]
         except sqlite3.OperationalError:
             return cap
 
     def _filter_ids(self, ids: list[int], allowed: set[str]) -> list[int]:
-        if not ids:
-            return []
-        placeholders = ",".join("?" * len(ids))
-        paths = dict(self.db.execute(f"SELECT id, path FROM chunks WHERE id IN ({placeholders})", ids))
+        paths = {}
+        for start in range(0, len(ids), 900):
+            batch = ids[start:start + 900]
+            placeholders = ",".join("?" * len(batch))
+            paths.update(self.db.execute(f"SELECT id, path FROM chunks WHERE id IN ({placeholders})", batch))
         return [i for i in ids if paths.get(i) in allowed]
 
 
