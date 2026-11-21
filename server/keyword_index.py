@@ -31,8 +31,9 @@ RARE = 3000  # chunks; a word in more than this many is too common to find anyth
 
 # A rebuild empties the keyword folder first, and the folder may be one a caller named (veritas_kb.KnowledgeBase), so
 # it is emptied only when it holds nothing but files Tantivy or this module writes: never a subfolder, a link, a
-# database or anything else. MARKER is written at every rebuild; a folder from before it (legacy data/tantivy) must
-# also hold meta.json or schema-version, which only Tantivy and this module write.
+# database or anything else. MARKER is written at every rebuild. A folder from before it (legacy data/tantivy) must
+# have both legacy files and open as a Tantivy index with this module's schema: those familiar filenames alone could
+# belong to any application.
 MARKER = ".veritas-keyword-index"
 _OWN_FILES = {"meta.json", ".managed.json", ".tantivy-meta.lock", ".tantivy-writer.lock", "schema-version", "ids.npy",
               MARKER}
@@ -75,7 +76,7 @@ def bound_to(path: Path) -> str | None:
 
 
 def owned_by_index(path: Path) -> bool:
-    """True when `path` is missing, empty, or holds only this index's files (MARKER and _OWN_FILES above)."""
+    """True when `path` is missing, empty, marked, or positively validated as a legacy index."""
     if not os.path.lexists(path):
         return True
     if not path.is_dir():
@@ -87,7 +88,14 @@ def owned_by_index(path: Path) -> bool:
         if entry.name not in _OWN_FILES and not _TANTIVY_FILE.fullmatch(entry.name):
             return False
     names = {e.name for e in entries}
-    return not names or bool(names & {MARKER, "meta.json", "schema-version"})
+    if not names or MARKER in names:
+        return True
+    if not {"meta.json", "schema-version"} <= names:
+        return False
+    try:
+        return tantivy.Index.open(str(path)).schema == _schema()
+    except Exception:  # noqa: BLE001 - any unreadable or non-Tantivy metadata fails closed
+        return False
 
 
 def _clear(path: Path) -> None:

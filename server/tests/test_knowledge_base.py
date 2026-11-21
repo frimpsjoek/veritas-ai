@@ -355,6 +355,46 @@ def test_rebuild_refuses_a_folder_with_foreign_files(open_kb, isolated_kb):
     assert (nested / "other-tenant" / "kb.sqlite").read_text() == "x"
 
 
+@pytest.mark.parametrize("files", [
+    {"meta.json": b"an unrelated application's metadata\n"},
+    {"schema-version": b"2\n"},
+    {"meta.json": b"an unrelated application's metadata\n", "schema-version": b"2\n"},
+])
+def test_rebuild_refuses_unmarked_lookalike_files(open_kb, isolated_kb, files):
+    """Review r7: these names alone do not authenticate an index; every byte must survive a refused rebuild."""
+    import keyword_index
+
+    keyword_dir = isolated_kb / "unrelated"
+    keyword_dir.mkdir()
+    for name, content in files.items():
+        (keyword_dir / name).write_bytes(content)
+    before = _folder_state(keyword_dir)
+    a = open_kb(keyword_dir=keyword_dir)
+    a.apply(add=[doc("zotero/A", "Excitons in quantum dots")])
+    with pytest.raises(keyword_index.NotAKeywordIndexError, match="not a keyword index"):
+        a.search("excitons")
+    assert _folder_state(keyword_dir) == before
+
+
+def test_rebuild_refuses_unmarked_tantivy_with_another_schema(open_kb, isolated_kb):
+    """Review r7: even a real Tantivy index is not a legacy keyword index when its records have another layout."""
+    import keyword_index
+    import tantivy
+
+    keyword_dir = isolated_kb / "another-tantivy-index"
+    keyword_dir.mkdir()
+    builder = tantivy.SchemaBuilder()
+    builder.add_text_field("title", stored=True)
+    tantivy.Index(builder.build(), path=str(keyword_dir))
+    (keyword_dir / "schema-version").write_text(keyword_index.SCHEMA_VERSION)
+    before = _folder_state(keyword_dir)
+    a = open_kb(keyword_dir=keyword_dir)
+    a.apply(add=[doc("zotero/A", "Excitons in quantum dots")])
+    with pytest.raises(keyword_index.NotAKeywordIndexError, match="not a keyword index"):
+        a.search("excitons")
+    assert _folder_state(keyword_dir) == before
+
+
 def test_rebuild_marks_the_folder_and_rebuilds_marked_or_legacy_ones(open_kb, isolated_kb):
     import keyword_index
 
@@ -490,8 +530,9 @@ def test_module_default_folder_rebound_not_refused(open_kb, isolated_kb, monkeyp
 
 
 def test_recognition_rule(tmp_path):
-    """Unit test of the rule: only regular files Tantivy or the index writes; an unmarked folder must also hold
-    meta.json or schema-version."""
+    """Only regular index files are allowed; an unmarked folder also needs a valid legacy Tantivy schema."""
+    import keyword_index
+    import tantivy
     from keyword_index import MARKER, owned_by_index
 
     def folder(name, *files, dirs=()):
@@ -508,8 +549,12 @@ def test_recognition_rule(tmp_path):
                      f"{seg}.pos", f"{seg}.term", f"{seg}.store", f"{seg}.fast", f"{seg}.fieldnorm", f"{seg}.9.del")
     assert owned_by_index(tmp_path / "missing")
     assert owned_by_index(folder("empty"))
-    assert owned_by_index(folder("legacy", *tantivy_files, "schema-version", "ids.npy"))
-    assert owned_by_index(folder("legacy-no-schema", *tantivy_files))
+    legacy = folder("legacy")
+    tantivy.Index(keyword_index._schema(), path=str(legacy))
+    (legacy / "schema-version").write_text(keyword_index.SCHEMA_VERSION)
+    assert owned_by_index(legacy)
+    assert not owned_by_index(folder("lookalike", *tantivy_files, "schema-version", "ids.npy"))
+    assert not owned_by_index(folder("legacy-no-schema", *tantivy_files))
     assert owned_by_index(folder("marked", MARKER, "ids.npy"))
     assert not owned_by_index(folder("unmarked-ids-only", "ids.npy"))
     assert not owned_by_index(folder("foreign", *tantivy_files, MARKER, "notes.md"))

@@ -24,9 +24,10 @@ there is no `pyproject.toml` to install the engine as a library.
   in-flight work and the searcher's background rebuild have stopped; the same files can then be reopened.
 - R5a. The keyword folder is derived data that a rebuild empties, so the constructor refuses (ValueError) a
   `keyword_dir` that contains the database or lies inside it, and either path that contains or lies inside one an
-  open instance holds. A rebuild empties the folder only when it holds nothing but Tantivy's files, `schema-version`,
-  `ids.npy` and the `.veritas-keyword-index` marker it writes (an unmarked folder from before the marker must also
-  hold `meta.json` or `schema-version`); anything else, a subfolder or a link refuses the rebuild and stays as it is.
+  open instance holds. A rebuild empties only a missing/empty folder or one holding nothing but Tantivy's files,
+  `schema-version`, `ids.npy` and the `.veritas-keyword-index` marker it writes, with that marker present. An
+  unmarked folder from before the marker must additionally have both `meta.json` and `schema-version`, open as a
+  Tantivy index, and carry the keyword schema; anything else, a subfolder or a link refuses the rebuild untouched.
 - R5b. A keyword folder is bound to its database (chunk ids are row numbers that two databases share): the database
   keeps a random id in `meta` (`db_uuid`, added on first open) and the marker names it. A `keyword_dir` bound to
   another database is refused (`keyword_index.KeywordIndexBindingError`, a RuntimeError) and left untouched; an
