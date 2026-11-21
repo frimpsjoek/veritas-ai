@@ -33,8 +33,8 @@ RARE = 3000  # chunks; a word in more than this many is too common to find anyth
 # A rebuild empties the keyword folder first, and the folder may be one a caller named (veritas_kb.KnowledgeBase), so
 # it is emptied only when it holds nothing but files Tantivy or this module writes: never a subfolder, a link, a
 # database or anything else. MARKER is written at every rebuild. A folder from before it (legacy data/tantivy) must
-# have both legacy files and open as a Tantivy index with this module's schema: those familiar filenames alone could
-# belong to any application.
+# have both legacy files and open as a Tantivy index with this module's schema, current or the previous (v2) one: those
+# familiar filenames alone could belong to any application.
 MARKER = ".veritas-keyword-index"
 _OWN_FILES = {"meta.json", ".managed.json", ".tantivy-meta.lock", ".tantivy-writer.lock", "schema-version", "ids.npy",
               MARKER}
@@ -94,7 +94,8 @@ def owned_by_index(path: Path) -> bool:
     if not {"meta.json", "schema-version"} <= names:
         return False
     try:
-        return tantivy.Index.open(str(path)).schema == _schema()
+        schema = tantivy.Index.open(str(path)).schema
+        return schema == _schema() or schema == _schema(legacy_v2=True)
     except Exception:  # noqa: BLE001 - any unreadable or non-Tantivy metadata fails closed
         return False
 
@@ -110,10 +111,14 @@ def _clear(path: Path) -> None:
             entry.unlink()
 
 
-def _schema() -> tantivy.Schema:
+def _schema(legacy_v2: bool = False) -> tantivy.Schema:
+    """This module's schema; `legacy_v2`: the one before the path term (SCHEMA_VERSION 2), which a pre-marker folder
+    may still hold. owned_by_index accepts that known layout so the schema bump rebuilds it instead of refusing it."""
     builder = tantivy.SchemaBuilder()
     builder.add_integer_field("id", stored=True, indexed=True, fast=True)
     builder.add_text_field("body", stored=False, tokenizer_name="en_stem")
+    if legacy_v2:
+        return builder.build()
     # One whole, literal path term. RegexQuery full-matches terms; `<escaped prefix>(.+)?` is therefore exactly
     # Python's path.startswith(prefix), including a document whose path is the prefix itself. Do not anchor with ^:
     # tantivy 0.26 rejects that as an empty-match operator.

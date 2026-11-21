@@ -1350,6 +1350,9 @@ def test_vector_visibility_is_before_the_candidate_limit_and_total(open_kb):
     assert found["total"] == 3
     assert len(found["results"]) == 2
     assert {hit["path"] for hit in found["results"]} <= {d.path for d in active}
+    # The bounded (600-candidate) pool too: 650 better-scoring staged vectors must be masked before selection.
+    bounded = a.search("near alpha", limit=2, allowed_path_prefixes=("zotero/g/active/",))
+    assert len(bounded) == 2 and paths(bounded) <= {d.path for d in active}
 
 
 def test_generation_views_exclude_staged_and_never_mix_old_and_new(open_kb):
@@ -1372,13 +1375,24 @@ def test_generation_views_exclude_staged_and_never_mix_old_and_new(open_kb):
         assert isinstance(a.search(query, allowed_path_prefixes=("zotero/g/old/",)), list)
 
 
+def force_sqlite_fts(a: KnowledgeBase) -> list[str]:
+    """Make searches take the real SQLite FTS5 fallback; returns the MATCH strings it ran. Clearing keywords.index is
+    not enough: the writer's next refresh rebuilds a missing Tantivy index before searching."""
+    searcher, ran = a._searcher, []
+    real = searcher._fts
+    searcher.keywords.usable = lambda: False
+    searcher._fts = lambda match, *rest: ran.append(match) or real(match, *rest)
+    return ran
+
+
 def test_visibility_also_applies_to_the_sqlite_fts_fallback(open_kb):
     a = open_kb(vector_gate=2.0)
     inactive = [visible_doc(f"zotero/g/inactive/item/{i}", "fallbacktopic " * 10, i) for i in range(10)]
     active = [visible_doc(f"zotero/g/active/item/{i}", "fallbacktopic ", 100 + i) for i in range(2)]
     a.apply(add=inactive + active)
-    a._searcher.keywords.index = None  # force the real SQLite FTS5 path, not a keyword-index stub
+    ran = force_sqlite_fts(a)
     found = a.search("fallbacktopic", limit=1, allowed_path_prefixes=("zotero/g/active/",), include_total=True)
+    assert ran
     assert found["total"] == 2 and len(found["results"]) == 1
     assert paths(found["results"]) <= {d.path for d in active}
 
@@ -1389,9 +1403,9 @@ def test_path_prefixes_are_literal_for_tantivy_and_sqlite(open_kb, sqlite_fallba
     prefix = "zotero/g/a generation+[old]_100%/[item]/"
     a.apply(add=[visible_doc(prefix + "one", "literalprefix ", 1),
                  visible_doc("zotero/g/axgenerationXoldY100Z/item/two", "literalprefix ", 2)])
-    if sqlite_fallback:
-        a._searcher.keywords.index = None
+    ran = force_sqlite_fts(a) if sqlite_fallback else None
     found = a.search("literalprefix", allowed_path_prefixes=(prefix,), include_total=True)
+    assert ran is None or ran
     assert set(found) == {"results", "total"} and found["total"] == 1
     assert paths(found["results"]) == {prefix + "one"}
 
@@ -1441,3 +1455,126 @@ def test_large_replacement_searches_see_complete_visible_generations(open_kb):
         wanted = old if generation == "old" else new
         assert found["total"] in (0, len(wanted)), (generation, found["total"])
         assert paths(found["results"]) in (set(), wanted)
+
+
+@pytest.mark.parametrize("sqlite_fallback", [False, True])
+def test_path_prefixes_are_case_sensitive_for_tantivy_and_sqlite(open_kb, sqlite_fallback):
+    """Review L3E r1 M1: SQLite LIKE folds ASCII case; visibility is Python's case-sensitive startswith."""
+    a = open_kb(vector_gate=2.0)
+    a.apply(add=[visible_doc("zotero/g/active/item/1", "casetopic ", 1),
+                 visible_doc("zotero/g/ACTIVE/item/2", "casetopic ", 2),
+                 visible_doc("zotero/g/Active/item/3", "casetopic ", 3)])
+    ran = force_sqlite_fts(a) if sqlite_fallback else None
+    found = a.search("casetopic", allowed_path_prefixes=("zotero/g/active/",), include_total=True)
+    assert ran is None or ran
+    assert found["total"] == 1 and paths(found["results"]) == {"zotero/g/active/item/1"}
+    upper = a.search("casetopic", allowed_path_prefixes=("zotero/g/ACTIVE/",), include_total=True)
+    assert upper["total"] == 1 and paths(upper["results"]) == {"zotero/g/ACTIVE/item/2"}
+
+
+def _v2_keyword_schema():
+    """The keyword schema before L3E added the raw path term (SCHEMA_VERSION 2)."""
+    import tantivy
+
+    builder = tantivy.SchemaBuilder()
+    builder.add_integer_field("id", stored=True, indexed=True, fast=True)
+    builder.add_text_field("body", stored=False, tokenizer_name="en_stem")
+    return builder.build()
+
+
+def test_unmarked_v2_keyword_folder_is_rebuilt_as_the_current_schema(open_kb, monkeypatch):
+    """Review L3E r1 M2: a real pre-marker data/tantivy written with the previous (v2) schema is this module's own
+    folder; the schema bump must rebuild it, not refuse it as foreign."""
+    import keyword_index
+    import tantivy
+
+    a = open_kb()
+    a.apply(add=[doc("zotero/A", "Xenon lamps glow brightly")])
+    assert paths(a.search("xenon")) == {"zotero/A"}
+    keyword_dir = a.keyword_dir
+    a.close()
+    for entry in keyword_dir.iterdir():
+        entry.unlink()
+    legacy = tantivy.Index(_v2_keyword_schema(), path=str(keyword_dir))
+    writer = legacy.writer()
+    writer.add_document(tantivy.Document(id=1, body="Xenon lamps glow brightly"))
+    writer.commit()
+    writer.wait_merging_threads()
+    (keyword_dir / "schema-version").write_text("2")
+    np.save(keyword_dir / "ids.npy", np.array([1], dtype=np.int64))
+    assert not (keyword_dir / keyword_index.MARKER).exists()
+    assert keyword_index.owned_by_index(keyword_dir)
+    rebuilds = _count_rebuilds(monkeypatch)
+    again = open_kb()
+    assert paths(again.search("xenon")) == {"zotero/A"}
+    assert rebuilds == [keyword_dir]
+    assert (keyword_dir / "schema-version").read_text() == keyword_index.SCHEMA_VERSION
+    assert (keyword_dir / keyword_index.MARKER).is_file()
+    assert tantivy.Index.open(str(keyword_dir)).schema == keyword_index._schema()
+    found = again.search("xenon", allowed_path_prefixes=("zotero/",), include_total=True)
+    assert found["total"] == 1  # the rebuilt index carries the path term
+
+
+def test_path_filtered_vector_search_uses_in_memory_paths_and_stays_exact_across_reloads(open_kb):
+    """Review L3E r1 M3: the vector-side visibility mask comes from paths loaded with the vectors, not a per-search
+    read of every chunk row, and stays exact across incremental reloads, deletes and chunk-id reuse."""
+    a = open_kb(embedder=VisibilityEmbedder())
+    active = [visible_doc(f"zotero/g/active/item/{i}", "zzalphazz ", i) for i in range(3)]
+    staged = [visible_doc(f"zotero/g/staged/item/{i}", "zzalphazz ", 100 + i) for i in range(5)]
+    a.apply(add=active + staged)
+    a.embed_pending()
+    prefix = ("zotero/g/active/",)
+    assert a.search("near alpha", limit=50, allowed_path_prefixes=prefix, include_total=True)["total"] == 3
+
+    statements: list[str] = []
+    a._searcher.db.set_trace_callback(statements.append)
+    try:
+        found = a.search("near alpha", limit=50, allowed_path_prefixes=prefix, include_total=True)
+    finally:
+        a._searcher.db.set_trace_callback(None)
+    assert found["total"] == 3 and paths(found["results"]) == {d.path for d in active}
+    unbounded = [s for s in statements if re.search(r"\bFROM\s+chunks\b", s) and "WHERE" not in s.upper()]
+    assert unbounded == [], unbounded
+
+    # Incremental reload: new visible and invisible chunks append to the loaded vectors.
+    more = [visible_doc(f"zotero/g/active/item/{i}", "zzalphazz ", i) for i in range(3, 5)]
+    a.apply(add=more + [visible_doc("zotero/g/staged/item/new", "zzalphazz ", 999)])
+    a.embed_pending()
+    found = a.search("near alpha", limit=50, allowed_path_prefixes=prefix, include_total=True)
+    assert found["total"] == 5 and paths(found["results"]) == {d.path for d in active + more}
+
+    # Deletes, then chunk-id reuse: the highest id (a visible chunk) is deleted and SQLite hands it to a staged one.
+    top = count(a.db_path, "SELECT max(id) FROM chunks")
+    top_path = sqlite3.connect(a.db_path).execute("SELECT path FROM chunks WHERE id=?", (top,)).fetchone()[0]
+    assert top_path == "zotero/g/staged/item/new"
+    a.apply(remove=["zotero/g/staged/item/new", more[-1].path])
+    a.apply(add=[visible_doc("zotero/g/staged/item/reused", "zzalphazz ", 998)])
+    a.embed_pending()
+    assert sqlite3.connect(a.db_path).execute(
+        "SELECT count(*) FROM chunks WHERE path='zotero/g/staged/item/reused' AND id<=?", (top,)).fetchone()[0]
+    found = a.search("near alpha", limit=50, allowed_path_prefixes=prefix, include_total=True)
+    assert found["total"] == 4 and paths(found["results"]) == {d.path for d in active + more[:-1]}
+    staged_found = a.search("near alpha", limit=50, allowed_path_prefixes=("zotero/g/staged/",), include_total=True)
+    assert staged_found["total"] == 6
+    assert "zotero/g/staged/item/reused" in paths(staged_found["results"])
+
+
+def test_stale_in_memory_vector_path_never_widens_visibility(open_kb):
+    """Another process may delete a visible note and reuse its chunk id for an invisible one before this searcher
+    reloads. The loaded vector still names the old path; the hit is checked against the row's current path."""
+    a = open_kb(embedder=VisibilityEmbedder())
+    a.apply(add=[visible_doc("zotero/g/active/item/1", "zzalphazz ", 1)])
+    a.embed_pending()
+    prefix = ("zotero/g/active/",)
+    assert a.search("near alpha", allowed_path_prefixes=prefix, include_total=True)["total"] == 1
+    other = sqlite3.connect(a.db_path)
+    try:
+        cid = other.execute("SELECT id FROM chunks WHERE path='zotero/g/active/item/1'").fetchone()[0]
+        other.execute("INSERT INTO notes (path, title, source, tags, mtime, meta) "
+                      "VALUES ('zotero/g/hidden/1', 'Hidden', 'personal', '', 0, NULL)")
+        other.execute("UPDATE chunks SET path='zotero/g/hidden/1' WHERE id=?", (cid,))
+        other.commit()
+    finally:
+        other.close()
+    found = a.search("near alpha", allowed_path_prefixes=prefix, include_total=True)  # within the 60 s recheck window
+    assert found == {"results": [], "total": 0}

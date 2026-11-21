@@ -1293,12 +1293,14 @@ class Searcher:
         self.note_sums = np.zeros((0, DIM), dtype=np.float32)
         self.note_paths: list[str] = []
         self.note_index: dict[str, int] = {}
+        self.vec_notes = np.zeros(0, dtype=np.int64)  # per loaded vector: its note's position in note_paths
         self.note_matrix = np.zeros((0, DIM), dtype=np.float16)
         self._duplicates: tuple | None = None
         self._rebuilt: tuple[int, Searcher] | None = None
         self._rebuilding = threading.Event()
 
-    _VECTOR_STATE = ("ids", "max_id", "full_at", "vectors", "note_sums", "note_paths", "note_index", "note_matrix")
+    _VECTOR_STATE = ("ids", "max_id", "full_at", "vectors", "note_sums", "note_paths", "note_index", "vec_notes",
+                     "note_matrix")
 
     def _refresh(self) -> None:
         """Keeps the vectors in memory current. New chunks are appended (cheap); a full reload happens on first
@@ -1406,6 +1408,7 @@ class Searcher:
         if len(self.note_paths) > len(self.note_sums):
             self.note_sums = np.vstack([self.note_sums, np.zeros((len(self.note_paths) - len(self.note_sums), DIM), np.float32)])
         owner = np.fromiter((self.note_index[r[1]] for r in rows), dtype=np.int64, count=len(rows))
+        self.vec_notes = owner if full else np.concatenate([self.vec_notes, owner])
         for i in range(0, len(block), 20000):
             part = owner[i:i + 20000]
             order = np.argsort(part, kind="stable")
@@ -1511,10 +1514,11 @@ class Searcher:
         if len(self.ids):
             scores = self._scores(self._query_vector(query))
             if path_prefixes is not None:
-                chunk_paths = dict(self.db.execute("SELECT id, path FROM chunks"))
-                visible = np.fromiter((chunk_paths.get(int(cid), "").startswith(path_prefixes) for cid in self.ids),
-                                      dtype=bool, count=len(self.ids))
-                scores = np.where(visible, scores, -np.inf)
+                # From the paths loaded with the vectors (one test per note, not a read of every chunk row). A vector
+                # whose row changed path since that load is caught below, against the row's current path.
+                visible = np.fromiter((p.startswith(path_prefixes) for p in self.note_paths), dtype=bool,
+                                      count=len(self.note_paths))
+                scores = np.where(visible[self.vec_notes], scores, -np.inf)
             if pool is None:
                 top = np.argsort(-scores)
             else:
@@ -1538,7 +1542,8 @@ class Searcher:
                 f"SELECT c.id, c.path, c.heading, c.text, n.title, n.source, n.tags, n.mtime, n.meta FROM chunks c "
                 f"JOIN notes n ON n.path=c.path WHERE c.id IN ({placeholders})", batch)})
         scored = sorted(((score * SOURCE_WEIGHTS.get(info[cid][4], 1.0), cid) for cid, score in ranks.items()
-                         if cid in info), reverse=True)
+                         if cid in info and (path_prefixes is None or info[cid][0].startswith(path_prefixes))),
+                        reverse=True)
         # One result per note, carrying its best `per_note` passages. A passage whose text already appeared
         # (the same content saved under two paths) is skipped, so copies don't crowd out other notes.
         results: dict[str, dict] = {}
@@ -1730,9 +1735,10 @@ class Searcher:
 
     @staticmethod
     def _path_clause(path_prefixes: tuple[str, ...]) -> tuple[str, list[str]]:
-        # LIKE wildcards in a caller's literal prefix have no special meaning. Escape them instead of interpolating SQL.
-        escaped = [p.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%" for p in path_prefixes]
-        return " AND (" + " OR ".join("c.path LIKE ? ESCAPE '\\'" for _ in escaped) + ")", escaped
+        # Python's case-sensitive, literal startswith: LIKE folds ASCII case (and needs wildcard escaping), so compare
+        # the path's leading characters to the bound prefix instead. Each prefix is bound twice, never interpolated.
+        args = [value for prefix in path_prefixes for value in (prefix, prefix)]
+        return " AND (" + " OR ".join("substr(c.path, 1, length(?)) = ?" for _ in path_prefixes) + ")", args
 
     def _fts(self, match: str, limit: int | None, path_prefixes: tuple[str, ...] | None = None) -> list[int]:
         if path_prefixes == ():

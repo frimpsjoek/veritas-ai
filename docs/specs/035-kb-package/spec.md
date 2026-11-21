@@ -27,7 +27,8 @@ there is no `pyproject.toml` to install the engine as a library.
   open instance holds. A rebuild empties only a missing/empty folder or one holding nothing but Tantivy's files,
   `schema-version`, `ids.npy` and the `.veritas-keyword-index` marker it writes, with that marker present. An
   unmarked folder from before the marker must additionally have both `meta.json` and `schema-version`, open as a
-  Tantivy index, and carry the keyword schema; anything else, a subfolder or a link refuses the rebuild untouched.
+  Tantivy index, and carry the keyword schema (the current one, or the known previous v2 layout, which the schema bump
+  then rebuilds); anything else, a subfolder or a link refuses the rebuild untouched.
 - R5b. A keyword folder is bound to its database (chunk ids are row numbers that two databases share): the database
   keeps a random id in `meta` (`db_uuid`, added when a writer first opens it) and the marker names it. A
   `keyword_dir` bound to another database is refused (`keyword_index.KeywordIndexBindingError`, a RuntimeError) and
@@ -123,8 +124,11 @@ KnowledgeBase.search(query: str, limit: int = 8, *, allowed_path_prefixes=None,
 - `allowed_path_prefixes=None` preserves existing unfiltered behavior and the list return type. Otherwise the iterable
   is copied into one immutable tuple of deduplicated, literal, nonempty prefixes. An empty iterable returns no hits;
   an empty string prefix is rejected. Tantivy schema v3 indexes a raw path term and ANDs a zero-score prefix predicate
-  into every keyword/rare-term query before candidate limits. SQLite FTS joins the literal prefix predicate before its
-  limits. Vector scores for paths outside the snapshot are masked before top-candidate selection. This is not
+  into every keyword/rare-term query before candidate limits. SQLite FTS joins a case-sensitive literal prefix
+  comparison (`substr(path, 1, length(prefix)) = prefix`, never `LIKE`, which folds ASCII case) before its limits.
+  Vector scores for paths outside the snapshot are masked before top-candidate selection, using the note paths loaded
+  with the vectors (no per-search read of every chunk row). Each fused candidate is also checked against its row's
+  current path, so a vector loaded before another process reused its chunk id cannot widen visibility. This is not
   post-filtering a result page.
 - `include_total=False` preserves the old 200/600 candidate pool and bare result list. `True` uses exhaustive visible
   candidates and returns `{"results": [...], "total": N}`: `total` counts fused documents after source weights,
@@ -134,8 +138,9 @@ KnowledgeBase.search(query: str, limit: int = 8, *, allowed_path_prefixes=None,
   under a lock. Physically staged/inactive documents can coexist but cannot enter hits or totals from another snapshot.
 
 Tests use real SQLite/Tantivy with deterministic fake embedders for pathological chunking, a >600-candidate keyword
-fixture, a >600-candidate vector fixture, old/new and staged isolation, literal metacharacter prefixes, SQLite fallback,
-partial failure plus bounded retry, and concurrent large replacements. Real-ONNX latency/window measurement is not in
+fixture, a >600-candidate vector fixture, old/new and staged isolation, literal metacharacter and mixed-case prefixes
+on both engines, a genuinely forced SQLite fallback, in-memory vector paths across reloads/deletes/id reuse, rebuilding
+an unmarked v2 keyword folder, partial failure plus bounded retry, and concurrent large replacements. Real-ONNX latency/window measurement is not in
 this lane; T0-V owns it.
 
 ## Out of scope
