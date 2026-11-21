@@ -43,6 +43,11 @@ _OPEN: set[Path] = set()
 _OPEN_LOCK = threading.Lock()
 
 
+def _nested(a: Path, b: Path) -> bool:
+    """`a` and `b` (resolved) are the same path, or one contains the other."""
+    return a == b or a.is_relative_to(b) or b.is_relative_to(a)
+
+
 @dataclass
 class Document:
     path: str  # the document's id in the index, e.g. "zotero/ABCD1234" or "uploads/report.md"
@@ -64,9 +69,12 @@ class KnowledgeBase:
         elsewhere; "mlx"; "onnx") pick the shared embedding model, loaded on first use; `embedder` replaces it (any
         callable `(texts, query=False, batch_size=16) -> float32[n, 384]` with an `mlx` attribute). `vector_gate`:
         the cosine below which meaning-only hits are dropped (default kb.VECTOR_GATE). RuntimeError when this process
-        already has either path open."""
+        already has either path open; ValueError when `keyword_dir` contains the database or lies inside it, or either
+        path contains or lies inside one an open KnowledgeBase holds (a keyword rebuild empties its folder)."""
         self.db_path = Path(db_path).resolve()
         self.keyword_dir = Path(keyword_dir).resolve() if keyword_dir is not None else self.db_path.parent / "tantivy"
+        if _nested(self.keyword_dir, self.db_path):  # also covers the -wal/-shm files beside the database
+            raise ValueError(f"keyword_dir {self.keyword_dir} must not contain or lie inside the database {self.db_path}")
         self.model_dir = Path(model_dir) if model_dir is not None else kb.MODEL_DIR
         self.backend = backend
         kb.resolve_backend(backend)  # an unknown backend fails here, not at the first search
@@ -95,6 +103,10 @@ class KnowledgeBase:
             held = [p for p in (self.db_path, self.keyword_dir) if p in _OPEN]
             if held:
                 raise RuntimeError(f"already open in this process: {held[0]}")
+            for mine in (self.db_path, self.keyword_dir):
+                for other in _OPEN:
+                    if _nested(mine, other):
+                        raise ValueError(f"{mine} overlaps {other}, held by an open KnowledgeBase in this process")
             _OPEN.update((self.db_path, self.keyword_dir))
 
     def _release(self) -> None:

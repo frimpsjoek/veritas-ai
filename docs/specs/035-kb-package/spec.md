@@ -22,6 +22,11 @@ there is no `pyproject.toml` to install the engine as a library.
   one SQLite transaction, all or nothing; a failed call leaves the index as it was and the instance usable.
 - R5. Lifecycle: a failed constructor releases its claim on the files; `close()` is idempotent and returns only after
   in-flight work and the searcher's background rebuild have stopped; the same files can then be reopened.
+- R5a. The keyword folder is derived data that a rebuild empties, so the constructor refuses (ValueError) a
+  `keyword_dir` that contains the database or lies inside it, and either path that contains or lies inside one an
+  open instance holds. A rebuild empties the folder only when it holds nothing but Tantivy's files, `schema-version`,
+  `ids.npy` and the `.veritas-keyword-index` marker it writes (an unmarked folder from before the marker must also
+  hold `meta.json` or `schema-version`); anything else, a subfolder or a link refuses the rebuild and stays as it is.
 - R6. Back-compatibility: `kb.py` keeps its whole API and CLI, `kb.py serve`, `bin/veritas`, the LaunchAgent,
   Homebrew and PyInstaller builds are unchanged, the on-disk format is unchanged (a database written by a
   `KnowledgeBase` is a Veritas database), and every existing test passes without edits.

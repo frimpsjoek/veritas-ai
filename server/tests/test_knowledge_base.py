@@ -302,6 +302,112 @@ def test_same_files_twice_refused(isolated_kb):
     KnowledgeBase(db_path, embedder=HashEmbedder()).close()
 
 
+def test_keyword_dir_holding_the_database_refused(isolated_kb):
+    """Review (files mode): a keyword folder that contains the database would be cleared, database and all, by the
+    first keyword rebuild."""
+    db_path = index_dir(isolated_kb, "alice") / "kb.sqlite"
+    KnowledgeBase(db_path, embedder=HashEmbedder()).close()
+    before = db_path.read_bytes()
+    for keyword_dir in (db_path.parent, db_path.parent.parent, db_path, db_path / "tantivy",
+                        db_path.parent / ".." / "index"):
+        with pytest.raises(ValueError, match="keyword_dir"):
+            KnowledgeBase(db_path, keyword_dir=keyword_dir, embedder=HashEmbedder())
+    assert db_path.read_bytes() == before
+    KnowledgeBase(db_path, embedder=HashEmbedder()).close()  # nothing left claimed
+
+
+def test_keyword_dir_overlapping_another_instance_refused(isolated_kb):
+    alice = index_dir(isolated_kb, "alice") / "kb.sqlite"
+    first = KnowledgeBase(alice, embedder=HashEmbedder())
+    first.apply(add=[doc("zotero/A", "Excitons in quantum dots")])
+    try:
+        bob = index_dir(isolated_kb, "bob") / "kb.sqlite"
+        for keyword_dir in (isolated_kb / "alice", alice.parent.parent, alice.parent / "tantivy" / "sub"):
+            with pytest.raises(ValueError, match="overlaps"):
+                KnowledgeBase(bob, keyword_dir=keyword_dir, embedder=HashEmbedder())
+        with pytest.raises(ValueError, match="overlaps"):  # a database inside another instance's keyword folder
+            KnowledgeBase(alice.parent / "tantivy" / "kb.sqlite", keyword_dir=isolated_kb / "elsewhere",
+                          embedder=HashEmbedder())
+        KnowledgeBase(bob, embedder=HashEmbedder()).close()  # the refusals claimed nothing
+        assert paths(first.search("excitons")) == {"zotero/A"}
+    finally:
+        first.close()
+
+
+def test_rebuild_refuses_a_folder_with_foreign_files(open_kb, isolated_kb):
+    """The keyword folder is cleared before a rebuild only when it holds nothing but Tantivy's and the index's files."""
+    keyword_dir = isolated_kb / "shared"
+    keyword_dir.mkdir()
+    (keyword_dir / "thesis.docx").write_text("four years of work")
+    a = open_kb(keyword_dir=keyword_dir)
+    a.apply(add=[doc("zotero/A", "Excitons in quantum dots")])
+    with pytest.raises(RuntimeError, match="not a keyword index"):
+        a.search("excitons")
+    assert (keyword_dir / "thesis.docx").read_text() == "four years of work"
+    nested = isolated_kb / "nested"
+    (nested / "other-tenant").mkdir(parents=True)
+    (nested / "other-tenant" / "kb.sqlite").write_text("x")
+    b = open_kb("bob", keyword_dir=nested)
+    b.apply(add=[doc("zotero/B", "Phonons in graphene")])
+    with pytest.raises(RuntimeError, match="not a keyword index"):
+        b.search("phonons")
+    assert (nested / "other-tenant" / "kb.sqlite").read_text() == "x"
+
+
+def test_rebuild_marks_the_folder_and_rebuilds_marked_or_legacy_ones(open_kb, isolated_kb):
+    import keyword_index
+
+    a = open_kb()
+    a.apply(add=[doc("zotero/A", "Excitons in quantum dots")])
+    assert paths(a.search("excitons")) == {"zotero/A"}
+    keyword_dir = a.keyword_dir
+    assert (keyword_dir / keyword_index.MARKER).is_file()
+    a.close()
+    for legacy in (False, True):  # an old schema forces a rebuild; a legacy folder (pre-marker) has no marker
+        if legacy:
+            (keyword_dir / keyword_index.MARKER).unlink()
+        (keyword_dir / "schema-version").write_text("1")
+        again = open_kb()
+        assert paths(again.search("excitons")) == {"zotero/A"}
+        assert (keyword_dir / "schema-version").read_text() == keyword_index.SCHEMA_VERSION
+        assert (keyword_dir / keyword_index.MARKER).is_file()
+        again.close()
+
+
+def test_recognition_rule(tmp_path):
+    """Unit test of the rule: only regular files Tantivy or the index writes; an unmarked folder must also hold
+    meta.json or schema-version."""
+    from keyword_index import MARKER, owned_by_index
+
+    def folder(name, *files, dirs=()):
+        path = tmp_path / name
+        path.mkdir()
+        for f in files:
+            (path / f).write_text("")
+        for d in dirs:
+            (path / d).mkdir()
+        return path
+
+    seg = "c4b7866d20e643d1932ff9ca3be03a58"
+    tantivy_files = ("meta.json", ".managed.json", ".tantivy-meta.lock", ".tantivy-writer.lock", f"{seg}.idx",
+                     f"{seg}.pos", f"{seg}.term", f"{seg}.store", f"{seg}.fast", f"{seg}.fieldnorm", f"{seg}.9.del")
+    assert owned_by_index(tmp_path / "missing")
+    assert owned_by_index(folder("empty"))
+    assert owned_by_index(folder("legacy", *tantivy_files, "schema-version", "ids.npy"))
+    assert owned_by_index(folder("legacy-no-schema", *tantivy_files))
+    assert owned_by_index(folder("marked", MARKER, "ids.npy"))
+    assert not owned_by_index(folder("unmarked-ids-only", "ids.npy"))
+    assert not owned_by_index(folder("foreign", *tantivy_files, MARKER, "notes.md"))
+    assert not owned_by_index(folder("db", *tantivy_files, MARKER, "kb.sqlite"))
+    assert not owned_by_index(folder("subdir", *tantivy_files, MARKER, dirs=("index",)))
+    link = folder("link", *tantivy_files, MARKER)
+    (link / f"{seg}.term").unlink()
+    (link / f"{seg}.term").symlink_to(tmp_path / "legacy" / "meta.json")
+    assert not owned_by_index(link)
+    (tmp_path / "plain-file").write_text("")
+    assert not owned_by_index(tmp_path / "plain-file")
+
+
 def test_close_is_idempotent_and_waits(open_kb, monkeypatch):
     a = open_kb()
     a.apply(add=[doc("zotero/1", "first xenon")])

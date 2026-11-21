@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
 import sqlite3
 from pathlib import Path
 
@@ -24,6 +23,47 @@ import tantivy
 FIELDS = ("body",)
 SCHEMA_VERSION = "2"
 RARE = 3000  # chunks; a word in more than this many is too common to find anything on its own
+
+# A rebuild empties the keyword folder first, and the folder may be one a caller named (veritas_kb.KnowledgeBase), so
+# it is emptied only when it holds nothing but files Tantivy or this module writes: never a subfolder, a link, a
+# database or anything else. MARKER is written at every rebuild; a folder from before it (legacy data/tantivy) must
+# also hold meta.json or schema-version, which only Tantivy and this module write.
+MARKER = ".veritas-keyword-index"
+_OWN_FILES = {"meta.json", ".managed.json", ".tantivy-meta.lock", ".tantivy-writer.lock", "schema-version", "ids.npy",
+              MARKER}
+_TANTIVY_FILE = re.compile(r"[0-9a-f]{32}(\.\d+)?\.(idx|pos|term|store|fast|fieldnorm|del)"  # segment files
+                           r"|\.tmp[A-Za-z0-9]{6}")  # an atomic write's temporary file, left by a crash
+
+
+class NotAKeywordIndexError(RuntimeError):
+    """The keyword folder holds files this index did not write; it is left as it is."""
+
+
+def owned_by_index(path: Path) -> bool:
+    """True when `path` is missing, empty, or holds only this index's files (MARKER and _OWN_FILES above)."""
+    if not os.path.lexists(path):
+        return True
+    if not path.is_dir():
+        return False
+    entries = list(path.iterdir())
+    for entry in entries:
+        if entry.is_symlink() or not entry.is_file():
+            return False
+        if entry.name not in _OWN_FILES and not _TANTIVY_FILE.fullmatch(entry.name):
+            return False
+    names = {e.name for e in entries}
+    return not names or bool(names & {MARKER, "meta.json", "schema-version"})
+
+
+def _clear(path: Path) -> None:
+    """Empties the keyword folder (files only, never recursively), or refuses when it is not this index's."""
+    if not owned_by_index(path):
+        raise NotAKeywordIndexError(
+            f"{path} is not a keyword index (it holds other files or folders); refusing to clear it for a rebuild. "
+            f"Give the index its own empty keyword folder.")
+    if path.is_dir():
+        for entry in path.iterdir():
+            entry.unlink()
 
 
 def _schema() -> tantivy.Schema:
@@ -98,8 +138,9 @@ class KeywordIndex:
             db.commit()
 
     def _rebuild(self, db: sqlite3.Connection, live: set[int]) -> int:
-        shutil.rmtree(self.path, ignore_errors=True)
-        os.makedirs(self.path)
+        _clear(self.path)
+        os.makedirs(self.path, exist_ok=True)
+        (self.path / MARKER).write_text("Tantivy keyword index of a Veritas kb.sqlite; rebuilt from it when needed.\n")
         self.index = tantivy.Index(_schema(), path=str(self.path))
         (self.path / "schema-version").write_text(SCHEMA_VERSION)
         writer = self.index.writer(heap_size=300_000_000, num_threads=4)
