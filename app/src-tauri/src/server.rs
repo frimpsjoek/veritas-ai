@@ -74,7 +74,9 @@ fn server_command(data: &Path) -> Result<Command, String> {
     let mut command = Command::new(sidecar("veritas-server")?);
     command
         .env("VERITAS_DATA", data)
-            .env("KB_BACKEND", "onnx")
+            // spec 036: the GPU on a Mac with Apple Silicon (4x faster, a quarter of the memory); kb.py falls back to
+            // onnxruntime when MLX cannot start
+            .env("KB_BACKEND", if cfg!(all(target_os = "macos", target_arch = "aarch64")) { "mlx" } else { "onnx" })
             // agent_api.py runs `<SECOND_BRAIN_NODE> <SECOND_BRAIN_AGENTD_ENTRY> ...`; agentd is one executable
             // (Node SEA) that ignores the entry argument, so both name it (packaging/sea/build.mjs).
             .env("SECOND_BRAIN_NODE", &agentd)

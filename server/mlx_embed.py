@@ -10,7 +10,10 @@ from pathlib import Path
 import mlx.core as mx
 import numpy as np
 
-MODEL_DIR = Path(__file__).resolve().parent / "models" / "snowflake-arctic-embed-s"
+import paths
+
+# The model folder the app downloads into ($VERITAS_DATA/models), else the source folder's models/ (spec 036 R2).
+MODEL_DIR = paths.models_dir(Path(__file__).resolve().parent) / "snowflake-arctic-embed-s"
 WEIGHTS = MODEL_DIR / "mlx-weights.npz"
 LAYERS, HEADS, HIDDEN, EPS = 12, 12, 384, 1e-12
 
@@ -87,6 +90,7 @@ class ArcticMLX:
             h = lin(x, "intermediate.dense")
             h = 0.5 * h * (1 + mx.erf(h / np.sqrt(2.0)))  # exact GELU, as in BERT
             x = layer_norm(x + lin(h, "output.dense"), w[p + "output.LayerNorm.weight"], w[p + "output.LayerNorm.bias"])
+            mx.eval(x)  # one layer at a time: a lazy 12-layer graph kept every layer's attention alive (1 GB a batch)
         cls = x[:, 0]
         return cls / mx.maximum(mx.linalg.norm(cls, axis=1, keepdims=True), 1e-9)
 

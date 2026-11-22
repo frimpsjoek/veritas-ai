@@ -3,7 +3,9 @@
 import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_dynamic_libs
+import platform
+
+from PyInstaller.utils.hooks import collect_all, collect_dynamic_libs
 
 SERVER = Path(SPECPATH).resolve().parents[1] / "server"
 
@@ -11,19 +13,24 @@ SERVER = Path(SPECPATH).resolve().parents[1] / "server"
 # the HTTP server and pulls in the whole mcp package.
 modules = sorted(p.stem for p in SERVER.glob("*.py") if p.stem not in {"server", "eval"})
 
-# The desktop app runs the ONNX backend everywhere (KB_BACKEND=onnx): MLX and the onnx converter stay out. Apple
-# Vision (pyobjc) is not in requirements.txt, so OCR in the app matches a source install without it.
-excludes = ["mlx", "mlx_embed", "onnx", "pytest", "_pytest", "mcp", "tkinter", "Vision", "Quartz", "Foundation"]
+# Spec 036: on a Mac with Apple Silicon the app embeds with MLX on the GPU (KB_BACKEND=mlx, server.rs), so mlx and
+# its Metal library are bundled there; everywhere else onnxruntime runs a fused copy of the model, made once with
+# onnxruntime's transformer optimizer (onnx and sympy). Apple Vision (pyobjc) is not in requirements.txt, so OCR in
+# the app matches a source install without it.
+APPLE_SILICON = sys.platform == "darwin" and platform.machine() == "arm64"
+excludes = ["pytest", "_pytest", "mcp", "tkinter", "Vision", "Quartz", "Foundation"] + ([] if APPLE_SILICON else ["mlx", "mlx_embed"])
 modules = [m for m in modules if m not in excludes]
+mlx_datas, mlx_binaries, mlx_hidden = collect_all("mlx") if APPLE_SILICON else ([], [], [])
 
 a = Analysis(
     [str(Path(SPECPATH) / "veritas_server.py")],
     pathex=[str(SERVER)],
-    binaries=collect_dynamic_libs("onnxruntime") + collect_dynamic_libs("pypdfium2_raw"),
+    binaries=collect_dynamic_libs("onnxruntime") + collect_dynamic_libs("pypdfium2_raw") + mlx_binaries,
     # the sources too, as plain files: kb.py and http_api.py read their own files' mtimes to notice an update
-    datas=[(str(p), ".") for p in SERVER.glob("*.py")],
+    datas=[(str(p), ".") for p in SERVER.glob("*.py")] + mlx_datas,
     hiddenimports=modules + ["tantivy", "pypdfium2", "pypdfium2_raw", "numpy", "onnxruntime", "tokenizers",
-                             "PIL.Image", "markdown", "truststore"],
+                             "PIL.Image", "markdown", "truststore", "onnx", "onnx.numpy_helper", "sympy",
+                             "onnxruntime.transformers.optimizer"] + mlx_hidden,
     excludes=excludes,
     noarchive=False,
 )

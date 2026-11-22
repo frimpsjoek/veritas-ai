@@ -19,7 +19,12 @@ jsonschema-specifications==2025.9.1
 markdown==3.11.2
 mcp==2.3.0
 mcp-types==2.3.0
+ml-dtypes==0.7.0
+mlx==0.32.4 ; sys_platform == "darwin" and platform_machine == "arm64"
+mlx-metal==0.32.4 ; sys_platform == "darwin" and platform_machine == "arm64"
+mpmath==1.3.0
 numpy==2.5.4
+onnx==1.23.2
 onnxruntime==1.31.0
 opentelemetry-api==1.45.1
 packaging==26.3
@@ -39,6 +44,7 @@ referencing==0.37.0
 rpds-py==2026.9.1
 sse-starlette==3.5.0
 starlette==1.9.0
+sympy==1.14.0
 tantivy==0.26.2
 tokenizers==0.23.3
 tqdm==4.70.1

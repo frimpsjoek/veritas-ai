@@ -412,6 +412,71 @@ def note_title(fields: dict, body: str, stem: str) -> str:
 
 # ---------------------------------------------------------------- embeddings
 
+# Passages per model call while indexing (spec 036): 8 keeps the activations of a batch small (the peak of a run
+# halves against 16) at the same speed, on the GPU and on the CPU.
+EMBED_BATCH = 8
+FUSED_MIN_COSINE = 0.9999  # a fused model whose vectors differ more than this from the original is not used
+_FUSE_PROBE = ["Swift concurrency with actors and Sendable", "How banks create money by lending",
+               "MACE polarisable foundation model " * 30, "GW quasiparticle energies of benzene"]
+
+
+def onnx_model(options=None) -> Path:
+    """The ONNX model to run: model-fused.onnx next to the original when it can be made (onnxruntime's transformer
+    optimizer: Attention, SkipLayerNorm and BiasGelu fused; 15% faster and 40% less memory on the CPU, spec 036 R3)
+    and its vectors match the original's on a probe; else the original. Made once; a failed try leaves a marker."""
+    original = MODEL_DIR / "onnx" / "model.onnx"
+    fused = MODEL_DIR / "onnx" / "model-fused.onnx"
+    failed = MODEL_DIR / "onnx" / "model-fused.failed"
+    if fused.exists():
+        return fused
+    if not original.exists() or os.environ.get("KB_FUSE") == "0":
+        return original
+    # a failed try is not repeated until the code changes (an update may bring what was missing)
+    if failed.exists() and failed.stat().st_mtime > Path(__file__).stat().st_mtime:
+        return original
+    tmp = fused.with_name(f"model-fused.{os.getpid()}.tmp")
+    try:
+        import onnxruntime
+        from onnxruntime.transformers import optimizer
+
+        model = optimizer.optimize_model(str(original), model_type="bert", num_heads=12, hidden_size=DIM, opt_level=0)
+        model.save_model_to_file(str(tmp))
+        cos = _fused_cosine(original, tmp, options or onnxruntime.SessionOptions())
+        if cos < FUSED_MIN_COSINE:
+            raise ValueError(f"fused model differs from the original (min cosine {cos:.6f})")
+        tmp.replace(fused)
+        return fused
+    except Exception as error:  # noqa: BLE001 - no onnx package, an optimizer change: the original works as before
+        print(f"fused model not made, using the original: {error}", file=sys.stderr)
+        try:
+            failed.write_text(str(error)[:500])
+        except OSError:
+            pass
+        return original
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _fused_cosine(original: Path, fused: Path, options) -> float:
+    import onnxruntime
+    from tokenizers import Tokenizer
+
+    tok = Tokenizer.from_file(str(MODEL_DIR / "tokenizer.json"))
+    tok.enable_truncation(max_length=512)
+    tok.enable_padding(pad_id=tok.token_to_id("[PAD]") or 0, pad_token="[PAD]")
+    enc = tok.encode_batch(_FUSE_PROBE)
+    ids = np.array([e.ids for e in enc], dtype=np.int64)
+    mask = np.array([e.attention_mask for e in enc], dtype=np.int64)
+    out = []
+    for path in (original, fused):
+        session = onnxruntime.InferenceSession(str(path), options, providers=["CPUExecutionProvider"])
+        names = {i.name for i in session.get_inputs()}
+        feed = {"input_ids": ids, "attention_mask": mask, "token_type_ids": np.zeros_like(ids)}
+        cls = session.run(None, {k: v for k, v in feed.items() if k in names})[0][:, 0].astype(np.float32)
+        out.append(cls / np.maximum(np.linalg.norm(cls, axis=1, keepdims=True), 1e-9))
+    return float(np.min(np.sum(out[0] * out[1], axis=1)))
+
+
 class Embedder:
     def __init__(self) -> None:
         from tokenizers import Tokenizer
@@ -436,8 +501,7 @@ class Embedder:
         options.log_severity_level = 3
         options.enable_cpu_mem_arena = False  # batches vary in length; the arena would keep every size it saw
         options.intra_op_num_threads = int(os.environ.get("KB_THREADS", "4"))
-        self.session = onnxruntime.InferenceSession(str(MODEL_DIR / "onnx" / "model.onnx"), options,
-                                                    providers=["CPUExecutionProvider"])
+        self.session = onnxruntime.InferenceSession(str(onnx_model(options)), options, providers=["CPUExecutionProvider"])
         self.inputs = {i.name for i in self.session.get_inputs()}
 
     def _run(self, batch: list[str]) -> np.ndarray:
@@ -1066,6 +1130,12 @@ def embed_pending(db: sqlite3.Connection, verbose: bool = True, batch: int = 256
     if progress:
         progress.stage("embedding", todo)
     embed = Embedder()
+    # Texts that occur more than once among the passages still to embed: only their vectors are kept for the run.
+    repeated = {_embed_text(*r) for r in db.execute(
+        "SELECT n.title, c.heading, c.text FROM chunks c JOIN notes n ON n.path=c.path WHERE c.id NOT IN "
+        "(SELECT id FROM vecs) GROUP BY n.title, c.heading, c.text HAVING count(*) > 1")}
+    seen: dict[str, bytes] = {}
+    batch_vecs: dict[str, bytes] = {}
     done, started, last_stamp = 0, time.time(), time.time()
     while True:
         rows = db.execute(f"SELECT c.id, n.title, c.heading, c.text, c.path FROM chunks c JOIN notes n ON n.path=c.path "
@@ -1073,9 +1143,17 @@ def embed_pending(db: sqlite3.Connection, verbose: bool = True, batch: int = 256
         if not rows:
             break
         texts = [_embed_text(title, heading, text) for _, title, heading, text, _ in rows]
-        vectors = embed(texts, batch_size=64 if embed.mlx is not None else 16).astype(np.float16)
+        # spec 036 R4: a text seen before in this run (6% of passages repeat one exactly) reuses its vector
+        fresh = sorted({t for t in texts if t not in seen})
+        if fresh:
+            for text, vec in zip(fresh, embed(fresh, batch_size=EMBED_BATCH).astype(np.float16)):
+                if text in repeated:
+                    seen[text] = vec.tobytes()
+                else:
+                    batch_vecs[text] = vec.tobytes()
         db.executemany("INSERT OR REPLACE INTO vecs VALUES (?,?,?)",
-                       [(r[0], r[4], v.tobytes()) for r, v in zip(rows, vectors)])
+                       [(r[0], r[4], seen.get(t) or batch_vecs[t]) for r, t in zip(rows, texts)])
+        batch_vecs.clear()
         done += len(rows)
         if time.time() - last_stamp > 300:  # lets a running server pick up new vectors every few minutes
             stamp(db, "vectors_at")
