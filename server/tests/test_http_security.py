@@ -392,3 +392,9 @@ def test_missing_globus_config_keeps_legacy_and_a2a_behavior(server):
     assert call(port, "GET", "/auth/globus/login", secure_phone())[0] == 503
     assert call(port, "GET", "/ping", secure_phone(Authorization="Bearer secret-token"))[0] == 200
     assert call(port, "POST", "/a2a", secure_phone(Authorization="Bearer secret-token"), {})[0] == 401
+
+
+def test_ping_says_ready_once_the_real_routes_answer(server):
+    port, _ = server
+    status, _, body = call(port, "GET", "/ping")
+    assert status == 200 and json.loads(body) == {"ok": True}

@@ -10,6 +10,7 @@ function uninstall() {}
 
 async function startup({ id, version, rootURI }) {
 	Services.scriptloader.loadSubScript(rootURI + "content/second-brain.js");
+	Services.scriptloader.loadSubScript(rootURI + "content/server-port.js");
 	Services.scriptloader.loadSubScript(rootURI + "content/editor.js");
 	Services.scriptloader.loadSubScript(rootURI + "content/store.js");
 	Services.scriptloader.loadSubScript(rootURI + "content/discover.js");

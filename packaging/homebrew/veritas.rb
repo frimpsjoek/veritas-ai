@@ -1,12 +1,15 @@
-# Homebrew formula for Veritas AI (spec 024 G1). Published in the tap frimpsjoek/homebrew-veritas as Formula/veritas.rb;
-# `url` and `sha256` are set for each release tag of veritas-ai.
+# Homebrew formula for Veritas AI (veritas-ai spec 024 G1).
+# Source: https://github.com/frimpsjoek/veritas-ai/blob/main/packaging/homebrew/veritas.rb
+# This file is the source of truth for Formula/veritas.rb in the tap frimpsjoek/homebrew-veritas. On each release tag,
+# .github/workflows/release.yml copies it there with the tag's url and the sha256 of its tarball, revision back to 0
+# (tools/release.mjs moves the url here; the sha256 here stays the previous release's, since a tarball exists only once
+# its tag is pushed). For a fix between releases: bump `revision` here and copy the file to the tap by hand.
 class Veritas < Formula
   desc "Open-source research assistant you can check: your papers, notes and new literature, with citations"
   homepage "https://github.com/frimpsjoek/veritas-ai"
-  url "https://github.com/frimpsjoek/veritas-ai/archive/refs/tags/v0.54.0.tar.gz"
+  url "https://github.com/frimpsjoek/veritas-ai/archive/refs/tags/v0.54.8.tar.gz"
   sha256 "b4d5518eadf14df52c3a06cf3f6f98ec1e9a73f6f8c37b1e109dcfeffac30ebe"
   license "MIT"
-  revision 2
 
   depends_on "node@22" => :build
   depends_on "node@22"
@@ -50,7 +53,8 @@ class Veritas < Formula
     <<~EOS
       Start Veritas now and at login:  brew services start veritas
       Open it:                         veritas open   (http://localhost:27182/app/)
-      Your data and the search model live in #{var}/veritas.
+      Restart it after an upgrade:     brew services restart veritas
+      Your data and the search model live in #{var}/veritas; upgrades keep them.
     EOS
   end
 

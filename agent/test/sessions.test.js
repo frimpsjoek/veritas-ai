@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  manifest, legacyView, isLegacy, summaryExtras, nextStepId, nextResultId, rowIdFor,
+  manifest, legacyView, isLegacy, summaryExtras, coverOf, chatFirst, threadText, nextStepId, nextResultId, rowIdFor,
   papersFromFind, papersFromReview, renderResult, manifestBlock,
 } from '../src/sessions.js';
 
@@ -113,6 +113,31 @@ test('summaryExtras: a legacy chat has 0 artifacts and kind "chat"; a find sessi
   assert.deepEqual(summaryExtras(findSession), { artifacts: 1, kind: 'find' });
 });
 
+test('spec 030 R10: a thread that began with a chat question stays a chat (history kind and cover) after a Find search and a report', () => {
+  const find = [
+    { type: 'step', id: 'S1', input: { kind: 'find', query: 'widgets', sources: {}, scope: { kind: 'library' } }, reads: [], at: 't2' },
+    { type: 'result', summary: { ref: { id: 'R1', version: 1 }, kind: 'papers', title: 'Widgets', versions: 1, rows: 5, columns: [], updated: 't2' }, at: 't2' },
+    { type: 'step_end', id: 'S1', status: 'done', writes: [{ id: 'R1', version: 1 }], at: 't2' },
+  ];
+  const chat = [
+    { type: 'meta', id: 'c1', mode: 'chat', title: 'x', created: 't0' },
+    { type: 'user', text: 'How are widgets made?', attachments: [], at: 't1' },
+    { type: 'assistant', answer: { text: 'From parts.', citations: [] }, at: 't1' },
+  ];
+  const chatThenFind = [...chat, ...find];
+  assert.equal(chatFirst(chatThenFind), true);
+  assert.equal(summaryExtras(chatThenFind).kind, 'chat');
+  assert.equal(coverOf(chatThenFind)?.kind, 'chat');
+  // a session that began as the search is still a find, a chat question after it changes nothing
+  const findThenChat = [chat[0], ...find, { type: 'user', text: 'Which are recent?', attachments: [], at: 't3' }];
+  assert.equal(chatFirst(findThenChat), false);
+  assert.equal(summaryExtras(findThenChat).kind, 'find');
+  assert.equal(coverOf(findThenChat)?.kind, 'find');
+  // a question that is a step's own line (chat_papers) does not count as the thread's opening chat
+  const stepLine = [chat[0], { type: 'user', text: 'About these', attachments: [], step: 'S2', at: 't1' }, ...find];
+  assert.equal(chatFirst(stepLine), false);
+});
+
 // ---------- ids ----------
 
 test('nextStepId / nextResultId count from the records, not from array length', () => {
@@ -219,4 +244,19 @@ test('manifestBlock lists every result with the current one marked, and stays un
 
 test('manifestBlock is empty with no results (a plain chat)', () => {
   assert.equal(manifestBlock({ results: [], current: null }), '');
+});
+
+test('spec 030 R12: threadText is the last turns of a thread, oldest first, cut to size; none without chat turns', () => {
+  const records = [
+    { type: 'meta' },
+    { type: 'user', text: 'What themes run through my library?' },
+    { type: 'assistant', answer: { text: 'Reproducible agent-made optimizations in WEST.' } },
+    { type: 'step', input: { kind: 'find' } },
+    { type: 'user', text: 'i need more papers on this' },
+  ];
+  assert.equal(threadText(records), 'User: What themes run through my library?\n\nAssistant: Reproducible agent-made optimizations in WEST.\n\nUser: i need more papers on this');
+  assert.equal(threadText([{ type: 'meta' }, { type: 'step' }]), '');
+  const long = Array.from({ length: 10 }, (_, i) => ({ type: 'user', text: `q${i} ${'x'.repeat(3000)}` }));
+  const text = threadText(long);
+  assert.ok(text.length <= 6000 && text.includes('q9') && !text.includes('q0 '), 'the newest turns, within the limit');
 });

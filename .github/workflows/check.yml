@@ -7,8 +7,19 @@ on:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    # spec 024 G2: Veritas runs on macOS, Windows and Linux, so every part is checked on all three.
+    strategy:
+      fail-fast: false  # one system failing still shows how the other two did
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash  # check.sh is sh; on Windows this is Git Bash
     steps:
+      # Windows runners turn LF into CRLF on checkout, which breaks sh scripts and the committed-file checks.
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
@@ -25,10 +36,16 @@ jobs:
         with:
           python-version: "3.12"
       - name: Server venv
-        run: python -m venv server/.venv && server/.venv/bin/pip install -r server/requirements.txt
+        run: |
+          python -m venv server/.venv
+          if [ -x server/.venv/bin/python ]; then py=server/.venv/bin/python; else py=server/.venv/Scripts/python.exe; fi
+          "$py" -m pip install -r server/requirements.txt
       - name: Check every part
         run: ./check.sh
+        env:
+          PYTHONUTF8: "1"  # Windows Python otherwise reads notes and settings in the ANSI code page
       - uses: actions/upload-artifact@v7
+        if: matrix.os == 'ubuntu-latest'  # the xpi is the same on every system: upload it once
         with:
           name: veritas-zotero-xpi
           path: zotero/dist/

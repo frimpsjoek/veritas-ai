@@ -31,7 +31,7 @@ test("no local fallback references remain", () => {
 	for (const gone of ["local-index.js", "engine.html"]) assert.ok(!readdirSync(content).includes(gone), `${gone} is deleted`);
 });
 
-/** second-brain.js and agent-host.js in one bare context, over a fake Zotero whose HTTP layer records each request. */
+/** second-brain.js, server-port.js and agent-host.js in one bare context, over a fake Zotero whose HTTP layer records each request. */
 function loadClient({ token = "s3cret", up = true } = {}) {
 	const requests = [];
 	const prefs = new Map([["extensions.secondbrain.server", "http://127.0.0.1:9"]]);
@@ -50,6 +50,7 @@ function loadClient({ token = "s3cret", up = true } = {}) {
 	const context = vm.createContext({ Zotero, Services: {}, IOUtils: {}, PathUtils: {}, TextDecoder, URLSearchParams, setTimeout, clearTimeout, console });
 	context.SecondBrainAgent = { createRemoteRuntime: (transport) => ({ where: "server", transport }), MCP_CATALOG: [] };
 	vm.runInContext(read("second-brain.js"), context);
+	vm.runInContext(read("server-port.js"), context); // bootstrap.js loads it right after second-brain.js
 	vm.runInContext("this.SecondBrain = SecondBrain;", context);
 	vm.runInContext(read("agent-host.js"), context);
 	return { sb: context.SecondBrain, requests, prefs };

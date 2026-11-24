@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { REVIEW_STAGES_2, runReview, deriveStatus, reviewProgress, WAIT } from '../src/review.js';
 import { CLARIFY_SCHEMA, PLAN_SCHEMA_2, CANDIDATES_SCHEMA, REPORT_SCHEMA_2, REPORT_CAPS } from '../src/prompts.js';
-import { searchTools, verifyCandidates, mergeCandidates, rankCandidates, screen2Stage, decide, isIncluded, normalizePlan, cleanQuestions, checkEvidence, countsOf } from '../src/review2.js';
+import { searchTools, verifyCandidates, mergeCandidates, rankCandidates, screen2Stage, decide, isIncluded, normalizePlan, cleanQuestions, checkEvidence, countsOf, seededRows, withTopicCriterion, withFilledAbstracts, withOpenAccess, readSentence } from '../src/review2.js';
 import { papersResultFromReview } from '../src/review-session.js';
 import { createToolGateway } from '../src/tools.js';
 import { memoryFs } from './support/memory-fs.mjs';
@@ -577,4 +577,79 @@ test('pipeline 2 search tools take the web mode saved on the request', () => {
   assert.equal(searchTools(ctx('cached'), ['web'], 's').web, 'cached');
   assert.equal(searchTools(ctx(), ['web'], 's').web, 'live');
   assert.equal(searchTools(ctx('cached'), ['papers'], 's').web, 'off');
+});
+
+test('spec 030 R9: a report on a paper set reads its library papers like its own search does; outside papers unchanged', () => {
+  const lib = { id: 'p:DOEX24', ref: { kind: 'paper', citekey: 'DOEX24' }, inLibrary: true, fullText: false, title: 'L', abstract: 'snippet' };
+  const out = { id: 'doi:10.1/x', ref: { kind: 'web', url: 'https://doi.org/10.1/x' }, inLibrary: false, fullText: false, title: 'O', abstract: 'a' };
+  const rows = seededRows(/** @type {any} */ ([lib, out]));
+  assert.equal(rows[0].fullText, true);
+  assert.deepEqual(rows[1], out);
+});
+
+test('spec 030 R9: a Research report on a paper set screens on the question (one strict criterion added, the lead\'s kept); without a set, nothing is added', () => {
+  const lead = { subQuestions: [], criteria: [{ text: 'Prefer comparisons', strict: false }], columns: [], assumed: [] };
+  const onSet = normalizePlan(lead, { ...REQUEST, on: { id: 'R1', version: 1 } });
+  assert.deepEqual(onSet.criteria.map((c) => [c.id, c.strict]), [['criterion_1', false], ['criterion_2', true]]);
+  assert.match(onSet.criteria[1].text, /^Is about the question: /);
+  assert.deepEqual(normalizePlan(lead, REQUEST).criteria.map((c) => c.strict), [false]);
+  // the lead already marked one strict: left as it is
+  const strict = [{ id: 'criterion_1', text: 'Must be on Cu', strict: true }];
+  assert.equal(withTopicCriterion(/** @type {any} */ (strict), 'q'), strict);
+  // a paper the strict criterion answers "no" for is left out, an unsettled one stays
+  const crit = onSet.criteria;
+  assert.equal(decide(crit, { criterion_2: { state: 'filled', value: 'no' } }).ai, 'exclude');
+  assert.equal(decide(crit, { criterion_2: { state: 'not_found' } }).ai, 'unclear');
+});
+
+test('spec 030 R9: evidence may name any included paper by row id: a library paper becomes its citekey, an outside one its DOI link; unknown ids dropped', () => {
+  const table = {
+    columns: [{ id: 'f', name: 'F' }],
+    rows: [
+      { id: 'p:k', ref: { kind: 'paper', citekey: 'k' }, title: 'Library paper', year: 2020, doi: null, url: null },
+      { id: 'doi:10.1107/s1', ref: { kind: 'web', url: 'https://doi.org/10.1107/s1' }, title: 'Outside paper', year: 1999, doi: '10.1107/s1', url: null },
+    ],
+    cells: { 'doi:10.1107/s1': { f: { state: 'filled', value: 'v', quotes: [], citations: [] } } },
+  };
+  const out = checkEvidence({ evidence: [{ claim: 'c', strength: 'moderate', sources: ['p:k', 'doi:10.1107/s1', 'k', 'made-up'], cells: [{ row: 'doi:10.1107/s1', column: 'f' }] }] }, /** @type {any} */ (table));
+  assert.deepEqual(out.evidence[0].sources, ['k']);
+  assert.deepEqual(out.evidence[0].links, [{ url: 'https://doi.org/10.1107/s1', title: 'Outside paper', year: 1999 }]);
+  // no outside paper: no `links` key at all
+  assert.equal('links' in checkEvidence({ evidence: [{ claim: 'c', strength: 'weak', sources: ['k'], cells: [] }] }, /** @type {any} */ (table)).evidence[0], false);
+});
+
+test('spec 031 R1: an outside paper with no abstract gets one before screening; library papers and papers with one are not looked up', async () => {
+  const rows = [
+    { id: 'doi:10.1/a', inLibrary: false, doi: '10.1/a', abstract: '', url: null },
+    { id: 'p:k', inLibrary: true, doi: '10.1/k', abstract: '' },
+    { id: 'doi:10.1/b', inLibrary: false, doi: '10.1/b', abstract: 'Has one.' },
+    { id: 'arx', inLibrary: false, doi: null, url: 'https://arxiv.org/abs/2401.1', abstract: '' },
+  ];
+  let asked = null;
+  const out = await withFilledAbstracts(/** @type {any} */ (rows), async (papers) => { asked = papers; return new Map([['doi:10.1/a', 'Found abstract.']]); });
+  assert.deepEqual(asked, [{ id: 'doi:10.1/a', doi: '10.1/a', arxiv: null }, { id: 'arx', doi: null, arxiv: '2401.1' }]);
+  assert.deepEqual([out[0].abstract, out[0].abstractStatus], ['Found abstract.', 'source']);
+  assert.equal(out[3].abstract, '');
+  // nothing found, or no lookup: the same array back
+  assert.equal(await withFilledAbstracts(/** @type {any} */ (rows), async () => new Map()), rows);
+  assert.equal(await withFilledAbstracts(/** @type {any} */ (rows), undefined), rows);
+});
+
+test('spec 031 R2: withOpenAccess marks outside rows only; a free copy sets pdfUrl; a failed lookup leaves rows as they were', async () => {
+  const rows = [{ id: 'a', inLibrary: false, pdfUrl: null }, { id: 'k', inLibrary: true, pdfUrl: null }, { id: 'b', inLibrary: false, pdfUrl: null }];
+  let seen = null;
+  const out = await withOpenAccess(/** @type {any} */ (rows), async (outside) => { seen = outside.map((r) => r.id); return [{ access: 'open', pdfUrl: 'https://x/a.pdf', via: 'OpenAlex' }, { access: 'publisher', page: 'https://doi.org/b' }]; });
+  assert.deepEqual(seen, ['a', 'b']);
+  assert.deepEqual(out.map((r) => [r.access, r.pdfUrl]), [['open', 'https://x/a.pdf'], [undefined, null], ['publisher', null]]);
+  assert.deepEqual(await withOpenAccess(/** @type {any} */ (rows), async () => { throw new Error('down'); }), rows);
+});
+
+test('spec 031 R4: readSentence counts what the papers were read from and names those with no text', () => {
+  const rows = [
+    { readFrom: 'library', title: 'L' }, { readFrom: 'open_access', title: 'O' }, { readFrom: 'open_access', title: 'O2' },
+    { readFrom: 'abstract', title: 'A' }, { readFrom: 'none', title: 'Partial core hole screening' },
+  ];
+  assert.equal(readSentence(/** @type {any} */ (rows)), 'Of the 5 papers with data extracted, 3 were read in full (1 from your library, 2 from free copies found online), 1 from the abstract only and 1 had no text to read. No text: "Partial core hole screening".');
+  assert.equal(readSentence([]), '');
+  assert.equal(readSentence(/** @type {any} */ ([{ readFrom: 'library', title: 'x' }])), 'Of the 1 paper with data extracted, 1 was read in full (1 from your library, 0 from free copies found online).');
 });

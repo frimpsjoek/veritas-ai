@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -76,5 +77,5 @@ def test_no_zotero_and_an_empty_home(tmp_path, monkeypatch):
 
 
 def test_display_shortens_the_home_folder():
-    assert setup_suggest.display(Path.home() / "Zotero") == "~/Zotero"
-    assert setup_suggest.display(Path("/Volumes/x")) == "/Volumes/x"
+    assert setup_suggest.display(Path.home() / "Zotero") == f"~{os.sep}Zotero"  # Windows shows ~\Zotero
+    assert setup_suggest.display(Path("/Volumes/x")) == str(Path("/Volumes/x"))  # shown in this system's own form

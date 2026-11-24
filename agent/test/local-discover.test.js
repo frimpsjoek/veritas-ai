@@ -33,7 +33,7 @@ async function fixture() {
   return { root, models, cache };
 }
 
-test('scanModels lists exactly the chat models, once each, Woof 4B first, with sizes', async () => {
+test('scanModels lists exactly the chat models, once each, Woof 4B first, with sizes', { skip: process.platform !== 'darwin' && 'local models (MLX) run on Apple silicon Macs only' }, async () => {
   const { root, models, cache } = await fixture();
   try {
     const { models: found, missing } = await scanModels({ fs, dirs: [models, cache] });

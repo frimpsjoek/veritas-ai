@@ -2,7 +2,7 @@
 // Invented papers only (public repo).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyFeedback, PROFILE_STEP } from '../src/radar-feedback.js';
+import { applyFeedback, taughtSeeds, MAX_TAUGHT, PROFILE_STEP, LIKE_STEP } from '../src/radar-feedback.js';
 import { emptyState } from '../src/radar-state.js';
 import { WEIGHTS } from '../src/radar-score.js';
 
@@ -48,13 +48,38 @@ test('Read later is a positive example and learns nothing; Not relevant is a neg
   assert.deepEqual(no.state.examples.positive, []);
 });
 
-test('Like is a positive example that learns no author or venue; an unknown verdict is refused', () => {
+test('Like is a positive example and raises the authors and venue by the smaller LIKE_STEP; an unknown verdict is refused', () => {
   const liked = click(stateWith(2), profile(), 1, 'liked');
   assert.equal(liked.verdict, 'liked');
   assert.deepEqual(liked.state.examples.positive.map((e) => e.id), ['doi:10.1/p1']);
-  assert.deepEqual(liked.state.learned, []);
-  assert.equal(liked.profile.authors[0].weight, 1);
+  assert.ok(LIKE_STEP > 0 && LIKE_STEP < PROFILE_STEP, 'a Like teaches less than an Add');
+  const [bramble, thistle] = liked.profile.authors;
+  assert.equal(bramble.weight, 1 + LIKE_STEP);
+  assert.deepEqual([thistle.name, thistle.weight, thistle.origin], ['Omar Thistle', LIKE_STEP, 'learned']);
+  assert.deepEqual(liked.profile.journals, [{ name: 'Journal of Invented Results', openalexId: null, weight: LIKE_STEP, origin: 'learned' }]);
+  assert.deepEqual(liked.state.learned.map((l) => [l.kind, l.name, l.step]), [['author', 'Jane Bramble', LIKE_STEP], ['author', 'Omar Thistle', LIKE_STEP], ['venue', 'Journal of Invented Results', LIKE_STEP]]);
   assert.throws(() => click(stateWith(1), profile(), 1, 'loved'), /Unknown verdict "loved"/);
+});
+
+test('Like then Add: the Like is taken back and the Add teaches its full step; undo brings the Like back', () => {
+  const liked = click(stateWith(1), profile(), 1, 'liked');
+  const added = click(liked.state, liked.profile, 1, 'added');
+  assert.equal(added.profile.authors[0].weight, 1 + PROFILE_STEP);
+  assert.equal(added.profile.authors[1].weight, PROFILE_STEP);
+  const back = click(added.state, added.profile, 1, 'undo');
+  assert.deepEqual(back.profile, liked.profile);
+  assert.deepEqual(click(back.state, back.profile, 1, 'undo').profile, profile());
+});
+
+test('an author learned from a paper that carries OpenAlex ids keeps the id, and is matched by it', () => {
+  const s = stateWith(1, { authors: ['Omar Thistle', 'J. Bramble-Moss'], authorIds: ['A77', 'A1'] });
+  const out = click(s, profile(), 1, 'added');
+  const thistle = out.profile.authors.find((a) => a.name === 'Omar Thistle');
+  assert.equal(thistle.openalexId, 'A77');
+  // The followed author with id A1 is the same person under another spelling: her weight rises, no new entry.
+  assert.equal(out.profile.authors.find((a) => a.openalexId === 'A1').weight, 1 + PROFILE_STEP);
+  assert.equal(out.profile.authors.length, 2);
+  assert.deepEqual(click(out.state, out.profile, 1, 'undo').profile, profile());
 });
 
 test('the same verdict twice changes nothing, and the input state is never mutated', () => {
@@ -171,4 +196,26 @@ test('a paper whose details were trimmed still takes a verdict, with nothing to 
   assert.equal(out.verdict, 'added');
   assert.deepEqual(out.state.examples.positive, []);
   assert.deepEqual(out.profile, profile());
+});
+
+test('Like and Add teach a seed radar, Read later and Not relevant do not, and Undo takes it back', () => {
+  const start = stateWith(4);
+  const liked = click(start, profile(), 1, 'liked');
+  const added = click(liked.state, liked.profile, 2, 'added');
+  const later = click(added.state, added.profile, 3, 'later');
+  const nope = click(later.state, later.profile, 4, 'dismissed');
+  assert.deepEqual(taughtSeeds(nope.state), [{ title: 'Invented paper number 1 on voles', text: 'Invented paper number 1 on voles. Burrows.' }, { title: 'Invented paper number 2 on voles', text: 'Invented paper number 2 on voles. Burrows.' }]);
+  const undone = click(nope.state, nope.profile, 1, 'undo');
+  assert.deepEqual(taughtSeeds(undone.state).map((t) => t.title), ['Invented paper number 2 on voles']);
+  const flipped = click(undone.state, undone.profile, 2, 'dismissed');
+  assert.deepEqual(taughtSeeds(flipped.state), [], 'a change of mind takes it back too');
+});
+
+test('the taught seeds are capped, newest kept', () => {
+  let state = stateWith(MAX_TAUGHT + 3), prof = profile();
+  for (let n = 1; n <= MAX_TAUGHT + 3; n++) ({ state, profile: prof } = click(state, prof, n, 'liked'));
+  const taught = taughtSeeds(state);
+  assert.equal(taught.length, MAX_TAUGHT);
+  assert.equal(taught.at(-1).title, `Invented paper number ${MAX_TAUGHT + 3} on voles`);
+  assert.equal(taught[0].title, 'Invented paper number 4 on voles');
 });

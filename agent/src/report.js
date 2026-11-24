@@ -114,7 +114,8 @@ function methodSection(report, searchLog) {
 
 function evidenceSection(evidence) {
   if (!evidence.length) return '(No evidence table entries.)';
-  const rows = evidence.map((e) => `| ${e.claim.replace(/\|/g, '\\|')} | ${e.sources.map((k) => `[@${k}]`).join(', ') || '(none)'} | ${e.strength}${e.unverified ? ' (abstract not checked)' : ''} |`).join('\n');
+  const cited = (e) => [...e.sources.map((k) => `[@${k}]`), ...(e.links ?? []).map((l) => `[${l.title.replace(/[[\]|]/g, ' ')}${l.year ? ` (${l.year})` : ''}](${l.url})`)].join(', ');
+  const rows = evidence.map((e) => `| ${e.claim.replace(/\|/g, '\\|')} | ${cited(e) || '(none)'} | ${e.strength}${e.unverified ? ' (abstract not checked)' : ''} |`).join('\n');
   return `| Claim | Sources | Strength |\n| --- | --- | --- |\n${rows}`;
 }
 

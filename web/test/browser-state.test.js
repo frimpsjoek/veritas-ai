@@ -84,3 +84,157 @@ test('the bar says where a paper copy came from (spec 022)', () => {
   assert.equal(sourceOf({ mode: 'frame' }), '');
   assert.equal(sourceOf(null), '');
 });
+
+test('the reader view is one font family, with the abstract under a small label and no quote', async () => {
+  const { readerPlan } = await import('../src/browser-state.js');
+  const plan = readerPlan({ mode: 'reader', url: 'https://x.org/a', title: 'Voles', byline: 'Ann Chen', html: '<p>Text.</p>' });
+  assert.match(plan.articleClass, /\bsbw-prose\b/, 'the header sits inside the prose font, not the UI font');
+  assert.equal(plan.title, 'Voles');
+  assert.equal(plan.abstract, '');
+  const paper = readerPlan({ mode: 'reader', url: 'https://doi.org/10.1/x', title: 'T', html: '', abstract: 'We show it.', source: 'openalex' });
+  assert.equal(paper.abstract, 'We show it.');
+  assert.equal(paper.abstractLabel, 'Abstract');
+});
+
+test('math is drawn only for answers the server marked (arXiv, LaTeXML, MathML), so "$5 and $10" stays money', async () => {
+  const { readerPlan } = await import('../src/browser-state.js');
+  assert.equal(readerPlan({ mode: 'reader', title: 'Shop', html: '<p>$5 and $10</p>' }).math, false);
+  assert.equal(readerPlan({ mode: 'reader', title: 'PtSe$_2$', html: '', source: 'arxiv', math: true }).math, true);
+  assert.equal(readerPlan({ mode: 'reader', title: 'x', html: '', math: 'yes' }).math, false);
+});
+
+test('an arXiv answer shows its subjects, dates and the PDF / full-text buttons in the header', async () => {
+  const { readerPlan } = await import('../src/browser-state.js');
+  const plan = readerPlan({
+    mode: 'reader', url: 'https://arxiv.org/abs/2607.25690', title: 'First-Principles Wannier Representation of Proximity Effects',
+    byline: 'Yaroslav Zhumagulov, Johan Félisaz', abstract: 'Graphene/PtSe$_2$ develops a coupling.', html: '', source: 'arxiv', math: true,
+    paper: { arxiv: '2607.25690', version: 'v2', submitted: '28 Jul 2026', revised: '25 Oct 2026', doi: '10.48550/arXiv.2607.25690',
+      subjects: [{ code: 'cond-mat.mes-hall', name: 'Mesoscale and Nanoscale Physics', primary: true }, { code: 'physics.comp-ph', name: '', primary: false }] },
+    links: [{ label: 'PDF', url: 'https://arxiv.org/pdf/2607.25690', kind: 'pdf' }, { label: 'Full text', url: 'https://arxiv.org/html/2607.25690v2', kind: 'reader' },
+      { label: 'Bad', url: 'javascript:alert(1)', kind: 'page' }],
+  });
+  assert.deepEqual(plan.subjects, [{ label: 'Mesoscale and Nanoscale Physics', code: 'cond-mat.mes-hall', primary: true }, { label: 'physics.comp-ph', code: 'physics.comp-ph', primary: false }]);
+  assert.equal(plan.meta, 'arXiv:2607.25690v2 · Submitted 28 Jul 2026 · revised 25 Oct 2026');
+  assert.deepEqual(plan.links.map((l) => l.label), ['PDF', 'Full text'], 'only web links become buttons');
+  assert.equal(plan.paper, true, '"Original page" goes to the system browser (the panel would show this paper again)');
+  assert.equal(plan.math, true);
+  const page = readerPlan({ mode: 'reader', title: 'A blog', html: '<p>x</p>' });
+  assert.deepEqual([page.subjects, page.meta, page.links, page.paper], [[], '', [], false]);
+});
+
+test('TeX in a math answer is found even glued to a word (PtSe$_2$), and money still is not', async () => {
+  const { mathParts } = await import('../src/browser-state.js');
+  assert.deepEqual(mathParts('Graphene/PtSe$_2$ develops'), [{ text: 'Graphene/PtSe' }, { tex: '_2' }, { text: ' develops' }]);
+  assert.deepEqual(mathParts('the operator \\(\\Delta(\\omega)\\) here'), [{ text: 'the operator ' }, { tex: '\\Delta(\\omega)' }, { text: ' here' }]);
+  assert.deepEqual(mathParts('Tickets cost $5 and $10.'), [{ text: 'Tickets cost $5 and $10.' }]);
+  assert.deepEqual(mathParts('no math'), [{ text: 'no math' }]);
+  assert.deepEqual(mathParts('$$a=b$$'), [{ tex: 'a=b', display: true }]);
+  assert.deepEqual(mathParts('$a=b$'), [{ tex: 'a=b' }]);
+  const { equationOf, displayTex } = await import('../src/browser-state.js');
+  assert.deepEqual(equationOf('$$a=b$$ (15)'), { tex: 'a=b', number: '(15)' });
+  assert.deepEqual(equationOf('$$a=b$$'), { tex: 'a=b', number: '' });
+  assert.equal(equationOf('$a=b$ (15)'), null, 'inline math in a sentence is not an equation');
+  assert.equal(equationOf('$$a=b$$ and then a sentence goes on from here'), null);
+  assert.equal(displayTex('a=b'), 'a=b');
+  assert.equal(displayTex('a\\\\b'), '\\begin{gathered}a\\\\b\\end{gathered}');
+  assert.equal(displayTex('\\begin{bmatrix}a\\\\b\\end{bmatrix}'), '\\begin{bmatrix}a\\\\b\\end{bmatrix}', 'an environment already breaks its own lines');
+});
+
+test('← shows the page before, and on the first page closes the panel (back to where the link was clicked)', async () => {
+  const { stepBack } = await import('../src/browser-state.js');
+  const h = createHistory();
+  h.push({ url: 'https://a.org/' });
+  h.push({ url: 'https://b.org/' });
+  assert.deepEqual(stepBack(h), { show: { url: 'https://a.org/' } });
+  assert.deepEqual(stepBack(h), { close: true });
+  assert.deepEqual(stepBack(createHistory()), { close: true });
+});
+
+test('a DOI answered with its abstract only is a landing page: journal and date, html abstract, DOI, citation, publisher outside', async () => {
+  const { readerPlan } = await import('../src/browser-state.js');
+  const plan = readerPlan({
+    mode: 'reader', url: 'https://doi.org/10.1021/acs.jctc.6c01423', title: 'Multipolar Polarizabilities in Materials', byline: 'Diem Thi-Xuan Dang, Dai-Nam Le',
+    abstract: 'We develop CO2.', abstract_html: '<p>We develop CO<sub>2</sub>.</p>', html: '', source: 'openalex',
+    paper: { doi: '10.1021/acs.jctc.6c01423', journal: 'Journal of Chemical Theory and Computation', published: '28 Oct 2026', citation: 'Dang, Le. Multipolar. 2026.' },
+    links: [{ label: "Publisher's page", url: 'https://doi.org/10.1021/acs.jctc.6c01423', kind: 'outside' }, { label: 'PDF', url: 'https://repo.example/p.pdf', kind: 'pdf' }],
+  });
+  assert.equal(plan.landing, true);
+  assert.equal(plan.meta, 'Journal of Chemical Theory and Computation · 28 Oct 2026');
+  assert.equal(plan.abstractHtml, '<p>We develop CO<sub>2</sub>.</p>');
+  assert.deepEqual([plan.doi, plan.doiUrl, plan.citation], ['10.1021/acs.jctc.6c01423', 'https://doi.org/10.1021/acs.jctc.6c01423', 'Dang, Le. Multipolar. 2026.']);
+  assert.deepEqual(plan.links.map((l) => [l.label, l.outside]), [["Publisher's page", true], ['PDF', false]], 'only the publisher goes outside; a PDF opens in the panel');
+  const numbered = readerPlan({ source: 'openalex', paper: { journal: 'ACS Nano', published: '5 Mar 2026', volume: '12', issue: '3', pages: '101-118' } });
+  assert.equal(numbered.meta, 'ACS Nano · 5 Mar 2026 · 12 (3), 101-118');
+  const arxiv = readerPlan({ source: 'arxiv', abstract_html: '<p>x</p>', paper: { doi: '10.48550/arXiv.1', arxiv: '1' } });
+  assert.deepEqual([arxiv.landing, arxiv.abstractHtml, arxiv.doi, arxiv.citation], [false, '', '', ''], 'an arXiv answer keeps its own look');
+});
+
+test('the paper on screen becomes what Add to Zotero sends', async () => {
+  const { paperToAdd } = await import('../src/browser-state.js');
+  assert.equal(paperToAdd({ mode: 'reader', title: 'A page', html: '<p>x</p>' }), null, 'an ordinary page is not a paper');
+  const paper = paperToAdd({ source: 'arxiv', title: 'T', byline: 'Ann Chen, Bo Li', abstract: 'We show it.', url: 'https://arxiv.org/abs/2610.1',
+    paper: { arxiv: '2610.1', doi: '10.48550/arXiv.2610.1', submitted: '30 Oct 2026' }, links: [{ label: 'PDF', url: 'https://arxiv.org/pdf/2610.1', kind: 'pdf' }] });
+  assert.deepEqual(paper?.authors, ['Ann Chen', 'Bo Li']);
+  assert.equal(paper?.year, 2026);
+  assert.equal(paper?.venue, 'arXiv');
+  assert.equal(paper?.pdf, 'https://arxiv.org/pdf/2610.1');
+  assert.deepEqual(paperToAdd({ source: 'arxiv', title: 'T', byline: 'Ann Chen et al.', paper: { authors: ['Ann Chen', 'Bo Li', 'Cy Wu'] } })?.authors, ['Ann Chen', 'Bo Li', 'Cy Wu'], 'not the short byline');
+  assert.equal(paperToAdd({ source: 'openalex', title: 'J', paper: { journal: 'JACS', published: '2024-05-01', doi: '10.1/x' } })?.venue, 'JACS');
+});
+
+test('a paper opened as an open-access PDF can be added, under its DOI; one from the library already is there', async () => {
+  const { paperToAdd } = await import('../src/browser-state.js');
+  const paper = paperToAdd({ mode: 'pdf', source: 'open access', url: 'https://www.osti.gov/servlets/purl/1', title: 'Pymatgen', byline: 'Ann Chen, Bo Li', abstract: 'A library.',
+    paper: { doi: '10.1/x', journal: 'CMS', published: '1 Feb 2013', authors: ['Ann Chen', 'Bo Li', 'Cy Wu'] } });
+  assert.deepEqual(paper?.authors, ['Ann Chen', 'Bo Li', 'Cy Wu']);
+  assert.equal(paper?.doi, '10.1/x');
+  assert.equal(paper?.venue, 'CMS');
+  assert.equal(paper?.year, 2013);
+  assert.equal(paper?.pdf, 'https://www.osti.gov/servlets/purl/1');
+  assert.equal(paper?.url, 'https://doi.org/10.1/x', 'the item points at the paper, not at one copy of it');
+  assert.equal(paperToAdd({ mode: 'pdf', source: 'library', url: 'https://doi.org/10.1/x', title: 'Mine' }), null);
+  assert.equal(paperToAdd({ mode: 'pdf', url: 'https://x.org/a.pdf', title: 'a.pdf' }), null, 'a bare PDF link says nothing about its paper');
+});
+
+
+test('the reader draws an arXiv answer\'s TeX as text: title, byline, abstract and the bar (spec 028 R3, R4)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { readerPlan, barTitle, paperToAdd } = await import('../src/browser-state.js');
+  const { paperParts } = await import('../../ui/src/paper-text.js');
+  const fixture = JSON.parse(readFileSync(new URL('../../ui/test/fixtures/arxiv-2611.20723.json', import.meta.url), 'utf8'));
+  const answer = {
+    mode: 'reader', url: 'https://arxiv.org/abs/2611.20723', title: fixture.title, byline: fixture.authors.join(', '),
+    abstract: fixture.abstract, html: '', source: 'arxiv', math: true, paper: { arxiv: '2611.20723', authors: fixture.authors },
+  };
+  const plan = readerPlan(answer);
+  assert.equal(plan.prose, true);
+  // what the panel draws for each (browser-panel.js `words`)
+  for (const value of [plan.title, plan.byline, plan.abstract]) {
+    for (const p of paperParts(value, { math: plan.math })) if ('text' in p) assert.doesNotMatch(p.text, /[\\$]/, p.text);
+  }
+  const abstract = paperParts(plan.abstract, { math: plan.math });
+  assert.ok(abstract.some((p) => 'sub' in p && p.sub === '4'), 'C2H4O has its subscripts');
+  assert.ok(abstract.some((p) => 'text' in p && p.italic && p.text === 'J. Chem. Phys.'));
+  assert.deepEqual(paperParts(plan.title, { math: plan.math }).filter((p) => 'italic' in p), [{ text: 'GW', italic: true }]);
+  assert.equal(barTitle(answer), 'Oxirane Ring-Opening Dynamics Mediated By The First Singlet Excitation Using Time-Dependent GW Molecular Dynamics');
+  // what is sent on keeps the raw string
+  const add = /** @type {any} */ (paperToAdd(answer));
+  assert.equal(add.title, fixture.title);
+  assert.equal(add.abstract, fixture.abstract);
+});
+
+test('an ordinary page keeps its words as they are: no TeX pass, money stays money', async () => {
+  const { readerPlan, barTitle } = await import('../src/browser-state.js');
+  const page = { mode: 'reader', url: 'https://shop.example/', title: 'Deals -- $5 and $10', html: '<p>x</p>' };
+  assert.equal(readerPlan(page).prose, false);
+  assert.equal(barTitle(page), 'Deals -- $5 and $10');
+  assert.equal(barTitle({ ...page, source: 'arxiv', title: 'The \\ce{H2O} dimer' }), 'The H₂O dimer');
+});
+
+test('an open-access copy\'s heading, byline and abstract get the same TeX pass as its bar title', async () => {
+  const { readerPlan, barTitle } = await import('../src/browser-state.js');
+  const answer = { mode: 'reader', url: 'https://www.osti.gov/biblio/1', title: 'M{\\o}ller--Plesset \\ce{H2O} dimers', byline: 'A. M{\\o}ller', abstract: 'We invent \\textit{voles}.', html: '', source: 'open access' };
+  const plan = readerPlan(answer);
+  assert.equal(plan.prose, true);
+  assert.equal(barTitle(answer), 'Møller–Plesset H₂O dimers');
+});

@@ -197,3 +197,77 @@ test('store.summarize: seen records do not change `updated`', async () => {
   assert.equal(s.updated, '2026-05-02T00:00:00.000Z');
   assert.equal('news' in s, false);
 });
+
+test('newsOf: each row viewed since the last seen is one paper less; repeats count once; a later seen clears them', () => {
+  const runs = [{ type: 'routine_run', routine: 'r', added: 3, at: '2026-05-04T10:00:00.000Z' }];
+  const viewed = (rows, at) => ({ type: 'viewed', rows, at });
+  assert.deepEqual(newsOf([...runs, viewed(['a'], '2026-05-04T11:00:00.000Z')]), { papers: 2, at: '2026-05-04T10:00:00.000Z' });
+  assert.equal(newsOf([...runs, viewed(['a'], '2026-05-04T11:00:00.000Z'), viewed(['a', 'b'], '2026-05-04T12:00:00.000Z')]).papers, 1);
+  assert.equal(newsOf([...runs, viewed(['a', 'b', 'c'], '2026-05-04T11:00:00.000Z')]), undefined, 'all viewed: no news');
+  // rows viewed before the last seen were cleared with it; a later run is news again in full
+  const later = { type: 'routine_run', routine: 'r', added: 2, at: '2026-05-06T10:00:00.000Z' };
+  assert.equal(newsOf([...runs, viewed(['a'], '2026-05-04T11:00:00.000Z'), { type: 'seen', at: '2026-05-05T00:00:00.000Z' }, later]).papers, 2);
+  // viewed rows count against all unread news, from any run since the last seen
+  assert.equal(newsOf([...runs, viewed(['a'], '2026-05-04T11:00:00.000Z'), later]).papers, 4);
+  // a run that names its rows counts only those; an unnamed run takes the rest, up to what it added
+  const named = { type: 'routine_run', routine: 'r', added: 2, rows: ['n1', 'n2'], at: '2026-05-04T10:00:00.000Z' };
+  assert.equal(newsOf([named, viewed(['older', 'n1'], '2026-05-04T11:00:00.000Z')]).papers, 1, 'a row that was never news counts nothing');
+  assert.equal(newsOf([named, viewed(['n1', 'n2', 'n1'], '2026-05-04T11:00:00.000Z')]), undefined);
+  const unnamed = { type: 'routine_run', routine: 'r', added: 1, at: '2026-05-04T09:00:00.000Z' };
+  assert.equal(newsOf([unnamed, named, viewed(['x', 'y', 'n2'], '2026-05-04T11:00:00.000Z')]).papers, 1);
+});
+
+test('markViewed: the count drops by one per paper and reaches zero; idempotent; nothing written without news; updated unchanged', async () => {
+  const t = setup([cand(1), cand(2), cand(3), cand(4)]);
+  const ai = await t.make();
+  const { id, ref } = await seedSession(ai);
+  const r = await ai.routines.create(watch(id, ref));
+  await ai.routines.runNow(r.id);
+  await until(async () => (await summaryOf(ai, id)).news, 'news');
+  const before = await summaryOf(ai, id);
+  assert.equal(before.news.papers, 2);
+  const path = `/data/chats/${id}.jsonl`;
+
+  await ai.conversations.markViewed(id, ['doi:10.9999/inv.3']);
+  const one = await summaryOf(ai, id);
+  assert.equal(one.news.papers, 1);
+  assert.equal(one.updated, before.updated, 'viewing a paper does not move the chat up the history');
+  const log = await t.fs.read(path);
+  await ai.conversations.markViewed(id, ['doi:10.9999/inv.3']);
+  await ai.conversations.markViewed(id, []);
+  assert.equal(await t.fs.read(path), log, 'a row already viewed writes nothing');
+  await ai.conversations.markViewed(id, ['doi:10.9999/inv.1']);
+  assert.equal(await t.fs.read(path), log, 'a row that was there before the run is not news: nothing written');
+  assert.equal((await summaryOf(ai, id)).news.papers, 1);
+
+  await ai.conversations.markViewed(id, ['doi:10.9999/inv.4', 'doi:10.9999/inv.4']);
+  assert.equal('news' in (await summaryOf(ai, id)), false);
+  const done = await t.fs.read(path);
+  await ai.conversations.markViewed(id, ['doi:10.9999/inv.1']);
+  await ai.conversations.markViewed('nosuchchat', ['x']);
+  assert.equal(await t.fs.read(path), done, 'no news left: nothing written');
+  assert.equal(done.split('\n').filter((line) => line.includes('"type":"viewed"')).length, 2);
+  await ai.dispose();
+});
+
+test('POST /conversations/viewed and remote.js markViewed reach the same service', async () => {
+  const t = setup();
+  const ai = await t.make();
+  const { id, ref } = await seedSession(ai);
+  const r = await ai.routines.create(watch(id, ref));
+  await ai.routines.runNow(r.id);
+  await until(async () => (await summaryOf(ai, id)).news, 'news');
+  const table = routes();
+  const transport = {
+    async request(method, path, body) {
+      const row = table.find((x) => x.method === method && x.path === path);
+      assert.ok(row, `${method} ${path} has a route`);
+      const out = await row.call(ai, body ?? {}, { signal: new AbortController().signal });
+      return out === undefined ? null : JSON.parse(JSON.stringify(out));
+    },
+    async *stream() {},
+  };
+  await createRemoteRuntime(transport).conversations.markViewed(id, ['doi:10.9999/inv.3']);
+  assert.equal('news' in (await summaryOf(ai, id)), false);
+  await ai.dispose();
+});

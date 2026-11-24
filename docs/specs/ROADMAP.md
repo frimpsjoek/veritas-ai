@@ -10,6 +10,11 @@ Updated 2026-10-12. Live version: **0.50.3** (Zotero and Obsidian, published in 
 
 ## To do
 
+### Windows bugs (found 2026-11-19 by the first Check on Windows; fixed 2026-11-20, spec 034)
+- [x] Index paths use `/` on every system, an older Windows index moved over once at start [4db9c71]
+- [x] The linked-PDF failures were a test writing an unescaped Windows path into prefs.js, not a bug [4db9c71]
+- [x] Check passes on Windows, macOS and Linux; Windows blocks a release again [fa4888d]
+
 ### Next: spec 012 Reading radar (approved 2026-10-11, in progress)
 - [x] Approve decisions D1-D5 and answer the open questions (name, Obsidian note, sites without RSS, MCP sources, sizes) [2026-10-11, see spec Status line]
 - [x] Write plan.md (units and tasks are in the plan) [2026-10-11]

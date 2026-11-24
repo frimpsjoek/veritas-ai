@@ -23,7 +23,7 @@ export function webStore(params) {
     // the issue's radar and each paper's radar key: Home draws the rating actions from them (Add, Read later, Not relevant)
     { kind: 'papers', ref: { id: 'R1', version: 1 }, title: 'New', created: radarAt, radar: { routine: 'r2', summary: '2 new from 2 sources' }, rows: [
       { id: 'a', title: 'Burrow microclimates in field voles', authors: ['A. Vole', 'B. Mole'], venue: 'Ecology', year: 2026, doi: '10.1/vole', foundBy: ['bioRxiv', 'Ecology feed'], abstract: `Field voles dig burrows whose air stays warmer than the surface through winter. ${'We logged temperature in forty burrows across two winters. '.repeat(6)}The end.`, radar: { key: 'doi:10.1/vole', date: '2026-10-10', why_line: 'Burrows stay four degrees warmer than the surface.' } },
-      { id: 'b', title: 'Seed caching under snow', authors: ['C. Shrew'], venue: 'Oikos', year: 2026, url: 'https://example.org/seeds', abstract: 'Voles cache seeds under the snowpack.', radar: { key: 'title:seed caching under snow', date: '2026-10-09' } },
+      { id: 'b', title: 'Seed caching under snow', authors: ['C. Shrew'], venue: 'Oikos', year: 2026, url: 'https://example.org/seeds', abstract: 'Voles cache seeds under the snowpack, where CO$_2$ builds up over a time $\\tau$ (M{\\o}ller--Shrew).', radar: { key: 'title:seed caching under snow', date: '2026-10-09' } },
     ] },
     { kind: 'papers', ref: { id: 'R2', version: 1 }, title: 'Worth reading', created: radarAt, radar: { routine: 'r2', summary: '2 new from 2 sources' }, rows: [
       { id: 'c', title: 'A classic of vole ecology', authors: ['D. Field'], venue: 'J. Mammal.', year: 1990, radar: { key: 'title:a classic of vole ecology', reason: 'Cited by 3 papers in your library' } },

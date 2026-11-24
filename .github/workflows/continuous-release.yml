@@ -1,0 +1,80 @@
+# Spec 033 R2: every change on main whose checks pass is a release. After check.yml succeeds for a push to main, this
+# takes the next patch version (above every tag and every part's version), runs tools/release.mjs (every part says the
+# version, CHANGELOG.md gets the commit subjects, one commit "Release <version>" and the tag v<version>), pushes them,
+# and calls release.yml (plugins, Homebrew) and release-app.yml (installers and the signed latest.json the app updates
+# from). The release commit is pushed with GITHUB_TOKEN, which starts no workflow, so it does not release itself again.
+name: Continuous release
+
+on:
+  workflow_run:
+    workflows: [Check]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: continuous-release
+  cancel-in-progress: false
+
+jobs:
+  cut:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.next.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Only the commit that was checked
+        if: github.event_name == 'workflow_run'
+        run: |
+          # main moved on since this check started: the newer push's own check releases it
+          [ "$(git rev-parse HEAD)" = "${{ github.event.workflow_run.head_sha }}" ] || { echo "main is past the checked commit"; echo "SKIP=1" >> "$GITHUB_ENV"; }
+      - name: Next version
+        id: next
+        if: env.SKIP != '1'
+        run: |
+          next=$(node -e '
+            const { execSync } = require("child_process");
+            const tags = execSync("git tag --list v*").toString().split("\n").map((t) => t.replace(/^v/, "")).filter((t) => /^\d+\.\d+\.\d+$/.test(t));
+            const parts = ["zotero/manifest.json", "obsidian/manifest.json", "app/src-tauri/tauri.conf.json"].map((f) => require("./" + f).version);
+            const key = (v) => v.split(".").map(Number);
+            const max = [...tags, ...parts].sort((a, b) => { const [x, y] = [key(a), key(b)]; for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; }).pop();
+            const [a, b, c] = key(max);
+            console.log(`${a}.${b}.${c + 1}`);')
+          echo "version $next"
+          echo "tag=v$next" >> "$GITHUB_OUTPUT"
+          echo "VERSION=$next" >> "$GITHUB_ENV"
+      - name: Release commit and tag
+        if: env.SKIP != '1'
+        run: |
+          git config user.name "veritas-release[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          node tools/release.mjs "$VERSION"
+          git push origin HEAD:main "v$VERSION"
+
+  plugins:
+    needs: cut
+    if: needs.cut.outputs.tag != ''
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.cut.outputs.tag }}
+    secrets: inherit
+
+  app:
+    needs: cut
+    if: needs.cut.outputs.tag != ''
+    uses: ./.github/workflows/release-app.yml
+    with:
+      tag: ${{ needs.cut.outputs.tag }}
+    secrets: inherit

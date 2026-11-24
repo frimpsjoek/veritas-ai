@@ -8,7 +8,8 @@ import { el, button, installStyle } from './dom-helpers.js';
 import { renderMarkdown } from './markdown.js';
 import { clarifyCard, foldedAnswers } from './clarify-card.js';
 import { usedLine } from './skills-data.js';
-import { addLabel } from '../host-words.js';
+import { getPapers } from '../get-paper.js';
+import { stateWords, batchLine } from '../get-paper-data.js';
 
 export class ReportView {
   static STAGES = [
@@ -61,6 +62,9 @@ export class ReportView {
     this.id = id;
     this.plan = null; // the plan shown for approval, so research rows can show sub-question text
     this.added = new Set(); // citekey/doi/url/title of outside papers already added to Zotero
+    /** spec 031 R5: what Get PDF did for each paper (paperKey -> state and the page or PDF to open) @type {Map<string, { state: import('../get-paper-data.js').GotState, link: string | null }>} */
+    this.got = new Map();
+    this.batchNote = '';
     this.watching = null;
     this.root = this.el('div', 'sb-ai-answer sb-rp');
   }
@@ -506,6 +510,13 @@ export class ReportView {
         }
         const papersCell = this.el('td', 'sb-rp-papers-cell');
         if (row.sources?.length) papersCell.append(md(`[@${row.sources.join('; @')}]`));
+        // spec 030 R9: papers outside the library, by link (they have no citekey)
+        for (const link of row.links ?? []) {
+          const a = this.el('a', 'sb-rp-evidence-link', `${link.title}${link.year ? ` (${link.year})` : ''}`);
+          a.setAttribute('href', link.url);
+          a.addEventListener('click', (event) => { event.preventDefault(); this.host.openLink(link.url); });
+          papersCell.append(a);
+        }
         const strength = this.el('td');
         strength.append(this.el('span', `sb-rp-strength is-${row.strength}`, ReportView.STRENGTH_LABEL[row.strength] ?? row.strength));
         tr.append(claim, papersCell, strength);
@@ -607,14 +618,29 @@ export class ReportView {
     const summary = this.el('summary', '', `Papers not in your library (${sources.length})`);
     box.append(summary);
     const pending = sources.filter((s) => !this.added.has(this.paperKey(s)));
-    if (pending.length > 1 && this.host.can.addToLibrary) box.append(this.controls([this.button(addLabel(this.host, 'all'), () => this.addPapers(pending, box))]));
+    // spec 031 R6: all at once, free PDFs kept (spec 032: in Zotero, else Veritas's Papers folder); the line says how it went
+    if (pending.length > 1) box.append(this.controls([this.button(`Get PDFs for these ${pending.length}`, () => this.addPapers(pending, box))]));
+    if (this.batchNote) box.append(this.el('div', 'sb-rp-got-line', this.batchNote));
     for (const source of sources) {
       const row = this.el('div', 'sb-rp-paper');
       const text = this.el('div', 'sb-rp-paper-text');
       text.append(this.el('div', 'sb-rp-paper-title', source.title), this.el('div', 'sb-rp-paper-meta', [source.year, source.doi].filter(Boolean).join(' · ')));
       const key = this.paperKey(source);
-      const add = this.button(this.added.has(key) ? 'Added' : addLabel(this.host), () => this.addPapers([source], box));
-      add.hidden = !this.host.can.addToLibrary;
+      const got = this.got.get(key);
+      if (got) {
+        const line = this.el('div', `sb-rp-got is-${got.state}`, stateWords(got.state));
+        // a paper behind a paywall: its page, where the user's own login and "Save PDF to Zotero" apply (Browse)
+        if (got.state === 'publisher' && got.link) {
+          const page = this.el('a', 'sb-rp-got-link', 'Open the publisher’s page');
+          page.setAttribute('href', got.link);
+          page.addEventListener('click', (event) => { event.preventDefault(); this.host.openLink(/** @type {string} */ (got.link)); });
+          line.append(' · ', page);
+        }
+        text.append(line);
+      }
+      // spec 031 R5, spec 032: Get PDF keeps the free PDF, in Zotero when there is a Zotero library, else in Veritas › Papers
+      const add = this.button(this.added.has(key) ? 'Saved' : 'Get PDF', () => this.addPapers([source], box));
+      add.title = 'Keep a free PDF of this paper: in Zotero, or in Veritas › Papers without Zotero';
       add.disabled = this.added.has(key);
       row.append(text, add);
       box.append(row);
@@ -624,17 +650,21 @@ export class ReportView {
 
   paperKey(source) { return source.citekey || source.doi || source.url || source.title; }
 
+  /** @param {any} source */
+  paperIn(source) { return { title: source.title, year: source.year ?? null, doi: source.doi ?? null, url: source.url ?? null, pdfUrl: source.pdfUrl ?? null, source: 'review' }; }
+
   async addPapers(sources, box) {
-    for (const source of sources) {
+    const todo = sources.filter((s) => !this.added.has(this.paperKey(s)));
+    if (!todo.length) return;
+    for (const b of box.querySelectorAll('button')) /** @type {HTMLButtonElement} */ (b).disabled = true;
+    const { states, links } = await getPapers(this.host, todo.map((s) => this.paperIn(s)), { openOne: todo.length === 1 });
+    todo.forEach((source, i) => {
       const key = this.paperKey(source);
-      if (this.added.has(key)) continue;
-      try {
-        const result = await this.host.addToLibrary?.([{ title: source.title, year: source.year, doi: source.doi, authors: [], source: 'review', abstract: '', url: source.doi ? `https://doi.org/${source.doi}` : source.url ?? null }]);
-        if (result?.items?.[0]) this.added.add(key);
-      } catch (error) {
-        this.host.logError(error);
-      }
-    }
+      this.got.set(key, { state: states[i] ?? 'failed', link: links[i] ?? null });
+      // a paywalled paper is in Zotero (no PDF) when the Zotero pane added it; elsewhere nothing was saved, so Get PDF stays
+      if (['pdf', 'waiting', 'folder', 'searching'].includes(states[i]) || (states[i] === 'publisher' && this.host.kind === 'zotero')) this.added.add(key);
+    });
+    this.batchNote = todo.length > 1 ? batchLine(states) : this.batchNote;
     box.replaceWith(this.outside(this.outsideSources));
   }
 
@@ -705,6 +735,14 @@ const REPORT_CSS = `
 .sb-rp-evidence td { vertical-align: top; border-bottom: 1px solid var(--sb-ui-line); padding: 6px 8px 6px 0; }
 .sb-rp-evidence .sb-md p { margin: 0; }
 .sb-rp-papers-cell { width: 28%; }
+.sb-rp-got { font-size: 12px; color: var(--sb-ui-muted); margin-top: 2px; }
+.sb-rp-got.is-pdf { color: var(--sb-ui-accent); }
+.sb-rp-got.is-failed { color: var(--sb-ui-danger); }
+.sb-rp-got-link { color: var(--sb-ui-accent); text-decoration: none; cursor: pointer; }
+.sb-rp-got-link:hover { text-decoration: underline; }
+.sb-rp-got-line { font-size: 12px; color: var(--sb-ui-muted); margin: 2px 0 6px; }
+.sb-rp-evidence-link { display: block; color: var(--sb-ui-accent); text-decoration: none; overflow-wrap: anywhere; }
+.sb-rp-evidence-link:hover { text-decoration: underline; }
 .sb-rp-strength { font-size: 11px; padding: 1px 6px; border-radius: 4px; white-space: nowrap; background: var(--sb-ui-line); }
 .sb-rp-strength.is-strong { background: color-mix(in srgb, var(--sb-ui-ok) 18%, transparent); }
 .sb-rp-strength.is-weak { background: color-mix(in srgb, var(--sb-ui-danger) 18%, transparent); }

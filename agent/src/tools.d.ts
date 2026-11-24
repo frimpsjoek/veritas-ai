@@ -22,14 +22,24 @@ export interface LibraryBackend {
   items?(q: { collections: string[] | null }): Promise<import("./radar-types").LibraryItem[]>;
   radarScore?(q: import("./radar-types").ScoreRequest): Promise<Record<string, import("./radar-types").SeedScore>>;
   /** Spec radar-seeds G3: new arXiv papers read whole and compared with the seeds; a paper that could not be read has `error`. */
-  radarFulltext?(q: { seeds: import("./radar-types").SeedBody; items: { id: string; arxiv: string }[]; baseline?: import("./radar-types").SeedBaseline | null }): Promise<Record<string, { seed_max?: number; seed_best?: string | null; seed_raw?: number; error?: string }>>;
+  radarFulltext?(q: { seeds: import("./radar-types").SeedBody; items: { id: string; arxiv: string }[]; baseline?: import("./radar-types").SeedBaseline | null }): Promise<Record<string, { seed_max?: number; seed_best?: string | null; seed_raw?: number; seed_second?: number | null; seed_lonely?: boolean; error?: string }>>;
   /** Spec radar-seeds G4. */
-  radarCalibrate?(q: { seeds: import("./radar-types").SeedBody; unrelated: { title: string; abstract: string; arxiv: string | null }[]; field?: { title: string; abstract: string; arxiv: string | null }[]; full_papers?: number }): Promise<{ abstract: import("./radar-types").ThresholdStats; full: import("./radar-types").ThresholdStats | null; seeds: number; at: number; baseline?: import("./radar-types").SeedBaseline; field?: { abstracts: number; whole: number } }>;
+  radarCalibrate?(q: { seeds: import("./radar-types").SeedBody; unrelated: { title: string; abstract: string; arxiv: string | null }[]; field?: { title: string; abstract: string; arxiv: string | null; category?: string }[]; full_papers?: number }): Promise<{ abstract: import("./radar-types").ThresholdStats; full: import("./radar-types").ThresholdStats | null; seeds: number; at: number; baseline?: import("./radar-types").SeedBaseline; field?: { abstracts: number; whole: number } }>;
   radarProfile?(q: { scope: import("./radar-types").ScoreScope; seeds?: { keys: string[] } }): Promise<import("./radar-types").SeedProfile>;
   /** Writes `Second Brain/Digests/<file>.md` in the vault. */
   writeDigest?(file: string, text: string): Promise<void>;
   digests?(q?: { days?: number; limit?: number }): Promise<{ path: string; title: string; modified: string }[]>;
+  /** Spec 031 R3: a free copy of a paper outside the library (a PDF address the engine found) as text, read once by the
+   *  server and cached under `key` (doi:<doi> or arxiv:<id>). Null when it cannot be read (not a PDF, no text, refused). */
+  paperText?(q: { url: string; key: string }): Promise<string | null>;
+  paperTextCache?(q: { clear?: boolean }): Promise<{ papers: number; bytes: number }>;
+  /** Spec 032: keep a paper's PDF where the server's rule says: Zotero (held until the plugin attaches it), else
+   *  Veritas's papers folder. `urls` are free copies, tried in turn; none = Zotero is asked to find one. */
+  paperKeep?(q: { paper: KeptPaper; urls: string[] }): Promise<KeepResult>;
 }
+
+export interface KeptPaper { title: string; authors?: string[]; year?: number | null; venue?: string | null; doi?: string | null; url?: string | null; arxiv?: string | null }
+export interface KeepResult { status: "added" | "queued" | "kept" | "failed"; where: "zotero" | "folder"; path?: string; downloaded: boolean; already?: boolean; message?: string; }
 
 export interface ToolContext {
   scope: Scope;                      // a review scoped to a collection passes it here; the model cannot widen it
@@ -109,6 +119,8 @@ export declare function createToolGateway(fetchFn: typeof fetch, library: Librar
   scholarly?: string[];                       // discover.js sources: openalex, s2, arxiv, crossref, europepmc, biorxiv, chemrxiv
   spawn?: Platform["spawn"];
   mcp?: (McpServerConfig & { trustUnmarked?: boolean })[];
+  /** Spec 031 R7: the contact email read_paper gives Unpaywall, read on each call. */
+  paperEmail?: () => Promise<string | null>;
 }): Promise<ToolGateway & { _sessionForToken(token: string): ToolSession | null }>;
 
 /** Pure JSON-RPC handler for the MCP HTTP face (initialize, tools/list with readOnlyHint:true on every tool, tools/call; notifications -> 202). */

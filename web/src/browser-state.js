@@ -1,8 +1,12 @@
 // @ts-check
 // ui-src/src/web/browser-state.js. Spec 015 B3: the in-app browser panel's pure parts, kept apart from the DOM so they
 // can be tested: its back stack and how a link is first asked for.
+import { ANY_MATH, displayTex, plainText } from '../../ui/src/paper-text.js';
 
-/** @typedef {{ url: string, prefer?: 'reader' }} Entry */
+export { displayTex };
+
+/** @typedef {{ url: string, prefer?: 'reader', fell?: true, radar?: import('../../ui/src/host').RadarLink | null }} Entry `fell`: a PDF link that was not one, now asked for as a page (once);
+ *  `radar`: the paper was opened from a radar issue */
 
 /** The panel's own history. A framed page's history is the site's and cannot be reached from here, so "back" steps
  *  through the pages the panel was asked to show. */
@@ -17,6 +21,14 @@ export function createHistory() {
     get canGoBack() { return stack.length > 1; },
     clear() { stack.length = 0; },
   };
+}
+
+/** What ← does: the page before in the panel, or, on the first page, close the panel (focus goes back to the link
+ *  it was opened from), so ← always does something. A framed site's own history is not reachable from here.
+ *  @param {ReturnType<typeof createHistory>} history @returns {{ show: Entry } | { close: true }} */
+export function stepBack(history) {
+  const entry = history.back();
+  return entry ? { show: entry } : { close: true };
 }
 
 /** What to ask /web/page for. A framed http page inside an https app is blocked by the browser (mixed content), so it
@@ -66,3 +78,118 @@ export function sourceOf(answer) {
   if (answer?.source === 'openalex') return 'Abstract only';
   return '';
 }
+
+/** What the reader view draws for a reader answer: the header and the text in the note's prose font (one family),
+ *  an abstract as plain text under a small "Abstract" label, and math only where the server said the page has it
+ *  (arXiv, LaTeXML, MathML), so "$5 and $10" on an ordinary page stays money. A paper (arXiv, or a DOI's abstract)
+ *  adds a quiet line of id and dates, small subject chips and its links (PDF, Full text) as buttons in the header.
+ *  A DOI's abstract-only answer (source openalex, 2026-10-29) is the paper's landing page: journal and date as the
+ *  quiet line, the abstract's paragraphs (sub, sup, italic) as html, the DOI and a citation to copy; its publisher's
+ *  page opens outside (`outside`), since publishers refuse loads in the panel (Cloudflare).
+ *  @param {any} answer */
+export function readerPlan(answer) {
+  const paper = answer?.paper ?? {};
+  const landing = answer?.source === 'openalex';
+  /** @type {{ label: string, code: string, primary: boolean }[]} */
+  const subjects = (Array.isArray(paper.subjects) ? paper.subjects : [])
+    .map((/** @type {any} */ s) => ({ label: String(s?.name || s?.code || ''), code: String(s?.code ?? ''), primary: s?.primary === true }))
+    .filter((s) => s.label);
+  const numbers = [paper.volume && paper.issue ? `${paper.volume} (${paper.issue})` : paper.volume ?? '', paper.pages ?? ''].filter(Boolean).join(', ');
+  const meta = (landing
+    ? [paper.journal ?? '', paper.published ?? '', numbers]
+    : [
+      paper.arxiv ? `arXiv:${paper.arxiv}${paper.version ?? ''}` : '',
+      paper.submitted ? `Submitted ${paper.submitted}` : '',
+      paper.revised ? `revised ${paper.revised}` : '',
+    ]).filter(Boolean).map(String).join(' · ');
+  /** @type {{ label: string, url: string, kind: string, outside: boolean }[]} */
+  const links = (Array.isArray(answer?.links) ? answer.links : [])
+    .filter((/** @type {any} */ l) => l?.label && /^https?:\/\//i.test(String(l?.url ?? '')))
+    .map((/** @type {any} */ l) => ({ label: String(l.label), url: String(l.url), kind: String(l.kind ?? ''), outside: l.kind === 'outside' }));
+  const doi = landing ? String(paper.doi ?? '') : '';
+  return {
+    subjects,
+    meta,
+    links,
+    paper: answer?.source === 'arxiv' || landing,
+    landing,
+    articleClass: 'sbw-browser-article sbw-prose',
+    title: String(answer?.title ?? ''),
+    byline: String(answer?.byline ?? ''),
+    abstract: String(answer?.abstract ?? ''),
+    abstractHtml: landing ? String(answer?.abstract_html ?? '') : '',
+    abstractLabel: 'Abstract',
+    arxiv: String(paper.arxiv ?? ''),
+    doi,
+    doiUrl: doi ? `https://doi.org/${doi}` : '',
+    citation: landing ? String(paper.citation ?? '') : '',
+    math: answer?.math === true,
+    // title, byline and abstract go through the papers' TeX pass (paper-text.js): a paper's (an open-access copy's
+    // too, as its bar title does), or any answer with math
+    prose: answer?.math === true || answer?.source === 'arxiv' || answer?.source === 'open access' || landing,
+    html: String(answer?.html ?? ''),
+  };
+}
+
+/** The bar's title for an answer: a paper's or a math answer's TeX as text (plainText), an ordinary page's title as
+ *  it is. What is sent on (Add to Zotero, copy) keeps the raw title. @param {any} answer */
+export function barTitle(answer) {
+  const title = String(answer?.title ?? '');
+  const paper = answer?.source === 'arxiv' || answer?.source === 'openalex' || answer?.source === 'open access';
+  return answer?.math === true || paper ? plainText(title, { math: answer?.math === true }) : title;
+}
+
+/** What Add to Zotero sends for the paper on screen; null for a page that is not a paper. @param {any} answer */
+export function paperToAdd(answer) {
+  if (answer?.source !== 'arxiv' && answer?.source !== 'openalex' && answer?.source !== 'open access') return null;
+  const paper = answer.paper ?? {};
+  const links = Array.isArray(answer.links) ? answer.links : [];
+  const year = /\b(?:19|20)\d\d\b/.exec(String(paper.published ?? paper.submitted ?? ''))?.[0];
+  return {
+    title: String(answer.title ?? ''),
+    // The byline stops at "et al."; the paper's own list has everyone.
+    authors: Array.isArray(paper.authors) ? paper.authors.map(String) : String(answer.byline ?? '').split(/,\s+/).filter(Boolean),
+    year: year ? Number(year) : null,
+    venue: answer.source === 'arxiv' ? 'arXiv' : String(paper.journal ?? ''),
+    doi: paper.doi || null,
+    abstract: String(answer.abstract ?? ''),
+    // a PDF's address is one copy of the paper; the DOI is the paper
+    url: answer.mode === 'pdf' && paper.doi ? `https://doi.org/${paper.doi}` : String(answer.url ?? ''),
+    source: answer.source,
+    arxiv: paper.arxiv || undefined,
+    pdf: answer.mode === 'pdf' ? String(answer.url ?? '') : links.find((/** @type {any} */ l) => l?.kind === 'pdf')?.url,
+    type: answer.source === 'arxiv' ? 'preprint' : undefined,
+  };
+}
+
+// Inline TeX in an answer the server marked as math: \(…\), \[…\], $$…$$ and $…$ (ANY_MATH, paper-text.js). Unlike
+// titleNodes (chat/markdown.js), a $ may follow a letter, since arXiv writes "PtSe$_2$"; the money rules stay (no space
+// inside the dollars, no digit after the closing one), so "$5 and $10" is still text.
+const TEX = ANY_MATH;
+
+/** A text split into plain runs and TeX. @param {string} text @returns {({ text: string } | { tex: string, display?: boolean })[]} */
+export function mathParts(text) {
+  /** @type {({ text: string } | { tex: string, display?: boolean })[]} */ const out = [];
+  let at = 0;
+  for (const m of String(text).matchAll(TEX)) {
+    if ((m.index ?? 0) > at) out.push({ text: text.slice(at, m.index) });
+    out.push({ tex: (m[1] ?? m[2] ?? m[3] ?? m[4]).trim(), ...(m[2] != null || m[3] != null ? { display: true } : {}) });
+    at = (m.index ?? 0) + m[0].length;
+  }
+  if (at < text.length || !out.length) out.push({ text: text.slice(at) });
+  return out;
+}
+
+/**
+ * A paragraph that is one display equation and at most its number: "$$a=b$$ (15)". Null for anything else.
+ * @param {string} text @returns {{ tex: string, number: string } | null}
+ */
+export function equationOf(text) {
+  const parts = mathParts(text.trim());
+  const [first, rest] = parts;
+  if (!first || !('tex' in first) || !first.display || parts.length > 2) return null;
+  const number = rest && 'text' in rest ? rest.text.trim() : '';
+  if (rest && !/^\(?[\w.\-–]{1,12}\)?$/.test(number)) return null;
+  return { tex: first.tex, number };
+}
+

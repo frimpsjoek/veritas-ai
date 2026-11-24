@@ -20,12 +20,12 @@ from pathlib import Path
 
 import zotero
 import paths
+import sources
 
 ROOT = Path(__file__).parent
 PLAN = paths.data_dir() / "attachment-plan.json"
 FILE_LIST = paths.data_dir() / "pdf-files.txt"
 HOME = Path.home()
-PREFS = next((HOME / "Library/Application Support/Zotero/Profiles").glob("*/prefs.js"), None)
 # The linked-files folder as it is on this Mac now; the pref still names the old ~/MEGA/Zotero.
 BASE = Path("/Volumes/Content/MEGA/Zotero")
 SEARCH_ROOTS = [BASE, Path("/Volumes/Content"), Path("/Volumes/Assets-SSK"), Path("/Volumes/JF_SSD"),
@@ -38,23 +38,43 @@ MATCH = 0.6  # share of the title's words that must appear on the first pages
 
 
 def current_base() -> str:
-    if PREFS and PREFS.exists():
-        m = re.search(r'user_pref\("extensions\.zotero\.baseAttachmentPath", "([^"]*)"\)', PREFS.read_text())
+    prefs = sources.zotero_prefs()  # looked up per call: Zotero's profile folder differs per system (sources.py)
+    if prefs and prefs.exists():
+        m = re.search(r'user_pref\("extensions\.zotero\.baseAttachmentPath", "([^"]*)"\)', prefs.read_text())
         if m:
             return m.group(1)
     return ""
+
+
+SKIP_DIRS = {".Trashes", ".Spotlight-V100", ".Trash"}
+
+
+def walk_pdfs(roots: list[str]) -> list[str]:
+    """What the `find` below lists (PDFs over 1 KB, outside the trash), walked in Python: Windows has no Unix find."""
+    found = []
+    for root in roots:
+        for folder, dirs, names in os.walk(root):
+            dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+            for name in names:
+                path = os.path.join(folder, name)
+                if name.lower().endswith(".pdf") and os.path.isfile(path) and os.path.getsize(path) > 1024:
+                    found.append(path)
+    return found
 
 
 def pdf_files(max_age: float = 3600) -> dict[str, list[str]]:
     """Every PDF on the searched drives, by lower-case file name. The listing is cached for an hour."""
     if not FILE_LIST.exists() or time.time() - FILE_LIST.stat().st_mtime > max_age:
         roots = [str(r) for r in SEARCH_ROOTS if r.exists()]
-        out = subprocess.run(["find", *roots, "-iname", "*.pdf", "-type", "f", "-size", "+1k",
-                              "-not", "-path", "*/.Trashes/*", "-not", "-path", "*/.Spotlight-V100/*",
-                              "-not", "-path", "*/.Trash/*"], capture_output=True, text=True).stdout
-        FILE_LIST.write_text(out)
+        if os.name == "nt":
+            out = "\n".join(walk_pdfs(roots))
+        else:
+            out = subprocess.run(["find", *roots, "-iname", "*.pdf", "-type", "f", "-size", "+1k",
+                                  "-not", "-path", "*/.Trashes/*", "-not", "-path", "*/.Spotlight-V100/*",
+                                  "-not", "-path", "*/.Trash/*"], capture_output=True, text=True).stdout
+        FILE_LIST.write_text(out, encoding="utf-8")
     by_name: dict[str, list[str]] = {}
-    for line in FILE_LIST.read_text().splitlines():
+    for line in FILE_LIST.read_text(encoding="utf-8").splitlines():
         by_name.setdefault(os.path.basename(line).lower(), [])
         if line not in by_name[os.path.basename(line).lower()]:
             by_name[os.path.basename(line).lower()].append(line)

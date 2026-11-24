@@ -40,9 +40,12 @@ export function normalise(raw, sourceId) {
   const arxiv = normArxiv(raw.arxiv) || (doi && arxivOfDoi(doi)) || null;
   const date = /^\d{4}-\d{2}-\d{2}$/.test(raw.date ?? '') ? /** @type {string} */ (raw.date) : null;
   const url = raw.url || (doi ? `https://doi.org/${doi}` : arxiv ? `https://arxiv.org/abs/${arxiv}` : null);
+  // Names and their OpenAlex ids (when the source gave any) stay paired as empty names are dropped.
+  const pairs = (raw.authors ?? []).map((a, i) => [String(a).trim(), raw.authorIds?.[i] ?? null]).filter(([a]) => a);
   return {
     id: paperId({ doi, arxiv, title }), doi, arxiv, openalexId: raw.openalexId ?? null, title,
-    authors: (raw.authors ?? []).map((a) => String(a).trim()).filter(Boolean),
+    authors: pairs.map(([a]) => /** @type {string} */ (a)),
+    ...(pairs.some(([, id]) => id) ? { authorIds: pairs.map(([, id]) => id) } : {}),
     venue: String(raw.venue ?? '').trim(), date, year: raw.year ?? (date ? Number(date.slice(0, 4)) : null),
     abstract: String(raw.abstract ?? '').trim(), url, links: url ? [url] : [], sources: [sourceId], kind: raw.kind || null,
     ...(raw.keywords?.length ? { keywords: raw.keywords } : {}),
@@ -78,9 +81,11 @@ function fold(a, b) {
   const other = lead === a ? b : a;
   const pick = (/** @type {any} */ x, /** @type {any} */ y) => x || y;
   const doi = pick(lead.doi, other.doi), arxiv = pick(lead.arxiv, other.arxiv);
+  const named = lead.authors.length >= other.authors.length ? lead : other;
+  const { authorIds: _ids, ...rest } = lead;
   return {
-    ...lead, doi, arxiv, openalexId: pick(lead.openalexId, other.openalexId), kind: pick(lead.kind, other.kind),
-    authors: lead.authors.length >= other.authors.length ? lead.authors : other.authors,
+    ...rest, doi, arxiv, openalexId: pick(lead.openalexId, other.openalexId), kind: pick(lead.kind, other.kind),
+    authors: named.authors, ...(named.authorIds ? { authorIds: named.authorIds } : {}),
     abstract: lead.abstract.length >= other.abstract.length ? lead.abstract : other.abstract,
     date: [lead.date, other.date].filter(Boolean).sort()[0] ?? null,
     year: lead.year ?? other.year,
@@ -220,7 +225,7 @@ export function validateRadar(radar) {
   const ids = new Set();
   for (const s of sources) { if (ids.has(s.id)) throw new Error('The same source is listed twice.'); ids.add(s.id); }
   const size = radar.size ?? {};
-  const fresh = size.fresh ?? 8, older = size.older ?? 1, discover = size.discover ?? 3;
+  const fresh = size.fresh ?? 30, older = size.older ?? 3, discover = size.discover ?? 3;
   if (!Number.isInteger(fresh) || fresh < 1 || fresh > 50) throw new Error('A radar shows between 1 and 50 new papers.');
   if (!Number.isInteger(older) || older < 0 || older > 20) throw new Error('A radar shows between 0 and 20 older papers.');
   if (!Number.isInteger(discover) || discover < 0 || discover > 10) throw new Error('A radar shows between 0 and 10 papers that might interest you.');
@@ -257,6 +262,13 @@ function validThreshold(t) {
   if (!share(t.abstract)) throw new Error('The radar threshold must be between 0 and 1.');
   if (t.full != null && !share(t.full)) throw new Error('The radar threshold for whole papers must be between 0 and 1.');
   return { abstract: t.abstract, full: t.full ?? null, ...(t.calibration ? { calibration: t.calibration } : {}) };
+}
+
+/** The same for the same seeds in any order: a calibration remembers it, so a run can tell the seeds changed since.
+ *  @param {import("./radar-types").RadarSeeds} seeds */
+export function seedsKey(seeds) {
+  const b = seedBody(seeds);
+  return JSON.stringify([[...b.keys].sort(), [...b.collections].sort(), b.texts.map((t) => t.title).sort()]);
 }
 
 /** What the server needs to know the seeds by (radar_api.seed_matrix). @param {import("./radar-types").RadarSeeds} seeds

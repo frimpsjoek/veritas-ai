@@ -88,6 +88,47 @@ From the command line:
 .venv/bin/python eval.py [gates...]     # paraphrase recall check; 2026-09-21: hit@5 9/11, hit@1 6/11
 ```
 
+## Using the index as a library
+
+`veritas_kb.KnowledgeBase` (spec 035) is the same index with its own files, so one process can hold several (one per
+user). Install the engine as a wheel (`pip install ./server[onnx]`; `[mlx]` on a Mac) or import it from this folder.
+
+```python
+from veritas_kb import Document, KnowledgeBase
+
+index = KnowledgeBase("/srv/u/alice/knowledgebase/zotero/index/kb.sqlite",  # Tantivy goes to tantivy/ beside it
+                      model_dir="/srv/models/snowflake-arctic-embed-s")      # backend="auto": MLX on macOS, else onnx
+paper = Document("zotero/ABCD1234", "A paper", "# A paper\n\n## Abstract\n\n...")
+chunks = index.count_chunks(paper)                     # exact output of the installed chunker (title fallback included)
+if chunks > 2000:                                      # so a caller can enforce its own cap before writing anything
+    raise ValueError("paper too large for this index")
+index.apply(add=[paper], remove=["zotero/OLD00000"], meta={"zotero_web_version:lib": "1234"})  # one transaction
+index.embed_pending(batch=64, max_chunks=64)           # bounded, resumable drain; omit max_chunks for legacy drain-all
+hits = index.search("spin waves in garnets", limit=8)  # same results as kb.py search
+visible = index.search("spin waves", limit=8, allowed_path_prefixes=("zotero/current/",), include_total=True)
+# visible == {"results": [...], "total": N}; prefixes filter both candidate engines before pooling, limit and total
+page = index.read("zotero/ABCD1234")                   # also documents(), get_meta(), stats(), similar_to_text()
+index.close()                                          # or `with KnowledgeBase(...) as index:`
+```
+
+- **Shared:** only the embedding model, one per (model folder, backend), loaded on first use, read-only (the ONNX
+  path only reads `tokenizer.json` and `onnx/model.onnx`, so the folder may be read-only; MLX also caches
+  `mlx-weights.npz` there when it may write). Everything else (database,
+  Tantivy folder, vectors in memory) belongs to one instance; a second instance on the same files in one process is
+  refused. kb's module settings (`KB_DB`, the data folder, the folder list) are never read for these files, not even
+  at import; only the default `model_dir` is kb's (`VERITAS_DATA`/models or `server/models`).
+- **Threads:** calls block. On one instance, `apply` and `embed_pending` wait for each other; a search waits for
+  other searches and for writes, so it always sees one committed version of the index (up to `search_timeout`,
+  default 60 s, for everything it waits on together, then `ConcurrentUseError`). `embed_pending` holds the write lock
+  for the whole call, until every selected pending passage has a vector. `batch=` sets how many are embedded and
+  committed per round; optional `max_chunks=` caps the whole call (and makes a non-positive `batch` invalid), so searches
+  wait for at most that bounded window, or time out. Reads (`read`, `documents`,
+  `get_meta`, `stats`) take no lock. Different instances never wait for each other. `apply` is all or nothing.
+  `close()` refuses new calls, waits for running ones (reads too) and the background vector reload.
+- **MLX:** the weights come from `model_dir`, like the tokenizer; several instances on the MLX backend in one process
+  are untested. Off macOS, `"auto"` never tries MLX.
+- Needs SQLite >= 3.43 in Python's `sqlite3`.
+
 ## Obsidian plugin (Mac and phone)
 
 `obsidian-plugin/` holds "Second Brain Search". Run `./install.sh` to type-check it, build it and copy it into the vault; git sync takes it to the phone. `data.json` (settings and token) stays out of git on purpose.

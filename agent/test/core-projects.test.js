@@ -111,3 +111,12 @@ test('adopt takes in a project made elsewhere, once', async () => {
   assert.deepEqual(await service.projects.adopt([rec]), ['zp1']);
   assert.equal((await service.projects.list()).length, 1);
 });
+
+test('spec 030 R6: reviews.list names the session a review is a step of, and nothing for one on its own', async () => {
+  const { fs, service } = await setup();
+  seedReview(fs, 'R200', { ...request, session: 'sessV' });
+  seedReview(fs, 'R201', request);
+  const listed = await service.reviews.list();
+  assert.equal(listed.find((r) => r.id === 'R200').session, 'sessV');
+  assert.equal('session' in listed.find((r) => r.id === 'R201'), false);
+});

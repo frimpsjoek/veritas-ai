@@ -5,7 +5,7 @@ Notes are split at headings into chunks of about CHUNK_CHARS. Each chunk goes in
 onnxruntime). A search runs both, fuses the two rankings (reciprocal rank fusion), scales by the note's
 source weight and returns at most two chunks per note.
 
-Re-indexing is incremental: a note is re-chunked only when its mtime or size changed.
+Re-indexing is incremental: a note is re-chunked only when its mtime or size changed, or CHUNKER_VERSION did.
 
 CLI:
   kb.py index [--full]            build or update the index
@@ -19,18 +19,34 @@ CLI:
 """
 from __future__ import annotations
 
+import sys
+
+import listen_first
+
+# `kb.py serve`: the port opens before the imports below, and before the folder list is looked at (reload_layout).
+# Only when run as the command (the frozen entry decides the same before it imports kb): importing kb as a library
+# (veritas_kb, http_api, tests) never opens a port, whatever the host's sys.argv says.
+if __name__ == "__main__":
+    listen_first.if_serving(sys.argv)
+
 import argparse
 import ctypes
-import fcntl
 import fnmatch
 import json
 import os
 import re
 import sqlite3
-import sys
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
 import threading
 import time
 import urllib.parse
+from concurrent.futures import Future
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -57,7 +73,33 @@ def reload_layout() -> None:
     zotero.ZOTERO = LAYOUT.zotero or NO_ZOTERO
 
 
-reload_layout()
+# The folder list is read when first needed, not at import (review round 2, M1): importing kb as a library
+# (veritas_kb) must not read the host's folder list, where a blocked folder could stall opening an unrelated index.
+# The CLI (main) and the server (http_api.serve) read it before they start; LAYOUT and VAULT, asked for before
+# that, read it then (module __getattr__ for kb.VAULT from other modules, _layout() / _vault() inside kb).
+def ensure_layout() -> None:
+    """Reads the folder list unless already read (or set by hand, as tests do)."""
+    if "LAYOUT" not in globals():
+        reload_layout()
+
+
+def __getattr__(name: str):
+    if name in ("LAYOUT", "VAULT"):
+        ensure_layout()
+        return globals()[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def _layout():
+    ensure_layout()
+    return globals()["LAYOUT"]
+
+
+def _vault() -> Path:
+    ensure_layout()
+    return globals()["VAULT"]
+
+
 HOME = Path(__file__).resolve().parent
 
 
@@ -79,6 +121,9 @@ VECTOR_GATE = float(os.environ.get("KB_VECTOR_GATE", "0.55"))
 
 CHUNK_CHARS = 1400
 MIN_CHUNK_CHARS = 200
+# Bump when clean() or chunking changes what is stored: the next index run re-chunks every document (vectors of
+# unchanged passages are kept). 2: real tags only, sentences rejoined as prose, plain Zotero titles.
+CHUNKER_VERSION = "2"
 
 # Sync conflict copies, drawings (JSON, not prose), templates and agent instruction files are left out.
 SKIP_DIRS = {"Excalidraw", "templates", "assets", "attachments"}
@@ -111,7 +156,10 @@ CREATE INDEX IF NOT EXISTS links_src ON links(src);
 CREATE INDEX IF NOT EXISTS links_dst ON links(dst);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS collections (key TEXT PRIMARY KEY, name TEXT, parent TEXT);
+CREATE TABLE IF NOT EXISTS keyword_dirty (id INTEGER PRIMARY KEY);
 """
+# keyword_dirty: chunk ids deleted by veritas_kb.KnowledgeBase.apply (SQLite may hand them to other text), re-indexed by
+# the next keyword sync and dropped after its Tantivy commit, even if the instance was closed and reopened in between.
 # Pandoc citations in notes, [@citekey] or [see @a; @b], link a note to the Zotero item with that citation key.
 CITATION = re.compile(r"(?<![\w@])@([A-Za-z][\w:.#$%&+?<>~/-]*[\w])")
 CITATION_BLOCK = re.compile(r"\[[^\[\]]*@[^\[\]]*\]")
@@ -120,11 +168,12 @@ CITATION_BLOCK = re.compile(r"\[[^\[\]]*@[^\[\]]*\]")
 _request = threading.local()
 
 
-def connect(*, keep: bool = False) -> sqlite3.Connection:
+def connect(*, keep: bool = False, path: Path | None = None) -> sqlite3.Connection:
     """A connection to the index. Inside `request_scope` it is closed when the request ends; `keep` is for the few
-    that live as long as the process (the searcher's)."""
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(DB_PATH, timeout=60, check_same_thread=False)
+    that live as long as the process (the searcher's). `path`: another index file than DB_PATH (spec 035)."""
+    path = Path(path) if path is not None else DB_PATH  # DB_PATH read now: tests rebind it
+    path.parent.mkdir(parents=True, exist_ok=True)
+    db = sqlite3.connect(path, timeout=60, check_same_thread=False)
     tracked = getattr(_request, "dbs", None)
     if tracked is not None and not keep:
         tracked.append(db)
@@ -135,7 +184,37 @@ def connect(*, keep: bool = False) -> sqlite3.Connection:
         db.execute("ALTER TABLE notes ADD COLUMN meta TEXT")  # Zotero details: authors, year, citekey, DOI
     if "vec" in {r[1] for r in db.execute("PRAGMA table_info(chunks)")}:
         _move_vectors_out(db)
+    if os.sep == "\\":
+        posix_paths(db)
     return db
+
+
+def posix(rel: str | Path) -> str:
+    """An index path with `/` between its parts, on every system (spec 034 R1): links, citations and the plugins compare
+    paths as text, so Windows' `\\` would make the same note two different paths."""
+    return Path(rel).as_posix() if isinstance(rel, Path) else str(rel).replace(os.sep, "/") if os.sep != "/" else str(rel)
+
+
+PATH_COLUMNS = (("notes", "path"), ("chunks", "path"), ("vecs", "path"), ("links", "src"), ("links", "dst"), ("media_cache", "path"))
+
+
+def posix_paths(db: sqlite3.Connection, force: bool = False) -> int:
+    """Spec 034 R2: an index made on Windows before spec 034 stored paths with `\\`; each becomes the same path with
+    `/`, once (meta paths_posix). A note already stored under both keeps the `/` one. Nothing is read again. Returns the
+    number of rows changed. Only called on Windows (`force` for tests): elsewhere `\\` is a legal file-name character."""
+    if not force and db.execute("SELECT 1 FROM meta WHERE key='paths_posix'").fetchone():
+        return 0
+    changed = 0
+    # a note stored under both forms: its `\\` copy goes, with its chunks, vectors and links (the `/` one stays)
+    twins = [r[0] for r in db.execute("SELECT path FROM notes WHERE instr(path, '\\') > 0 AND replace(path, '\\', '/') IN (SELECT path FROM notes)")]
+    for old in twins:
+        delete_note(db, old)
+    db.execute("DELETE FROM media_cache WHERE instr(path, '\\') > 0 AND replace(path, '\\', '/') IN (SELECT path FROM media_cache)")
+    for table, column in PATH_COLUMNS:
+        changed += db.execute(f"UPDATE {table} SET {column} = replace({column}, '\\', '/') WHERE instr({column}, '\\') > 0").rowcount
+    db.execute("INSERT OR REPLACE INTO meta VALUES ('paths_posix', '1')")
+    db.commit()
+    return changed
 
 
 class request_scope:
@@ -217,7 +296,7 @@ def clean(text: str) -> str:
     text = MD_IMAGE.sub("", text)
     text = MD_LINK.sub(r"\1", text)
     text = BARE_URL.sub("", text)
-    text = re.sub(r"<[^>]{1,200}>", " ", text)
+    text = zotero.strip_tags(text)  # real tags only: "< 2 eV", <psi|H|psi> and <110> stay
     text = re.sub(r"[ \t]+", " ", text)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
@@ -260,16 +339,27 @@ def pack(text: str) -> list[str]:
         return [text]
     pieces, current = [], ""
     for para in re.split(r"\n\s*\n", text):
-        units = [para] if len(para) <= CHUNK_CHARS else re.split(r"(?<=[.!?])\s+|\n", para)
-        for unit in units:
+        # (unit, what joins it to the text before): pieces of one paragraph rejoin as a line or a space
+        if len(para) <= CHUNK_CHARS:
+            units = [(para, "\n\n")]
+        else:
+            parts = re.split(r"((?<=[.!?])\s+|\n)", para)
+            units = [(parts[0], "\n\n")] + [(parts[i + 1], "\n" if "\n" in parts[i] else " ")
+                                            for i in range(1, len(parts) - 1, 2)]
+        for unit, joiner in units:
+            if not unit:
+                continue
+            if len(unit) > CHUNK_CHARS and current:
+                pieces.append(current)
+                current = ""
             while len(unit) > CHUNK_CHARS:  # one unbroken run of text
                 pieces.append(unit[:CHUNK_CHARS])
                 unit = unit[CHUNK_CHARS:]
-            if current and len(current) + len(unit) + 2 > CHUNK_CHARS:
+            if current and len(current) + len(joiner) + len(unit) > CHUNK_CHARS:
                 pieces.append(current)
                 current = unit
             else:
-                current = f"{current}\n\n{unit}" if current else unit
+                current = f"{current}{joiner}{unit}" if current else unit
     if current:
         pieces.append(current)
     return pieces
@@ -300,11 +390,11 @@ def chunk_note(body: str) -> list[Chunk]:
 def vault_files(top: Path | None = None, kind: str = "obsidian", skip: list[str] | tuple = ()) -> dict[str, os.stat_result]:
     """Notes under one folder. Obsidian vaults: .md, without drawings/templates/attachments folders. Plain folders
     (spec 018): .md, .markdown and .txt, every non-dot folder. Both drop the folder's own `skip` globs."""
-    top = VAULT if top is None else top
+    top = _vault() if top is None else top
     extensions = (".md",) if kind == "obsidian" else PLAIN_EXTENSIONS
     files = {}
     for root, dirs, names in os.walk(top):
-        rel_root = os.path.relpath(root, top)
+        rel_root = posix(os.path.relpath(root, top))
         dirs[:] = [d for d in dirs if not d.startswith(".") and (kind != "obsidian" or d not in SKIP_DIRS)]
         for name in names:
             if name.lower().endswith(extensions) and not SKIP_NAME.search(name):
@@ -328,23 +418,23 @@ class Root:
 def roots() -> list[Root]:
     # The main folder always gets Obsidian rules: it is the vault, or the home folder Second Brain itself writes
     # ai_notes/ and digests into, whose folder labels and weights must stay.
-    return [Root("", VAULT, "obsidian")] + [Root(f.prefix, f.path, sources.connectors.indexed_as(f.kind), f.name, tuple(f.skip))
-                                       for f in LAYOUT.others]
+    return [Root("", _vault(), "obsidian")] + [Root(f.prefix, f.path, sources.connectors.indexed_as(f.kind), f.name, tuple(f.skip))
+                                       for f in _layout().others]
 
 
 def kept_prefixes() -> tuple[str, ...]:
     """Listed folders that are switched on but not there (an unplugged drive): their rows stay until they return."""
-    return tuple(f.prefix for f in LAYOUT.ignored if f.kind == "missing")
+    return tuple(f.prefix for f in _layout().ignored if f.kind == "missing")
 
 
 def split_prefixed(path: str) -> tuple[Path, str, str]:
     """(folder, prefix, path inside it) for an index path: `name:/rel` belongs to that listed folder."""
     name, sep, rest = path.partition(":/")
     if sep:
-        for f in LAYOUT.others:
+        for f in _layout().others:
             if f.name == name:
                 return f.path, f.prefix, rest
-    return VAULT, "", path
+    return _vault(), "", path
 
 
 def note_title(fields: dict, body: str, stem: str) -> str:
@@ -358,21 +448,37 @@ def note_title(fields: dict, body: str, stem: str) -> str:
 
 # ---------------------------------------------------------------- embeddings
 
+def resolve_backend(backend: str | None = None) -> str:
+    """'mlx' or 'onnx'. None keeps the module's choice (KB_BACKEND, default mlx with a CPU fallback); 'auto' is MLX on
+    macOS only, so other systems never try it (spec 035 R3)."""
+    if not backend:
+        return "mlx" if USE_MLX else "onnx"
+    if backend == "auto":
+        return "mlx" if sys.platform == "darwin" else "onnx"
+    if backend not in ("mlx", "onnx"):
+        raise ValueError(f"unknown embedding backend {backend!r}")
+    return backend
+
+
 class Embedder:
-    def __init__(self) -> None:
+    def __init__(self, model_dir: Path | None = None, backend: str | None = None) -> None:
+        """`model_dir` (default MODEL_DIR): the tokenizer and the model, for either backend (MLX caches the weights it
+        extracts from the ONNX file there when it may write); `backend`: see resolve_backend. The tokenizer is
+        configured here only, so one Embedder can encode from several threads."""
         from tokenizers import Tokenizer
 
-        self.tokenizer = Tokenizer.from_file(str(MODEL_DIR / "tokenizer.json"))
+        model_dir = Path(model_dir) if model_dir is not None else MODEL_DIR
+        self.tokenizer = Tokenizer.from_file(str(model_dir / "tokenizer.json"))
         self.tokenizer.enable_truncation(max_length=512)
         # Lengths padded to a multiple of 32 keep the number of distinct batch shapes small.
         self.tokenizer.enable_padding(pad_id=self.tokenizer.token_to_id("[PAD]") or 0, pad_token="[PAD]",
                                       pad_to_multiple_of=32)
         self.mlx = None
-        if USE_MLX:
+        if resolve_backend(backend) == "mlx":
             try:
                 from mlx_embed import ArcticMLX
 
-                self.mlx = ArcticMLX()
+                self.mlx = ArcticMLX(model_dir)
                 return
             except Exception as error:  # no GPU or MLX missing: fall back to onnxruntime
                 print(f"MLX unavailable, using CPU: {error}", file=sys.stderr)
@@ -382,7 +488,7 @@ class Embedder:
         options.log_severity_level = 3
         options.enable_cpu_mem_arena = False  # batches vary in length; the arena would keep every size it saw
         options.intra_op_num_threads = int(os.environ.get("KB_THREADS", "4"))
-        self.session = onnxruntime.InferenceSession(str(MODEL_DIR / "onnx" / "model.onnx"), options,
+        self.session = onnxruntime.InferenceSession(str(model_dir / "onnx" / "model.onnx"), options,
                                                     providers=["CPUExecutionProvider"])
         self.inputs = {i.name for i in self.session.get_inputs()}
 
@@ -408,12 +514,51 @@ class Embedder:
         return out
 
 
+# Read-only models shared by every index in the process (spec 035 R2), one per (model folder, backend). The lock
+# guards the dict only: a model loads outside it, and callers asking for a model that is still loading wait on that
+# model's Future, never on the lock, so other models (and indexes) are not held up.
+_EMBEDDERS: dict[tuple[str, str], Future] = {}
+_EMBEDDERS_LOCK = threading.Lock()
+
+
+def shared_embedder(model_dir: Path | None = None, backend: str | None = None) -> "Embedder":
+    """The process's one Embedder for this model folder and backend, built on first use. A failed build is not kept:
+    the callers waiting on it get its error and the next call tries again."""
+    key = (str(Path(model_dir if model_dir is not None else MODEL_DIR).resolve()), resolve_backend(backend))
+    with _EMBEDDERS_LOCK:
+        future = _EMBEDDERS.get(key)
+        builder = future is None
+        if builder:
+            future = _EMBEDDERS[key] = Future()
+    if builder:
+        try:
+            future.set_result(Embedder(Path(key[0]), key[1]))  # Embedder looked up now: tests replace it
+        except BaseException as error:
+            with _EMBEDDERS_LOCK:
+                _EMBEDDERS.pop(key, None)
+            future.set_exception(error)
+            raise
+    return future.result()
+
+
 # ---------------------------------------------------------------- indexing
 
-# During an index run, the vectors of deleted rows, keyed by the exact text they were made from. A note re-stored
-# under a new path (its folder became the output or stopped being it) or with only some sections edited gets the
-# vectors of its unchanged passages back instead of re-embedding them. None outside an index run.
-_VEC_STASH: dict[str, bytes] | None = None
+# During a write (an index run, or veritas_kb.KnowledgeBase.apply), the vectors of deleted rows, keyed by the exact
+# text they were made from. A note re-stored under a new path (its folder became the output or stopped being it) or
+# with only some sections edited gets the vectors of its unchanged passages back instead of re-embedding them. None
+# outside a write. Per context (spec 035), so two indexes written at once never hand vectors to each other: each write
+# scope sets a fresh dict (vector_stash); never spawn tasks that write inside one.
+_VEC_STASH: ContextVar[dict[str, bytes] | None] = ContextVar("kb_vec_stash", default=None)
+
+
+@contextmanager
+def vector_stash():
+    """A fresh vector stash for the writes inside this block (see _VEC_STASH)."""
+    token = _VEC_STASH.set({})
+    try:
+        yield
+    finally:
+        _VEC_STASH.reset(token)
 
 
 def _embed_text(title: str, heading: str, text: str) -> str:
@@ -422,11 +567,12 @@ def _embed_text(title: str, heading: str, text: str) -> str:
 
 
 def delete_note(db: sqlite3.Connection, rel: str) -> None:
-    if _VEC_STASH is not None:
+    stash = _VEC_STASH.get()
+    if stash is not None:
         for title, heading, text, vec in db.execute(
                 "SELECT n.title, c.heading, c.text, v.vec FROM chunks c JOIN notes n ON n.path=c.path "
                 "JOIN vecs v ON v.id=c.id WHERE c.path=?", (rel,)):
-            _VEC_STASH[_embed_text(title, heading, text)] = vec
+            stash[_embed_text(title, heading, text)] = vec
     ids = [r[0] for r in db.execute("SELECT id FROM chunks WHERE path=?", (rel,))]
     db.executemany("DELETE FROM chunks_fts WHERE rowid=?", [(i,) for i in ids])
     db.execute("DELETE FROM chunks WHERE path=?", (rel,))
@@ -450,6 +596,15 @@ def code_is_current() -> bool:
 PROGRESS_FILE = paths.data_dir(HOME) / "index-progress.json"
 LOCK_FILE = paths.data_dir(HOME) / "index.lock"
 STOP = threading.Event()  # set by "Stop" in the plugin (or SIGTERM): indexing ends after its current batch
+# "Stop" for an indexing process: Windows has no SIGTERM to catch (os.kill there is TerminateProcess, which would end
+# the run mid-batch), so the server leaves this file and the run checks for it between batches, on every system.
+STOP_FILE = paths.data_dir(HOME) / "index-stop"
+
+
+def clear_stop() -> None:
+    """A new run starts unstopped, whatever an earlier Stop left behind."""
+    STOP.clear()
+    STOP_FILE.unlink(missing_ok=True)
 
 
 class Stopped(Exception):
@@ -487,7 +642,7 @@ class Progress:
         self.write(force=True)
 
     def advance(self, done: int, total: int | None = None) -> None:
-        if STOP.is_set():
+        if STOP.is_set() or STOP_FILE.exists():
             raise Stopped
         self.state["done"] = done
         if total is not None:
@@ -524,15 +679,38 @@ class Progress:
         self.write(force=True)
 
 
+def _try_lock(lock) -> bool:
+    """Takes the index lock without waiting; False when another holder has it. fcntl on macOS and Linux, msvcrt on
+    Windows (one byte at the start of the file); either way the lock goes when the file is closed."""
+    if os.name == "nt":
+        lock.seek(0)
+        try:
+            msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
+        return True
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return False
+    return True
+
+
+def _unlock(lock) -> None:
+    if os.name == "nt":
+        lock.seek(0)
+        msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        fcntl.flock(lock, fcntl.LOCK_UN)
+
+
 def index_running() -> bool:
     """True when some process holds the index lock."""
     LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(LOCK_FILE, "a") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
+        if not _try_lock(lock):
             return True
-        fcntl.flock(lock, fcntl.LOCK_UN)
+        _unlock(lock)
         return False
 
 
@@ -544,11 +722,9 @@ def index(full: bool = False, verbose: bool = True, reread_zotero: bool = False,
         return {"skipped": "this process runs out-of-date code; a fresh process will index"}
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(LOCK_FILE, "a") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
+        if not _try_lock(lock):
             return {"skipped": True}
-        STOP.clear()
+        clear_stop()
         progress = Progress()
         try:
             if reread_zotero or reread_media:
@@ -560,6 +736,7 @@ def index(full: bool = False, verbose: bool = True, reread_zotero: bool = False,
                 db.commit()
             result = _index(full, verbose, progress)
         except Stopped:
+            clear_stop()  # the request is met; the file should not outlive the run
             progress.finish(stopped=True)
             return {"stopped": True}
         except Exception as error:
@@ -570,12 +747,8 @@ def index(full: bool = False, verbose: bool = True, reread_zotero: bool = False,
 
 
 def _index(full: bool, verbose: bool, progress: Progress) -> dict:
-    global _VEC_STASH
-    _VEC_STASH = {}
-    try:
+    with vector_stash():
         return _index_stages(full, verbose, progress)
-    finally:
-        _VEC_STASH = None
 
 
 def _index_stages(full: bool, verbose: bool, progress: Progress) -> dict:
@@ -584,6 +757,7 @@ def _index_stages(full: bool, verbose: bool, progress: Progress) -> dict:
     if full:
         db.executescript("DELETE FROM chunks; DELETE FROM vecs; DELETE FROM chunks_fts; DELETE FROM links; DELETE FROM notes;")
         db.execute(f"DELETE FROM meta WHERE {ZOTERO_STAMPS}")  # or every library would be skipped as unchanged
+    rechunk_if_chunker_changed(db)
     files, where = {}, {}
     for root in roots():
         for rel, st in vault_files(root.path, root.kind, root.skip).items():
@@ -653,6 +827,18 @@ def _index_stages(full: bool, verbose: bool, progress: Progress) -> dict:
     return result
 
 
+def rechunk_if_chunker_changed(db: sqlite3.Connection) -> None:
+    """A new CHUNKER_VERSION marks every stored document as changed, so each stage re-stores it through store_note
+    (and the vector stash). Zotero libraries and online accounts are read again; PDFs come from media_cache."""
+    row = db.execute("SELECT value FROM meta WHERE key='chunker_version'").fetchone()
+    if row and row[0] == CHUNKER_VERSION:
+        return
+    db.execute("UPDATE notes SET mtime=-1")
+    db.execute(f"DELETE FROM meta WHERE {ZOTERO_STAMPS}")
+    db.execute("INSERT OR REPLACE INTO meta VALUES ('chunker_version', ?)", (CHUNKER_VERSION,))
+    db.commit()
+
+
 def refresh_paper_references(paths: list[str]) -> None:
     """Paper notes edited in Obsidian: bring their References list in line with what "My notes" cites."""
     if not paths:
@@ -660,7 +846,7 @@ def refresh_paper_references(paths: list[str]) -> None:
     import paper_notes
     for rel in paths:
         try:
-            key = parse_frontmatter((VAULT / rel).read_text(encoding="utf-8"))[0].get("zotero-key")
+            key = parse_frontmatter((_vault() / rel).read_text(encoding="utf-8"))[0].get("zotero-key")
             if key:
                 paper_notes.refresh(str(key), rel)
         except Exception as exc:  # noqa: BLE001 - a broken note must not stop indexing
@@ -671,17 +857,21 @@ def refresh_paper_references(paths: list[str]) -> None:
 def store_note(db: sqlite3.Connection, rel: str, title: str, folder: str, source: str, tags: list[str],
                links: list[str], mtime: float, size: int, frontmatter: str, meta: dict | None, body: str) -> None:
     delete_note(db, rel)
+    if source == "zotero":  # Zotero titles carry rich-text tags (<i>, <sub>)
+        title = zotero.plain_title(title) or title
     db.execute("INSERT INTO notes (path, title, folder, source, tags, mtime, size, frontmatter, meta) "
                "VALUES (?,?,?,?,?,?,?,?,?)",
                (rel, title, folder, source, " ".join(tags), mtime, size, frontmatter,
                 json.dumps(meta, ensure_ascii=False) if meta else None))
     db.executemany("INSERT INTO links VALUES (?,?)", [(rel, dst) for dst in links])
+    stash = _VEC_STASH.get()
     for ord_, chunk in enumerate(chunk_note(body) or [Chunk("", title)]):
         cur = db.execute("INSERT INTO chunks (path, ord, heading, text) VALUES (?,?,?,?)",
                          (rel, ord_, chunk.heading, chunk.text))
         db.execute("INSERT INTO chunks_fts (rowid, title, heading, text, tags) VALUES (?,?,?,?,?)",
                    (cur.lastrowid, title, chunk.heading, chunk.text, " ".join(tags)))
-        vec = _VEC_STASH.get(_embed_text(title, chunk.heading, chunk.text)) if _VEC_STASH is not None else None
+        # pop: a re-chunk of the whole index would otherwise hold every vector in memory until the run ends
+        vec = stash.pop(_embed_text(title, chunk.heading, chunk.text), None) if stash is not None else None
         if vec is not None:
             db.execute("INSERT OR REPLACE INTO vecs VALUES (?,?,?)", (cur.lastrowid, rel, vec))
 
@@ -748,10 +938,10 @@ def index_zotero(db: sqlite3.Connection, verbose: bool, progress: Progress) -> i
     """Every enabled Zotero library: the default one as zotero/KEY, the others as <name>:/zotero/KEY (phase 2).
     Items of a library that is no longer enabled are removed."""
     changed = 0
-    default = LAYOUT.libraries[0] if LAYOUT.libraries else None
+    default = _layout().libraries[0] if _layout().libraries else None
     if default is not None or zotero.available():
         changed += _index_library(db, verbose, progress, "", "zotero_fingerprint")
-    others = LAYOUT.libraries[1:]
+    others = _layout().libraries[1:]
     for lib in others:
         with zotero.library(lib.path):
             changed += _index_library(db, verbose, progress, lib.prefix, f"zotero_fingerprint:{lib.name}")
@@ -765,7 +955,7 @@ def prune_zotero(db: sqlite3.Connection) -> None:
     """Removes the items of libraries and online accounts that are no longer listed or switched on, with their
     change stamps, so a library switched on again is read again. A listed library on a drive that is not plugged in
     keeps its items."""
-    keep = ({lib.prefix for lib in LAYOUT.libraries[1:]} | {a.prefix for a in LAYOUT.accounts}
+    keep = ({lib.prefix for lib in _layout().libraries[1:]} | {a.prefix for a in _layout().accounts}
             | set(kept_prefixes()))
     gone = set()
     for (path,) in db.execute("SELECT path FROM notes WHERE source='zotero' AND path LIKE '%:/%'").fetchall():
@@ -840,12 +1030,12 @@ def index_zotero_web(db: sqlite3.Connection, verbose: bool, progress: Progress) 
     moved; an error (no key, 403, 429, no network) keeps its indexed items and is reported, not raised."""
     import zotero_web
     changed, errors = 0, []
-    for account in LAYOUT.accounts:
+    for account in _layout().accounts:
         if account.kind != "zotero-web":
             continue
         key = zotero_web.get_key(account.user_id)
         if not key:
-            errors.append(f"{account.name}: no Zotero API key in the Keychain")
+            errors.append(f"{account.name}: no Zotero API key saved on this computer")
             continue
         client = zotero_web.Client(account.user_id, key)
         stamp_key = f"zotero_web_version:{account.name}"
@@ -881,7 +1071,7 @@ def account_item(path: str) -> dict | None:
     """An online library's item (<account>:/zotero/KEY) in the shape zotero.item_detail gives, from the index: there
     is no local database to read. None when the path is not an online item."""
     name, sep, rest = path.partition(":/")
-    account = next((a for a in LAYOUT.accounts if a.name == name), None) if sep else None
+    account = next((a for a in _layout().accounts if a.name == name), None) if sep else None
     if account is None:
         return None
     row = connect().execute("SELECT title, tags, meta FROM notes WHERE path=? AND source='zotero'", (path,)).fetchone()
@@ -901,9 +1091,10 @@ def account_item(path: str) -> dict | None:
 def zotero_ref(path: str) -> tuple[Path, str]:
     """(library folder, item key) for an index path or key: <name>:/zotero/KEY is that library's item, zotero/KEY or
     a bare KEY the default library's."""
+    ensure_layout()  # zotero.ZOTERO is the folder list's default library
     name, sep, rest = path.partition(":/")
     if sep:
-        for lib in LAYOUT.libraries:
+        for lib in _layout().libraries:
             if lib.name == name:
                 return lib.path, rest.removeprefix(zotero.PREFIX)
         raise FileNotFoundError(f"no Zotero library named {name!r}")
@@ -958,34 +1149,60 @@ def stamp(db: sqlite3.Connection, key: str) -> None:
 
 
 def embed_pending(db: sqlite3.Connection, verbose: bool = True, batch: int = 256,
-                  progress: Progress | None = None) -> int:
+                  progress: Progress | None = None, *, embedder: "Embedder | None" = None,
+                  max_chunks: int | None = None) -> int:
+    """Embed pending passages in committed `batch` rounds, at most `max_chunks` in this call (None: all)."""
+    if max_chunks is not None and max_chunks < 0:
+        raise ValueError("max_chunks must be non-negative or None")
+    if max_chunks is not None and batch < 1:
+        raise ValueError("batch must be positive when max_chunks bounds the drain")
+    if max_chunks == 0:
+        return 0
     todo = db.execute("SELECT (SELECT count(*) FROM chunks) - (SELECT count(*) FROM vecs)").fetchone()[0]
+    if max_chunks is not None:
+        todo = min(todo, max_chunks)
     if not todo:
         return 0
     if progress:
         progress.stage("embedding", todo)
-    embed = Embedder()
+    embed = embedder if embedder is not None else Embedder()
     done, started, last_stamp = 0, time.time(), time.time()
-    while True:
-        rows = db.execute(f"SELECT c.id, n.title, c.heading, c.text, c.path FROM chunks c JOIN notes n ON n.path=c.path "
-                          f"WHERE c.id NOT IN (SELECT id FROM vecs) ORDER BY {EMBED_ORDER} LIMIT ?", (batch,)).fetchall()
-        if not rows:
-            break
-        texts = [_embed_text(title, heading, text) for _, title, heading, text, _ in rows]
-        vectors = embed(texts, batch_size=64 if embed.mlx is not None else 16).astype(np.float16)
-        db.executemany("INSERT OR REPLACE INTO vecs VALUES (?,?,?)",
-                       [(r[0], r[4], v.tobytes()) for r, v in zip(rows, vectors)])
-        done += len(rows)
-        if time.time() - last_stamp > 300:  # lets a running server pick up new vectors every few minutes
-            stamp(db, "vectors_at")
-            last_stamp = time.time()
-        db.commit()
-        if progress:
-            progress.advance(done)
-        if verbose:
-            rate = done / (time.time() - started)
-            eta = (todo - done) / max(rate, 1e-9) / 60
-            print(f"  vectors: {done}/{todo}, {rate:.1f} chunks/s, ~{eta:.0f} min left", file=sys.stderr, flush=True)
+    unstamped = 0  # vectors committed since vectors_at was last stamped
+    try:
+        # Review L3E r5 nit: drain-all (max_chunks None) keeps the legacy "until nothing is pending", so chunks another
+        # process adds mid-call are embedded too; only a bounded call stops at the count measured at entry.
+        while max_chunks is None or done < todo:
+            count = min(batch, todo - done) if max_chunks is not None else batch
+            rows = db.execute(f"SELECT c.id, n.title, c.heading, c.text, c.path FROM chunks c JOIN notes n ON n.path=c.path "
+                              f"WHERE c.id NOT IN (SELECT id FROM vecs) ORDER BY {EMBED_ORDER} LIMIT ?", (count,)).fetchall()
+            if not rows:
+                break
+            texts = [_embed_text(title, heading, text) for _, title, heading, text, _ in rows]
+            vectors = embed(texts, batch_size=64 if embed.mlx is not None else 16).astype(np.float16)
+            db.executemany("INSERT OR REPLACE INTO vecs VALUES (?,?,?)",
+                           [(r[0], r[4], v.tobytes()) for r, v in zip(rows, vectors)])
+            done += len(rows)
+            stamped = time.time() - last_stamp > 300  # lets a running server pick up new vectors every few minutes
+            if stamped:
+                stamp(db, "vectors_at")
+                last_stamp = time.time()
+            db.commit()
+            unstamped = 0 if stamped else unstamped + len(rows)
+            if progress:
+                progress.advance(done)
+            if verbose:
+                rate = done / (time.time() - started)
+                eta = max(todo - done, 0) / max(rate, 1e-9) / 60
+                print(f"  vectors: {done}/{todo}, {rate:.1f} chunks/s, ~{eta:.0f} min left", file=sys.stderr, flush=True)
+    except BaseException:
+        if unstamped:  # searchers compare vectors_at: unstamped, the committed batches stay unseen (review r4)
+            try:
+                db.rollback()  # the failed batch only; earlier ones are committed
+                stamp(db, "vectors_at")
+                db.commit()
+            except sqlite3.Error:
+                pass  # the original error matters more; the next stamp shows these vectors
+        raise
     stamp(db, "vectors_at")
     db.commit()
     return done
@@ -1014,15 +1231,64 @@ def _append_vectors(current, block: np.ndarray):
     return block.copy() if current is None else np.vstack([current, block])
 
 
-class Searcher:
-    """Holds the vector matrix in memory; reloads it when the index changes."""
+def same_paper_key(title: str, meta: dict) -> tuple | None:
+    """What makes two Zotero items the same paper: the DOI (any case), else the normalised title and year."""
+    doi = re.sub(r"^(https?://(dx\.)?doi\.org/|doi:)", "", str(meta.get("doi") or "").strip().lower())
+    if doi:
+        return ("doi", doi)
+    words = re.sub(r"\W+", " ", zotero.plain_title(title).lower()).strip()
+    return ("title", words, str(meta.get("year") or "")) if words else None
 
-    def __init__(self, writer: bool = False) -> None:
-        """`writer`: this process maintains the Tantivy keyword index (the index server does; others read it)."""
+
+def _normalise_path_prefixes(prefixes) -> tuple[str, ...] | None:
+    """One immutable snapshot of literal, nonempty index-path prefixes; None means legacy unfiltered search."""
+    if prefixes is None:
+        return None
+    if isinstance(prefixes, (str, bytes, Path)):
+        raise TypeError("allowed_path_prefixes must be an iterable of path prefixes, not one string")
+    items = tuple(prefixes)
+    # Review L3E r3: a Path has already dropped a trailing "/", so "zotero/g/active/" would widen to "zotero/g/active"
+    # and admit "zotero/g/active-staged/..."; only literal strings carry the boundary the caller meant.
+    if any(not isinstance(prefix, str) for prefix in items):
+        raise TypeError("each allowed path prefix must be a str (a Path drops a trailing '/')")
+    result = tuple(dict.fromkeys(posix(prefix) for prefix in items))
+    if any(not prefix for prefix in result):
+        raise ValueError("an allowed path prefix must not be empty")
+    return result
+
+
+class Searcher:
+    """Holds the vector matrix in memory; reloads it when the index changes. Not for parallel use: callers serialise
+    their calls (http_api.LOCK, veritas_kb.KnowledgeBase)."""
+
+    def __init__(self, writer: bool = False, *, db_path: Path | None = None, keyword_dir: Path | None = None,
+                 embed_factory=None, vector_gate: float | None = None) -> None:
+        """`writer`: this process maintains the Tantivy keyword index (the index server does; others read it).
+        The rest name another index than the module's (spec 035): `db_path` (default DB_PATH), `keyword_dir`
+        (default data_dir()/tantivy), `embed_factory` (makes the query embedder; default Embedder), `vector_gate`
+        (default VECTOR_GATE, read at search time)."""
         from keyword_index import KeywordIndex
 
-        self.db = connect(keep=True)
-        self.keywords = KeywordIndex(data_dir() / "tantivy", writer)
+        self.db_path = db_path
+        self.db = connect(keep=True, path=db_path)
+        # The module's own pair (no paths named) rebuilds a keyword folder bound to another database, as the legacy
+        # server always has (an import may replace kb.sqlite alone); a named folder of another database is refused.
+        try:
+            self.keywords = KeywordIndex(Path(keyword_dir) if keyword_dir is not None else data_dir() / "tantivy",
+                                         writer, self.db, rebind=keyword_dir is None and db_path is None)
+        except BaseException:
+            self.db.close()
+            raise
+        self._embed_factory, self.vector_gate = embed_factory, vector_gate
+        # Writes that removed rows bump the generation (changed(full=True)): SQLite reuses the highest chunk id after
+        # a delete, so vectors and keywords loaded for an id may now belong to other text. A refresh that sees a new
+        # generation reloads every vector, and a background rebuild begun under an older one is thrown away.
+        self._generation, self._loaded_generation = 0, -1
+        self._replaced: set[int] = set()  # chunk ids written again since the keyword index last synced
+        self._changes = threading.Lock()  # guards _generation and _replaced against a writer thread
+        self._lifecycle = threading.Lock()  # guards _closed and starting the rebuild thread
+        self._rebuild_thread: threading.Thread | None = None
+        self._closed = False
         self.embed: Embedder | None = None
         self._query_vectors: dict[str, np.ndarray] = {}
         self.loaded_at = None
@@ -1034,50 +1300,94 @@ class Searcher:
         self.note_sums = np.zeros((0, DIM), dtype=np.float32)
         self.note_paths: list[str] = []
         self.note_index: dict[str, int] = {}
+        self.vec_notes = np.zeros(0, dtype=np.int64)  # per loaded vector: its note's position in note_paths
         self.note_matrix = np.zeros((0, DIM), dtype=np.float16)
         self._duplicates: tuple | None = None
-        self._rebuilt: Searcher | None = None
+        self._rebuilt: tuple[int, Searcher] | None = None
         self._rebuilding = threading.Event()
 
-    _VECTOR_STATE = ("ids", "max_id", "full_at", "vectors", "note_sums", "note_paths", "note_index", "note_matrix")
+    _VECTOR_STATE = ("ids", "max_id", "full_at", "vectors", "note_sums", "note_paths", "note_index", "vec_notes",
+                     "note_matrix")
 
     def _refresh(self) -> None:
         """Keeps the vectors in memory current. New chunks are appended (cheap); a full reload happens on first
         use, hourly, or when many loaded chunks have been deleted, since deleted rows linger until then. Only the
         first load runs on the caller's thread: later full reloads (1-2 s) are built in the background and swapped
         in here, on the request thread, so no search ever sees half of the old state and half of the new."""
+        with self._changes:
+            generation, replaced, self._replaced = self._generation, self._replaced, set()
         rebuilt, self._rebuilt = self._rebuilt, None
-        if rebuilt is not None:
+        if rebuilt is not None and rebuilt[0] == generation:  # else rows were replaced after it began: dropped
             for name in self._VECTOR_STATE:
-                setattr(self, name, getattr(rebuilt, name))
+                setattr(self, name, getattr(rebuilt[1], name))
             self.loaded_at = ("rebuilt",)  # appends whatever arrived while the rebuild ran
             self.checked_at = 0.0
         version = tuple(r[0] for r in self.db.execute(
             "SELECT value FROM meta WHERE key IN ('indexed_at', 'vectors_at') ORDER BY key"))
-        if version == self.loaded_at or (self.loaded_at is not None and time.time() - self.checked_at < 60):
+        if generation == self._loaded_generation and not replaced and (
+                version == self.loaded_at or (self.loaded_at is not None and time.time() - self.checked_at < 60)):
             return
         self.checked_at = time.time()
-        self.keywords.sync(self.db)
+        if replaced:
+            try:
+                self.keywords.sync(self.db, replaced)
+            except BaseException:
+                with self._changes:
+                    self._replaced |= replaced  # kept for the next refresh
+                raise
+        else:
+            self.keywords.sync(self.db)  # stand-ins (bench.py) take only the connection
         live = self.db.execute("SELECT count(*) FROM vecs").fetchone()[0]
         stale = len(self.ids) - live
-        if self.loaded_at is None:
+        if self.loaded_at is None or generation != self._loaded_generation:
             self._load(full=True)
         else:
             if (time.time() - self.full_at > 3600 or stale > max(2000, live // 20)) and not self._rebuilding.is_set():
-                self._rebuilding.set()
-                threading.Thread(target=self._rebuild, daemon=True).start()
+                self._start_rebuild()
             self._load(full=False)
         self.loaded_at = version
+        self._loaded_generation = generation  # one read at the start: a bump during this refresh is seen next time
+
+    def changed(self, full: bool = False, replaced=()) -> None:
+        """Look at the index again on the next call instead of within a minute. `full`: rows were removed, so chunk
+        ids may have been reused; reload every vector and drop a background rebuild that began before this.
+        `replaced`: chunk ids whose rows were deleted, re-indexed in the keyword index if they exist again."""
+        with self._changes:
+            if full:
+                self._generation += 1
+            self._replaced.update(int(i) for i in replaced)
+        self.checked_at = 0.0
+
+    def _start_rebuild(self) -> None:
+        with self._lifecycle:
+            if self._closed:
+                return
+            self._rebuilding.set()
+            self._rebuild_thread = threading.Thread(target=self._rebuild, daemon=True)
+            self._rebuild_thread.start()
+
+    def close(self) -> None:
+        """Waits for a background rebuild, then closes the connection. Idempotent; not to be called while a search
+        runs on another thread."""
+        with self._lifecycle:
+            if self._closed:
+                return
+            self._closed = True
+            thread = self._rebuild_thread
+        if thread is not None:
+            thread.join()
+        self.db.close()
 
     def _rebuild(self) -> None:
         background_priority()
         try:
+            generation = self._generation
             shadow = Searcher.__new__(Searcher)
-            shadow.db = connect(keep=True)
+            shadow.db = connect(keep=True, path=self.db_path)
             shadow.ids, shadow.max_id, shadow.vectors = np.zeros(0, dtype=np.int64), 0, None
             shadow._load(full=True)
             shadow.db.close()
-            self._rebuilt = shadow
+            self._rebuilt = (generation, shadow)
         finally:
             self._rebuilding.clear()
 
@@ -1105,6 +1415,7 @@ class Searcher:
         if len(self.note_paths) > len(self.note_sums):
             self.note_sums = np.vstack([self.note_sums, np.zeros((len(self.note_paths) - len(self.note_sums), DIM), np.float32)])
         owner = np.fromiter((self.note_index[r[1]] for r in rows), dtype=np.int64, count=len(rows))
+        self.vec_notes = owner if full else np.concatenate([self.vec_notes, owner])
         for i in range(0, len(block), 20000):
             part = owner[i:i + 20000]
             order = np.argsort(part, kind="stable")
@@ -1121,8 +1432,13 @@ class Searcher:
         if vector is None:
             if len(self._query_vectors) > 512:
                 self._query_vectors.clear()
-            vector = self._query_vectors[query] = self.embed([query], query=True)[0]
+            vector = self._query_vectors[query] = self._embedder()([query], query=True)[0]
         return vector
+
+    def _embedder(self) -> "Embedder":
+        if self.embed is None:
+            self.embed = self._embed_factory() if self._embed_factory is not None else Embedder()
+        return self.embed
 
     def _scores(self, vector: np.ndarray) -> np.ndarray:
         """Cosine of `vector` against every loaded chunk: on the GPU when MLX is available (2 ms for 290k chunks
@@ -1174,55 +1490,94 @@ class Searcher:
     def search(self, query: str, limit: int = 8, source: str | None = None, folder: str | None = None,
                tag: str | None = None, per_note: int = 2,
                exclude_source: str | None = None, collections: list[str] | None = None,
-               year_from: int | None = None, year_to: int | None = None) -> list[dict]:
+               year_from: int | None = None, year_to: int | None = None, *,
+               allowed_path_prefixes=None, include_total: bool = False) -> list[dict] | dict:
+        """Hybrid search. Optional literal path visibility is applied to both candidate generators before their
+        pool/result limits. `include_total` makes those pools exhaustive and returns {"results", "total"}; the default
+        keeps the historical 200/600-candidate pools and bare result-list API exactly as before."""
+        path_prefixes = _normalise_path_prefixes(allowed_path_prefixes)
+        if path_prefixes == ():
+            return {"results": [], "total": 0} if include_total else []
         self._refresh()
         allowed = self._allowed(source, folder, tag, exclude_source, collections, year_from, year_to)
-        pool = 200
+        pool = None if include_total else 200
         ranks: dict[int, float] = {}
 
         # Keyword side: Tantivy BM25 over every query word (1-2 ms); SQLite FTS5 when no Tantivy index exists.
         terms = [t for t in re.findall(r"[\w][\w.+-]*", query.lower()) if t not in STOPWORDS]
         if terms:
-            kw = self.keywords.search(terms, pool * 3) if self.keywords.usable() else self._fts_candidates(terms, pool)
+            if self.keywords.usable():
+                kw = self.keywords.search(terms, 1 if pool is None else pool * 3,
+                                          path_prefixes=path_prefixes, exhaustive=pool is None)
+            else:
+                kw = self._fts_candidates(terms, pool, path_prefixes)
             if allowed is not None:
                 kw = self._filter_ids(kw, allowed)
-            for rank, cid in enumerate(kw[:pool]):
+            for rank, cid in enumerate(kw if pool is None else kw[:pool]):
                 ranks[cid] = ranks.get(cid, 0) + 1 / (60 + rank)
 
-        # Meaning side.
+        # Meaning side. Mask disallowed vectors before selecting the 600 candidates: filtering only the selected page
+        # would let staged or inactive generations starve valid active hits out of the fused ranking.
         if len(self.ids):
-            if self.embed is None:
-                self.embed = Embedder()
             scores = self._scores(self._query_vector(query))
-            top = np.argpartition(-scores, min(pool * 3, len(scores) - 1))[:pool * 3]
-            top = top[np.argsort(-scores[top])]
-            vec_ids = [int(self.ids[i]) for i in top if scores[i] >= VECTOR_GATE]
+            if path_prefixes is not None:
+                # From the paths loaded with the vectors (one test per note, not a read of every chunk row). A vector
+                # whose row changed path since that load is caught below, against the row's current path.
+                visible = np.fromiter((p.startswith(path_prefixes) for p in self.note_paths), dtype=bool,
+                                      count=len(self.note_paths))
+                scores = np.where(visible[self.vec_notes], scores, -np.inf)
+            gate = VECTOR_GATE if self.vector_gate is None else self.vector_gate
+            if pool is None:
+                # Review L3E r5: sort only vectors past the gate (masked ones are -inf), not the whole index, so an
+                # exact total over a small visible generation does not pay for every staged vector under the locks.
+                top = np.flatnonzero(scores >= gate)
+                top = top[np.argsort(-scores[top])]
+            else:
+                top = np.argpartition(-scores, min(pool * 3, len(scores) - 1))[:pool * 3]
+                top = top[np.argsort(-scores[top])]
+            vec_ids = [int(self.ids[i]) for i in top if scores[i] >= gate]
             if allowed is not None:
                 vec_ids = self._filter_ids(vec_ids, allowed)
-            for rank, cid in enumerate(vec_ids[:pool]):
+            for rank, cid in enumerate(vec_ids if pool is None else vec_ids[:pool]):
                 ranks[cid] = ranks.get(cid, 0) + 1 / (60 + rank)
 
         if not ranks:
-            return []
-        placeholders = ",".join("?" * len(ranks))
-        info = {r[0]: r[1:] for r in self.db.execute(
-            f"SELECT c.id, c.path, c.heading, c.text, n.title, n.source, n.tags, n.mtime, n.meta FROM chunks c "
-            f"JOIN notes n ON n.path=c.path WHERE c.id IN ({placeholders})", list(ranks))}
+            return {"results": [], "total": 0} if include_total else []
+        info = {}
+        chunk_ids = list(ranks)
+        for start in range(0, len(chunk_ids), 900):  # stay below SQLite's host-parameter limit in exhaustive mode
+            batch = chunk_ids[start:start + 900]
+            placeholders = ",".join("?" * len(batch))
+            info.update({r[0]: r[1:] for r in self.db.execute(
+                f"SELECT c.id, c.path, c.heading, c.text, n.title, n.source, n.tags, n.mtime, n.meta FROM chunks c "
+                f"JOIN notes n ON n.path=c.path WHERE c.id IN ({placeholders})", batch)})
         scored = sorted(((score * SOURCE_WEIGHTS.get(info[cid][4], 1.0), cid) for cid, score in ranks.items()
-                         if cid in info), reverse=True)
+                         if cid in info and (path_prefixes is None or info[cid][0].startswith(path_prefixes))),
+                        reverse=True)
         # One result per note, carrying its best `per_note` passages. A passage whose text already appeared
         # (the same content saved under two paths) is skipped, so copies don't crowd out other notes.
         results: dict[str, dict] = {}
         seen_text: set[int] = set()
+        # One paper saved as several Zotero items is one result; the others are listed in its "duplicates".
+        paper_of: dict[str, tuple | None] = {}
+        first_of: dict[tuple, str] = {}
         for score, cid in scored:
             path, heading, text, title, src, tags, mtime, meta = info[cid]
+            if path not in paper_of:
+                paper_of[path] = same_paper_key(title, json.loads(meta) or {}) if src == "zotero" and meta else None
+            paper = paper_of[path]
+            if paper in first_of and first_of[paper] != path:
+                kept = results[first_of[paper]]
+                if path not in kept.setdefault("duplicates", []):
+                    kept["duplicates"].append(path)
+                continue
             key = hash(" ".join(text.split())[:2000])
             if key in seen_text:
                 continue
             seen_text.add(key)
             hit = results.get(path)
             if hit is None:
-                if len(results) >= limit:
+                if pool is not None and len(results) >= limit:
                     continue
                 results[path] = {"path": path, "title": title, "source": src, "tags": tags.split() if tags else [],
                                  "modified": time.strftime("%Y-%m-%d", time.localtime(mtime)),
@@ -1230,9 +1585,14 @@ class Searcher:
                                  "passages": [{"heading": heading, "snippet": snippet(text, terms)}]}
                 if meta:
                     results[path]["zotero"] = json.loads(meta)
+                if paper is not None:
+                    first_of[paper] = path
             elif len(hit["passages"]) < per_note:
                 hit["passages"].append({"heading": heading, "snippet": snippet(text, terms)})
-        return list(results.values())
+        if not include_total:
+            return list(results.values())
+        page = [] if limit <= 0 else list(results.values())[:limit]
+        return {"results": page, "total": len(results)}
 
     def similar_notes(self, path: str, limit: int = 10) -> list[dict]:
         """Notes whose overall meaning is closest to this note's, linked or not."""
@@ -1267,9 +1627,7 @@ class Searcher:
         text = clean(text)[:4000]
         if len(text) < 40 or not len(self.ids):
             return []
-        if self.embed is None:
-            self.embed = Embedder()
-        scores = self._scores(self.embed([text])[0])  # passage-to-passage: no query prefix
+        scores = self._scores(self._embedder()([text])[0])  # passage-to-passage: no query prefix
         top = np.argsort(-scores)[:limit * 12]
         chunk_ids = [int(self.ids[i]) for i in top]
         placeholders = ",".join("?" * len(chunk_ids))
@@ -1365,44 +1723,78 @@ class Searcher:
         refs = {p: note_info(self.db, p) for p in linked["links_to"] + linked["linked_from"] if not p.endswith("(no note)")}
         return {**linked, "refs": refs, "similar": self.similar_notes(path, limit), "shared_tags": shared_tags(path, limit)}
 
-    def _fts_candidates(self, terms: list[str], pool: int) -> list[int]:
+    def _fts_candidates(self, terms: list[str], pool: int | None,
+                        path_prefixes: tuple[str, ...] | None = None) -> list[int]:
         """SQLite fallback, cheapest first: chunks with all the words; if few, all but one of them (AND queries only
         touch the overlap of posting lists); then any of the rarer words. ORing every word would score ~150k
-        chunks when a query has "machine" or "learning" in it."""
+        chunks when a query has "machine" or "learning" in it. Path visibility joins before each LIMIT."""
         quoted = ['"' + t.replace('"', "") + '"' for t in terms][:8]
-        kw = self._fts(" AND ".join(quoted), pool * 3)
+        kw = self._fts(" AND ".join(quoted), None if pool is None else pool * 3, path_prefixes)
         seen = set(kw)
-        if len(kw) < pool and len(quoted) > 2:
+        if (pool is None or len(kw) < pool) and len(quoted) > 2:
             for i in range(len(quoted)):
-                kw += [cid for cid in self._fts(" AND ".join(quoted[:i] + quoted[i + 1:]), pool) if cid not in seen]
+                kw += [cid for cid in self._fts(" AND ".join(quoted[:i] + quoted[i + 1:]), pool, path_prefixes)
+                       if cid not in seen]
                 seen.update(kw)
-        if len(kw) < pool and len(quoted) > 1:
-            rare = [q for q in quoted if self._df(q) < 3000]
+        if (pool is None or len(kw) < pool) and len(quoted) > 1:
+            rare = [q for q in quoted if self._df(q, path_prefixes=path_prefixes) < 3000]
             if rare:
-                kw += [cid for cid in self._fts(" OR ".join(rare), pool * 3) if cid not in seen]
+                kw += [cid for cid in self._fts(" OR ".join(rare), None if pool is None else pool * 3, path_prefixes)
+                       if cid not in seen]
         return kw
 
-    def _fts(self, match: str, limit: int) -> list[int]:
+    @staticmethod
+    def _path_clause(path_prefixes: tuple[str, ...]) -> tuple[str, list[str]]:
+        # Python's case-sensitive, literal startswith: LIKE folds ASCII case (and needs wildcard escaping), so compare
+        # the path's leading characters to each prefix instead. Review L3E r3: the whole allow set is ONE bound JSON
+        # array, so a large visibility snapshot cannot exceed SQLite's host-parameter limit (which _fts would swallow
+        # as "no keyword candidates").
+        return (" AND EXISTS (SELECT 1 FROM json_each(?) p WHERE substr(c.path, 1, length(p.value)) = p.value)",
+                [json.dumps(list(path_prefixes))])
+
+    def _fts(self, match: str, limit: int | None, path_prefixes: tuple[str, ...] | None = None) -> list[int]:
+        if path_prefixes == ():
+            return []
+        if path_prefixes is None:
+            sql = ("SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ? "
+                   "ORDER BY bm25(chunks_fts, 4.0, 2.0, 1.0, 2.0)")
+            args = [match]
+        else:
+            clause, prefixes = self._path_clause(path_prefixes)
+            sql = ("SELECT chunks_fts.rowid FROM chunks_fts JOIN chunks c ON c.id=chunks_fts.rowid "
+                   "WHERE chunks_fts MATCH ?" + clause + " ORDER BY bm25(chunks_fts, 4.0, 2.0, 1.0, 2.0)")
+            args = [match, *prefixes]
+        if limit is not None:
+            sql += " LIMIT ?"
+            args.append(limit)
         try:
-            return [r[0] for r in self.db.execute(
-                "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY bm25(chunks_fts, 4.0, 2.0, 1.0, 2.0) "
-                "LIMIT ?", (match, limit))]
+            return [r[0] for r in self.db.execute(sql, args)]
         except sqlite3.OperationalError:
             return []
 
-    def _df(self, quoted_term: str, cap: int = 3000) -> int:
-        """How many chunks contain the term, counted only up to `cap` (a few ms)."""
+    def _df(self, quoted_term: str, cap: int = 3000,
+            path_prefixes: tuple[str, ...] | None = None) -> int:
+        """How many visible chunks contain the term, counted only up to `cap` (a few ms)."""
+        if path_prefixes == ():
+            return 0
+        if path_prefixes is None:
+            sql, args = "SELECT count(*) FROM (SELECT 1 FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT ?)", [quoted_term, cap]
+        else:
+            clause, prefixes = self._path_clause(path_prefixes)
+            sql = ("SELECT count(*) FROM (SELECT chunks_fts.rowid FROM chunks_fts "
+                   "JOIN chunks c ON c.id=chunks_fts.rowid WHERE chunks_fts MATCH ?" + clause + " LIMIT ?)")
+            args = [quoted_term, *prefixes, cap]
         try:
-            return self.db.execute("SELECT count(*) FROM (SELECT 1 FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT ?)",
-                                   (quoted_term, cap)).fetchone()[0]
+            return self.db.execute(sql, args).fetchone()[0]
         except sqlite3.OperationalError:
             return cap
 
     def _filter_ids(self, ids: list[int], allowed: set[str]) -> list[int]:
-        if not ids:
-            return []
-        placeholders = ",".join("?" * len(ids))
-        paths = dict(self.db.execute(f"SELECT id, path FROM chunks WHERE id IN ({placeholders})", ids))
+        paths = {}
+        for start in range(0, len(ids), 900):
+            batch = ids[start:start + 900]
+            placeholders = ",".join("?" * len(batch))
+            paths.update(self.db.execute(f"SELECT id, path FROM chunks WHERE id IN ({placeholders})", batch))
         return [i for i in ids if paths.get(i) in allowed]
 
 
@@ -1436,8 +1828,8 @@ def resolve(path: str) -> Path:
         return candidate.with_name(candidate.name + ".md")
     # A bare path written when another folder was the output (old chats cite ai_notes/x.md): the listed folder that
     # has it now.
-    if top == VAULT:
-        for f in LAYOUT.others:
+    if top == _vault():
+        for f in _layout().others:
             moved = (f.path / inner).resolve()
             if f.path.resolve() in moved.parents and moved.is_file():
                 return moved
@@ -1454,7 +1846,7 @@ def index_path(file: Path) -> str:
     """The index path of a file in the main folder or a listed one."""
     for root in sorted(roots(), key=lambda r: -len(str(r.path))):  # a listed folder inside the main one wins
         try:
-            return root.prefix + str(file.relative_to(root.path.resolve()))
+            return root.prefix + file.relative_to(root.path.resolve()).as_posix()
         except ValueError:
             continue
     raise ValueError(f"{file} is not in a listed folder")
@@ -1697,11 +2089,12 @@ def coverage() -> list[dict]:
                     "with_vectors": 0}]
 
 
-def stats() -> dict:
-    db = connect()
+def stats(db: sqlite3.Connection | None = None, *, vault: bool = True) -> dict:
+    """Index counts; with `vault`, the main folder too (which reads the folder list: veritas_kb passes False)."""
+    db = db if db is not None else connect()
     stamp = db.execute("SELECT value FROM meta WHERE key='indexed_at'").fetchone()
     return {
-        "vault": str(VAULT),
+        **({"vault": str(_vault())} if vault else {}),
         "notes": db.execute("SELECT count(*) FROM notes").fetchone()[0],
         "chunks": db.execute("SELECT count(*) FROM chunks").fetchone()[0],
         "chunks_with_vectors": db.execute("SELECT count(*) FROM vecs").fetchone()[0],
@@ -1737,17 +2130,17 @@ def sources_report() -> dict:
         name, sep, _ = path.partition(":/")
         key = f"{name}:/" if sep else ("zotero/" if path.startswith(zotero.PREFIX) else "")
         counts[key] = counts.get(key, 0) + 1
-    ignored = {f.name for f in LAYOUT.ignored}
+    ignored = {f.name for f in _layout().ignored}
     rows = []
-    for f in LAYOUT.folders:
+    for f in _layout().folders:
         if not f.enabled:
             role, documents = "off", 0
         elif f.name in ignored:
             role, documents = "ignored", counts.get(f.prefix, 0)
         elif f.kind == "zotero":
-            default = bool(LAYOUT.libraries) and LAYOUT.libraries[0].name == f.name
+            default = bool(_layout().libraries) and _layout().libraries[0].name == f.name
             role, documents = "zotero", counts["zotero/"] if default else counts.get(f.prefix, 0)
-        elif f.path.resolve() == VAULT.resolve():
+        elif f.path.resolve() == _vault().resolve():
             role, documents = "main", counts[""]
         else:
             role, documents = "listed", counts.get(f.prefix, 0)
@@ -1756,10 +2149,10 @@ def sources_report() -> dict:
     for a in sources.accounts():  # online libraries: no folder
         rows.append({"name": a.name, "path": None, "enabled": a.enabled, "skip": [], "kind": a.kind,
                      "role": "online" if a.enabled else "off", "documents": counts.get(a.prefix, 0) if a.enabled else 0})
-    output = next((f.name for f in LAYOUT.folders if f.main and f.path.resolve() == VAULT.resolve()), None)
-    return {"main": str(VAULT), "main_is_vault": LAYOUT.main_is_vault, "output": {"name": output, "path": str(VAULT)},
-            "main_documents": counts[""] if not LAYOUT.main_is_vault else None,
-            "zotero": str(LAYOUT.zotero) if LAYOUT.zotero else None, "folders": rows}
+    output = next((f.name for f in _layout().folders if f.main and f.path.resolve() == _vault().resolve()), None)
+    return {"main": str(_vault()), "main_is_vault": _layout().main_is_vault, "output": {"name": output, "path": str(_vault())},
+            "main_documents": counts[""] if not _layout().main_is_vault else None,
+            "zotero": str(_layout().zotero) if _layout().zotero else None, "folders": rows}
 
 
 def sources_cli(action: str, target: str | None, name: str | None) -> None:
@@ -1789,7 +2182,22 @@ def sources_cli(action: str, target: str | None, name: str | None) -> None:
         print(f"{'(Veritas folder)':<20} {'main':<8} {'plain':<9} {report['main_documents']:>7}  {report['main']}")
 
 
+def trust_system_certificates() -> bool:
+    """HTTPS checks a site against the system's own certificates (macOS keychain, Windows store) through truststore.
+
+    A Python built elsewhere looks for its OpenSSL certificate folder where it was built: the release app's server,
+    built on a CI machine, found none on the user's Mac and every download failed (figures, paper text, abstracts).
+    False when truststore is not installed; then Python's own certificate search stays."""
+    try:
+        import truststore
+    except ImportError:
+        return False
+    truststore.inject_into_ssl()
+    return True
+
+
 def main() -> None:
+    trust_system_certificates()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("index")
@@ -1824,7 +2232,12 @@ def main() -> None:
     p = sub.add_parser("web-origins", help="web-app origins allowed to call this server (phase 3)")
     p.add_argument("action", nargs="?", default="list", choices=["list", "add", "remove"])
     p.add_argument("origin", nargs="?")
+    p = sub.add_parser("import-data", help="reuse an index another install built (import_data.py)")
+    p.add_argument("source", nargs="?", help="the data folder to copy from")
+    p.add_argument("--find", action="store_true", help="list the indexes found on this computer, as JSON")
+    p.add_argument("--replace", action="store_true", help="overwrite this install's index")
     args = parser.parse_args()
+    ensure_layout()  # the folder list, read here rather than at import (review round 2, M1)
     if args.cmd == "index":
         import signal
 
@@ -1863,6 +2276,10 @@ def main() -> None:
             print(origin)
     elif args.cmd == "sources":
         sources_cli(args.action, args.target, args.name)
+    elif args.cmd == "import-data":
+        import import_data
+
+        import_data.cli(args.source, args.find, args.replace)
     else:
         print(json.dumps(stats(), indent=2, ensure_ascii=False))
 

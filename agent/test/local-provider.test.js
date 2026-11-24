@@ -56,7 +56,7 @@ async function until(fn) { for (let i = 0; i < 150 && !fn(); i += 1) await new P
 async function collect(it) { const out = []; for await (const ev of it) out.push(ev); return out; }
 const text = (events) => events.filter((e) => e.type === 'text').map((e) => e.delta).join('');
 
-test('a guarded MLX turn: request body carries temperature 0, thinking off, <= 600 tokens, stream, and no tools', async () => {
+test('a guarded MLX turn: request body carries temperature 0, thinking off, <= 600 tokens, stream, and no tools', { skip: process.platform !== 'darwin' && 'local models (MLX) run on Apple silicon Macs only' }, async () => {
   const w = await world(); const fake = await startFakeServer(); const manager = fakeManager(fake.baseUrl);
   try {
     const provider = localProvider(platform, { dataDir: w.dataDir, home: '/h', server: manager, catalogTtlMs: 0, externals: [] });
@@ -157,7 +157,7 @@ test('a server manager refusal (not enough memory) fails the turn with its own p
   } finally { await removeRoot(w.root); }
 });
 
-test('no room for the chosen model: the next smaller one of the same family answers, with a notice', async () => {
+test('no room for the chosen model: the next smaller one of the same family answers, with a notice', { skip: process.platform !== 'darwin' && 'local models (MLX) run on Apple silicon Macs only' }, async () => {
   const w = await world(); const fake = await startFakeServer(); const manager = fakeManager(fake.baseUrl);
   try {
     await writeModel(path.join(w.models, 'ConwayResearch', 'Underdog-Woof-2B-1.1'), { weights: 2000 });
@@ -228,7 +228,7 @@ test('an Ollama / LM Studio style server is used as-is: nothing is started', asy
   } finally { await fake.close(); await removeRoot(w.root); }
 });
 
-test('status: ready with the models counted; drive missing; mlx-lm missing; nothing found', async () => {
+test('status: ready with the models counted; drive missing; mlx-lm missing; nothing found', { skip: process.platform !== 'darwin' && 'local models (MLX) run on Apple silicon Macs only' }, async () => {
   const ready = await world(); const rm = [ready.root];
   try {
     const provider = localProvider(platform, { dataDir: ready.dataDir, home: '/h', server: fakeManager('x'), catalogTtlMs: 0, externals: [] });

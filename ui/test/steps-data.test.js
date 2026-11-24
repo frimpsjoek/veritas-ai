@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  MODE_GROUPS, isReviewMode, normalizeMode, stepChoices, onLabel, currentResult, ago, sessionMeta, historyEntries, cardSplit,
+  MODE_GROUPS, isReviewMode, normalizeMode, stepChoices, onLabel, currentResult, ago, sessionMeta, historyEntries, cardSplit, startPageRecent,
   paperRowFromContext, paperRowFromLibrary, importDraft, uniqueRows,
 } from '../src/chat/steps-data.js';
 
@@ -62,6 +62,15 @@ test('history lists a saved search once: as its session when its JSON names one 
   assert.deepEqual(shown.searches.map((s) => s.id), ['find-2', 'find-3']);
 });
 
+test('history leaves out reading radar runs (Home reaches them); a routine chat that is not a radar issue stays', () => {
+  const conversations = [
+    { id: 'radar', mode: 'chat', title: 'Reading radar', updated: '3', routine: 'r1', cover: { kind: 'radar' } },
+    { id: 'digest', mode: 'chat', title: 'Spindle digest', updated: '2', routine: 'r2', kind: 'report', cover: { kind: 'report' } },
+    { id: 'asked', mode: 'chat', title: 'What was my reading digest today about?', updated: '1', cover: { kind: 'chat' } },
+  ];
+  assert.deepEqual(historyEntries(conversations, []).sessions.map((s) => s.conversation.id), ['digest', 'asked']);
+});
+
 test('the empty state shows at most three session cards', () => {
   assert.equal(cardSplit([1, 2, 3, 4, 5]).length, 3);
   assert.equal(cardSplit([1]).length, 1);
@@ -85,4 +94,37 @@ test('paper rows for a picked set: library rows and bare chips get stable ids; d
 
 test('isReviewMode: a report and a systematic review start reviews, nothing else does', () => {
   assert.deepEqual(['report', 'systematic', 'chat', 'find', 'ask', 'papers'].map(isReviewMode), [true, true, false, false, false, false]);
+});
+
+// spec 029 R5
+test('startPageRecent: none while the chat list is on screen beside the thread; else the newest three, in order', () => {
+  assert.deepEqual(startPageRecent(['a', 'b', 'c', 'd'], true), []);
+  assert.deepEqual(startPageRecent(['a', 'b', 'c', 'd'], false), ['a', 'b', 'c']);
+  assert.deepEqual(startPageRecent(['a'], false), ['a']);
+  assert.deepEqual(startPageRecent([], false), []);
+});
+
+// ---- spec 030: one thread, many workflows
+import { sessionlessReviews, reportStepLabel } from '../src/chat/steps-data.js';
+
+test('spec 030 R2: a search run as a later step of a thread is not what the thread opens as, and is not listed on its own', () => {
+  const conversations = [{ id: 's1', mode: 'chat', title: 'Voles', updated: '2026-11-18' }];
+  const later = { id: 'find-b', query: 'vole foraging', at: '2026-11-18', count: 3, session: 's1', inThread: true };
+  const out = historyEntries(conversations, [later]);
+  assert.equal(out.sessions[0].search, null, 'the thread opens as its thread, not as that table');
+  assert.deepEqual(out.searches, [], 'and the search is not a second row');
+  const started = { id: 'find-a', query: 'voles', at: '2026-11-18', count: 3, session: 's1' };
+  assert.equal(historyEntries(conversations, [started, later]).sessions[0].search.id, 'find-a', 'a session started by a search still opens as it');
+});
+
+test('spec 030 R6: a review that is a step of a listed session is not its own history row', () => {
+  const reviews = [{ id: 'r1', session: 's1' }, { id: 'r2' }, { id: 'r3', session: 'gone' }];
+  assert.deepEqual(sessionlessReviews(reviews, [{ conversation: { id: 's1' } }]).map((r) => r.id), ['r2', 'r3']);
+});
+
+test('spec 030: a report step is named the same live and reopened, from its request', () => {
+  assert.equal(reportStepLabel({}), 'Research report');
+  assert.equal(reportStepLabel({ systematic: true }), 'Systematic review');
+  assert.equal(reportStepLabel({ fromTable: true, systematic: true }), 'Report from this table');
+  assert.equal(reportStepLabel(undefined), 'Research report');
 });

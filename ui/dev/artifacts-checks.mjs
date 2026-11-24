@@ -223,6 +223,29 @@ export async function runArtifactChecks(browser, port, outDir) {
   check('drag handle: dragged far left the thread keeps 360 px, dragged far right the panel keeps 360 px', farLeft.main >= 359 && farLeft.pane >= 359 && farRight.pane >= 359 && farRight.pane <= 361 && farRight.main >= 359, { farLeft, farRight });
   await dragPage.close();
 
+  // ---------------------------------------------------------------- the history list gives way below 1200 px
+  const foldPage = await open({ tokens: 'zotero', bare: '1' }, { width: 1100, height: 760 });
+  const listShown = () => foldPage.evaluate(() => !document.querySelector('.sb-ai-side').hidden);
+  const panelToggle = foldPage.locator('.sb-ai-panel-toggle');
+  const listAtStart = await listShown();
+  await openCard(foldPage, 'Papers');
+  const listWithPanel = await listShown();
+  const toggleOpen = await panelToggle.getAttribute('aria-expanded');
+  await panelToggle.click();
+  const listAfterClose = await listShown();
+  const toggleClosed = await panelToggle.getAttribute('aria-expanded');
+  check('1100 px: the panel folds the list, its toggle sits beside Artifacts and says so, closing brings the list back', listAtStart && !listWithPanel && toggleOpen === 'true' && listAfterClose && toggleClosed === 'false', { listAtStart, listWithPanel, toggleOpen, listAfterClose, toggleClosed });
+  await panelToggle.click();
+  await foldPage.locator('.sb-ai-history-toggle').click(); // the user brings the list back while the panel is open...
+  await foldPage.locator('.sb-ai-history-toggle').click(); // ...and folds it themselves
+  await panelToggle.click();
+  check('1100 px: a list the user folded stays folded when the panel closes', !(await listShown()), null);
+  await foldPage.close();
+  const roomy = await open({ tokens: 'zotero', bare: '1' }, { width: 1300, height: 760 });
+  await openCard(roomy, 'Papers');
+  check('1300 px: the panel leaves the list where it is', await roomy.evaluate(() => !document.querySelector('.sb-ai-side').hidden), null);
+  await roomy.close();
+
   // ---------------------------------------------------------------- widths: 960 / 700 / 360, measured
   const w960 = await open({ tokens: 'zotero', bare: '1' }, { width: 960, height: 760 });
   await openCard(w960, 'Papers');

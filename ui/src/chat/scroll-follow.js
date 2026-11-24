@@ -5,6 +5,12 @@
 
 export const END_THRESHOLD_PX = 24;
 
+/** "Jump to latest" is for a chat scrolled up from its last turn; an empty chat (its welcome and suggestions, which
+ *  overflow a narrow pane) has nothing to jump to. @param {{ paused: boolean, turns: number }} s */
+export function showJump({ paused, turns }) {
+  return paused && turns > 0;
+}
+
 export class ScrollFollower {
   /**
    * @param {Window & typeof globalThis} win @param {HTMLElement} scroller @param {HTMLElement} content

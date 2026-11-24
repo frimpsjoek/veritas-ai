@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { rowOfItem, rowOfHit, sortRows, nextSort, visibleRange, treeRows, ancestorsOf, chipLabel, contextOf } from '../src/library-data.js';
+import { rowOfItem, rowOfHit, sortRows, nextSort, visibleRange, treeRows, ancestorsOf, crumbPath, searchLine, searchingLine, searchPlaceholder, parseStored, staleLine, chipLabel, contextOf, keepStored, isFresh, LIBRARY_MAX_AGE_MS, STORED_KEEP } from '../src/library-data.js';
 import { parseRoute, formatRoute } from '../../ui/src/sources/route.js';
 import { protectMath, readerMarkdown, withoutFrontMatter, withoutComments, linkWikiTargets, noteFragment, authorLine, routeOfPath, openRefHandler } from '../../ui/src/sources/view-kit.js';
 
@@ -12,9 +12,15 @@ const rows = [
 
 test('rowOfItem drops the abstract and reads the year as a number', () => {
   const row = rowOfItem({ key: 'K', title: 'T', year: '2024', authors: ['X Y'], venue: 'V', citekey: 'XY24', abstract: 'long'.repeat(100) });
-  assert.deepEqual(row, { key: 'K', title: 'T', authors: ['X Y'], year: 2024, venue: 'V', citekey: 'XY24' });
+  assert.deepEqual(row, { key: 'K', title: 'T', authors: ['X Y'], year: 2024, venue: 'V', citekey: 'XY24', doi: '' });
   assert.equal(rowOfItem({ key: 'K', title: '', year: '' }).year, null);
   assert.equal(rowOfItem({ key: 'K', title: '' }).title, 'Untitled');
+});
+
+test('a row keeps its DOI, for the right-click menu\'s link', () => {
+  assert.equal(rowOfItem({ key: 'K', title: 'T', doi: '10.1038/s41467-024-53748-7' }).doi, '10.1038/s41467-024-53748-7');
+  assert.equal(rowOfItem({ key: 'K', title: 'T' }).doi, '');
+  assert.equal(rowOfHit({ path: 'zotero/K', title: 'T', zotero: { doi: '10.1021/x' } })?.doi, '10.1021/x');
 });
 
 test('rowOfHit keeps papers only', () => {
@@ -62,6 +68,30 @@ test('ancestorsOf lists the chain to the root', () => {
   assert.deepEqual(ancestorsOf(nodes, 'P'), []);
 });
 
+test('crumbPath: root first, the collection itself last; an unknown key is shown by its key alone', () => {
+  assert.deepEqual(crumbPath(nodes, 'G').map((n) => n.name), ['Physics', 'A child', 'Grandchild']);
+  assert.deepEqual(crumbPath(nodes, 'P').map((n) => n.key), ['P']);
+  assert.deepEqual(crumbPath(nodes, 'NOPE'), [{ key: 'NOPE', name: 'NOPE' }]);
+  assert.deepEqual(crumbPath(nodes, null), []);
+});
+
+test('searchLine: the count with its query, "+" at the limit, "in <collection>" when scoped, and the no-match line', () => {
+  assert.equal(searchLine({ query: 'voles', count: 1, limit: 100 }), '1 paper for “voles”');
+  assert.equal(searchLine({ query: 'voles', count: 100, limit: 100 }), '100+ papers for “voles”');
+  assert.equal(searchLine({ query: 'voles', count: 12, limit: 100, collectionName: '2D materials' }), '12 papers for “voles” in 2D materials');
+  assert.equal(searchLine({ query: 'zzzz', count: 0, limit: 100 }), 'No papers match “zzzz”.');
+  assert.equal(searchLine({ query: 'zzzz', count: 0, limit: 100, collectionName: 'Physics' }), 'No papers match “zzzz” in Physics.');
+});
+
+test('staleLine names the time of the stored copy, or the day when it is older', () => {
+  const now = new Date(2026, 9, 29, 15, 0);
+  const today = new Date(2026, 9, 29, 9, 40).toISOString();
+  assert.equal(staleLine(today, now), `Showing the copy saved at ${new Date(today).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}; the server isn't answering.`);
+  const earlier = new Date(2026, 9, 2, 9, 40).toISOString();
+  assert.equal(staleLine(earlier, now), `Showing the copy saved on ${new Date(earlier).toLocaleDateString([], { month: 'short', day: 'numeric' })}; the server isn't answering.`);
+  assert.equal(staleLine(null, now), "Showing a saved copy; the server isn't answering.");
+});
+
 test('ticked rows become chat context chips', () => {
   assert.equal(chipLabel(rows[2]), 'B et al. 2023');
   assert.equal(chipLabel(rows[0]), 'Chen 2020');
@@ -73,6 +103,11 @@ test('routes for the readers round-trip with spaces and slashes in note paths', 
   const route = { view: 'note', path: 'ai notes/mnemo/Idea (draft).md' };
   assert.deepEqual(parseRoute(formatRoute(route)), route);
   assert.deepEqual(parseRoute(formatRoute({ view: 'library', collection: 'ABCD1234' })), { view: 'library', collection: 'ABCD1234' });
+  // spec 028: the Read later view, and Library's Read later filter
+  assert.equal(formatRoute({ view: 'later' }), '#/later');
+  assert.deepEqual(parseRoute('#/later'), { view: 'later' });
+  assert.equal(formatRoute({ view: 'library', list: 'later' }), '#/library?list=later');
+  assert.deepEqual(parseRoute('#/library?list=later'), { view: 'library', list: 'later' });
   assert.deepEqual(routeOfPath('zotero/KEY1'), { view: 'paper', key: 'KEY1' });
   assert.deepEqual(routeOfPath('a/b.md'), { view: 'note', path: 'a/b.md' });
 });
@@ -147,4 +182,52 @@ test('protectMath: $$…$$ inside a sentence stays inline; on its own line it is
   const out = protectMath('variations $$|\\psi^1\\rangle$$ under a perturbation\n$$E = mc^2$$\nend');
   assert.deepEqual(out.formulas.map((f) => [f.tex, f.display]), [['|\\psi^1\\rangle', false], ['E = mc^2', true]]);
   assert.match(out.markdown, /^variations SBMATH0X under a perturbation\n\n\nSBMATH1X\n\n\nend$/);
+});
+
+test('searchingLine and searchPlaceholder name the collection when there is one', () => {
+  assert.equal(searchingLine('2D materials'), 'Searching 2D materials…');
+  assert.equal(searchingLine(''), 'Searching your library…');
+  assert.equal(searchPlaceholder('2D materials'), 'Search in 2D materials');
+  assert.equal(searchPlaceholder(''), 'Search papers');
+});
+
+test('parseStored reads rows with their time, an older bare list with none, and nothing else', () => {
+  const rows = [{ key: 'A' }];
+  assert.deepEqual(parseStored(JSON.stringify({ at: '2026-10-29T09:40:00Z', rows })), { at: '2026-10-29T09:40:00Z', rows });
+  assert.deepEqual(parseStored(JSON.stringify(rows)), { at: null, rows });
+  assert.equal(parseStored(null), null);
+  assert.equal(parseStored('not json'), null);
+  assert.equal(parseStored('{"rows":"no"}'), null);
+  assert.equal(parseStored('null'), null);
+});
+
+test('keepStored: the collection just used goes first, at most `keep` copies stay, the rest (and copies no list names) are evicted', () => {
+  assert.deepEqual(keepStored([], 'A', [], 3), { order: ['A'], evict: [] });
+  assert.deepEqual(keepStored(['B', 'A'], 'A', ['A', 'B'], 3), { order: ['A', 'B'], evict: [] });
+  // a ninth collection pushes out the one used longest ago
+  const eight = ['H', 'G', 'F', 'E', 'D', 'C', 'B', 'A'];
+  assert.deepEqual(keepStored(eight, 'I', eight, 8), { order: ['I', 'H', 'G', 'F', 'E', 'D', 'C', 'B'], evict: ['A'] });
+  // copies saved before the list existed are evicted once the cap is reached; ones still within it are adopted
+  assert.deepEqual(keepStored([], 'A', ['A', 'old1', 'old2'], 2), { order: ['A', 'old1'], evict: ['old2'] });
+  // a name the list holds but whose copy is gone (storage cleared) drops out of the list
+  assert.deepEqual(keepStored(['X', 'B'], 'A', ['B'], 3), { order: ['A', 'B'], evict: [] });
+  // "All papers" is the empty key, and is a collection like any other
+  assert.deepEqual(keepStored(['A'], '', ['A'], 1), { order: [''], evict: ['A'] });
+  assert.equal(STORED_KEEP, 8);
+});
+
+test('isFresh: rows fetched within the max age are fresh; older, never fetched or marked changed (0) are not', () => {
+  assert.equal(LIBRARY_MAX_AGE_MS, 60_000);
+  assert.equal(isFresh(1_000_000, 1_000_000 + 59_999), true);
+  assert.equal(isFresh(1_000_000, 1_000_000 + 60_000), false);
+  assert.equal(isFresh(0, 30_000), false);
+  assert.equal(isFresh(null, 1), false);
+  assert.equal(isFresh(5_000, 1_000, 10_000), true); // a clock that went back does not make rows stale
+});
+
+test('sortRows: titles compare without case or accents and numbers in order (one shared collator)', () => {
+  const titled = ['Study 10', 'study 9', 'Émile', 'emile b', 'Zeta'].map((title, i) => ({ key: String(i), title, authors: [], year: 2020, venue: '', citekey: '', doi: '' }));
+  assert.deepEqual(sortRows(titled, { by: 'title', dir: 1 }).map((r) => r.title), ['Émile', 'emile b', 'study 9', 'Study 10', 'Zeta']);
+  // the same year: by title, ignoring case
+  assert.deepEqual(sortRows(titled, { by: 'year', dir: 1 }).map((r) => r.title).slice(0, 2), ['Émile', 'emile b']);
 });

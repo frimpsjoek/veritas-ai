@@ -33,7 +33,8 @@ export function createObsidianUpdaterHost(plugin: {
 			const chatRunning = !!chatView?.isRunning?.();
 			const active = app.workspace.activeDocument?.activeElement ?? document.activeElement;
 			const fieldFocused = !!active?.closest?.('[contenteditable], .cm-editor, textarea, input[type="text"]');
-			return isIdle({ chatRunning, fieldFocused });
+			const windowFocused = (app.workspace.activeDocument ?? document).hasFocus?.() ?? true;
+			return isIdle({ chatRunning, fieldFocused, windowFocused });
 		},
 		async reload() {
 			// Obsidian's own plugin reload re-reads manifests between disable and enable; without it the plugin

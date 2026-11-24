@@ -1,9 +1,11 @@
-/* global Zotero, SecondBrain */
+/* global Zotero, SecondBrain, IOUtils, PathUtils */
 // Papers, tags and highlights queued by the Second Brain server (the web app's "Add to Zotero", "Read later" and the
 // web reader's highlights). The server
 // asks for them to be applied at once through APPLY_PATH when Zotero is open; otherwise they are applied at startup and every minute; an entry that fails stays queued and the server gives up on
 // it after five attempts. Each entry looks the paper up in the library first, so a retry never adds it twice; a
-// highlight carries the Zotero key it is saved under, so a retry finds it instead of adding another.
+// highlight carries the Zotero key it is saved under, so a retry finds it instead of adding another. A PDF saved in the
+// desktop app's Browse view (an `attach` entry, spec 027) is attached once per file: its MD5 is compared with the
+// hashes Zotero keeps for the item's PDFs.
 
 SecondBrain.PendingAdds = class {
 	static EVERY_MS = 60000;
@@ -60,7 +62,7 @@ SecondBrain.PendingAdds = class {
 			try {
 				const item = await this.apply(entry);
 				finished.push(entry.id);
-				results.push({ id: entry.id, ok: true, key: item.key });
+				results.push({ id: entry.id, ok: true, key: item.key, ...(item.already ? { already: true } : {}) });
 			} catch (error) {
 				Zotero.logError(error);
 				const message = String(error?.message ?? error);
@@ -74,12 +76,14 @@ SecondBrain.PendingAdds = class {
 
 	async apply(entry) {
 		if (entry.kind === "annotation") return this.annotate(entry);
+		if (entry.kind === "attach") return this.attach(entry);
 		const libraryID = Zotero.Libraries.userLibraryID;
 		const paper = entry.paper ?? { title: entry.title, doi: entry.doi };
 		paper.authors ??= [];
 		let item = (entry.key && Zotero.Items.getByLibraryAndKey(libraryID, entry.key)) || (await this.find(paper));
 		if (!item && entry.kind !== "add") throw new Error(`not in the library: ${paper.title ?? paper.doi ?? entry.key}`);
-		const collection = entry.collection && Zotero.Collections.getByLibraryAndKey(libraryID, entry.collection);
+		const collection = (entry.collection && Zotero.Collections.getByLibraryAndKey(libraryID, entry.collection))
+			|| (entry.collection_name ? await SecondBrain.PendingAdds.collectionNamed(entry.collection_name) : null);
 		if (entry.collection && !collection) Zotero.debug(`Second Brain: collection ${entry.collection} is gone; adding without it`);
 		if (!item) {
 			const discover = new SecondBrain.Discover(this.sb);
@@ -96,6 +100,19 @@ SecondBrain.PendingAdds = class {
 		}
 		if (changed) await item.saveTx();
 		return item;
+	}
+
+	/** The top-level collection with this name in the user's library, made when there is none (a liked paper's
+	 *  "To classify", where it waits to be filed). */
+	static async collectionNamed(name) {
+		const libraryID = Zotero.Libraries.userLibraryID;
+		const found = Zotero.Collections.getByLibrary(libraryID).find((c) => !c.deleted && !c.parentID && c.name === name);
+		if (found) return found;
+		const collection = new Zotero.Collection();
+		collection.libraryID = libraryID;
+		collection.name = name;
+		await collection.saveTx();
+		return collection;
 	}
 
 	/** Saves a highlight from the web reader on its PDF; the annotation item, or the one an earlier attempt saved. */
@@ -117,6 +134,38 @@ SecondBrain.PendingAdds = class {
 			position: annotation.position,
 			tags: [],
 		});
+	}
+
+	/** Attaches a PDF saved in Browse under its paper's item (added first when missing); {key, already?}. An item that
+	 *  already has this very file (same MD5) is left as it is; any other PDF it has stays, and this one is added beside
+	 *  it as "Publisher PDF". */
+	async attach(entry) {
+		const paper = { title: entry.title, doi: entry.doi, authors: [] };
+		const item = (await this.find(paper)) || (await new SecondBrain.Discover(this.sb).add(paper, { collections: [] }));
+		for (const id of item.getAttachments()) {
+			const existing = Zotero.Items.get(id);
+			if (existing && !existing.deleted && existing.isPDFAttachment() && (await existing.attachmentHash) === entry.md5) {
+				return { key: existing.key, already: true };
+			}
+		}
+		const response = await Zotero.HTTP.request("GET", `${this.sb.server}/zotero/pending-adds/file?id=${encodeURIComponent(entry.id)}`, {
+			headers: this.sb.serverHeaders(), responseType: "arraybuffer", timeout: 120000, successCodes: false,
+		});
+		if (response.status !== 200 || !response.response) throw new Error("the PDF is no longer on the server");
+		const dir = await IOUtils.createUniqueDirectory(PathUtils.tempDir, "sb-attach");
+		const name = `${String(entry.doi || entry.title || "paper").replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 80)}.pdf`;
+		const file = PathUtils.join(dir, name);
+		try {
+			await IOUtils.write(file, new Uint8Array(response.response));
+			const made = await Zotero.Attachments.importFromFile({ file, parentItemID: item.id, title: "Publisher PDF", contentType: "application/pdf" });
+			if (entry.url) {
+				made.setField("url", entry.url);
+				await made.saveTx();
+			}
+			return { key: made.key };
+		} finally {
+			await IOUtils.remove(dir, { recursive: true }).catch(() => {});
+		}
 	}
 
 	/** The library item with this DOI or title, searched fresh: the connector may have saved it a moment ago. */

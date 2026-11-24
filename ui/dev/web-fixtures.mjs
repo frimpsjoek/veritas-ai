@@ -3,9 +3,14 @@
 // links and citations, related/links/duplicates answers, two PDFs (one served with a line of text per page, one 404) and
 // a highlight waiting for Zotero. Invented content only.
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
 const WORDS = ['voles', 'foraging', 'doorknob', 'ergonomics', 'lattice', 'phonon', 'moiré', 'graphene', 'kernel', 'tensor', 'gradient', 'seed', 'burrow', 'meadow', 'thermal', 'exciton', 'spectra', 'transport', 'neural', 'surface'];
 const FIRST = ['Ann', 'Bo', 'Cy', 'Dee', 'Eli', 'Fay', 'Gus', 'Hana'];
 const LAST = ['Chen', 'Ruiz', 'Diaz', 'Okafor', 'Novak', 'Haas', 'Ito', 'Mensah'];
+// the user's own paper arXiv:2611.20723 as arXiv's API gives it (spec 028 R3): its TeX title, \ce{} formulas and arrows
+const ARXIV_2611 = JSON.parse(readFileSync(fileURLToPath(new URL('../test/fixtures/arxiv-2611.20723.json', import.meta.url)), 'utf8'));
 const VENUES = ['Nature', 'Physical Review B', 'Journal of Invented Results', '', 'Science Advances'];
 const COUNT = 3500;
 
@@ -41,6 +46,9 @@ export const NOTES = {
   'Voles/Habitat.md': '# Habitat\n\nMeadows and hedgerows.\n',
   'Inbox/Gauge $U(1)$ idea.md': '# Gauge idea\n\nTrack the $U(1)$ phase and $a_i b_i$ sums.\n\n$$\\hat H \\psi = E \\psi$$\n\n| Field | Charge | A long column of notes that keeps going |\n| --- | --- | --- |\n| photon | 0 | massless |\n| electron | -1 | light |\n',
   'Inbox/Lonely.md': 'Nothing links here.\n',
+  // spec 029 R15: a daily note and a saved chat, so Notes has kinds to tell apart
+  '2026/10-October/2026-10-06.md': '# 2026-10-06\n\nRan the vole survey.\n',
+  'chats/2026-10-07 Vole diets (AB12CD34).md': '# Vole diets\n\nWhat do voles eat in winter?\n',
 };
 const NOTE_LINKS = {
   'Voles/Winter diet.md': { links_to: ['Voles/Seeds.md', 'Voles/Habitat.md', 'zotero/K0001', 'Ghost (no note)'], linked_from: ['Inbox/Lonely.md'] },
@@ -110,14 +118,48 @@ export const WAITING = { id: 'q1', kind: 'annotation', key: 'ATTOK001', done: fa
 
 const json = (body, status = 200) => ({ status, contentType: 'application/json', body: JSON.stringify(body) });
 
+/** A full text's figures as the server gives them: LaTeXML's printed sizes, one wide and one tall, each captioned. The
+ *  pictures have those shapes too (a loaded image keeps its own shape, whatever its attributes say). */
+const picture = (w, h) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="${w}" height="${h}" fill="#cde"/><circle cx="${w / 2}" cy="${h / 2}" r="${Math.min(w, h) / 3}" fill="#357"/></svg>`)}`;
+const FIGURES = [
+  `<p>${'The burrows were mapped over two winters, and the plots below show where the voles went and how deep. '.repeat(4)}</p>`,
+  `<figure><img src="${picture(238, 183)}" alt="Refer to caption" width="238" height="183"><figcaption>Figure 1: burrow depth against the week of winter.</figcaption></figure>`,
+  '<p>The tall panel stacks the two winters.</p>',
+  `<figure><img src="${picture(215, 404)}" alt="Refer to caption" width="215" height="404"><figcaption>Figure 2: the two winters, one above the other.</figcaption></figure>`,
+].join('');
+
+/** A paper's full text as the server gives it: numbered equations in paragraphs of their own, inline math in the sentences. */
+const EQUATIONS = [
+  '<p>We then take the matrix $\\mathbf{M}$ to be the first $f$ columns of $\\mathbf{Q}^{-1}$, so that the fractions of the burrows follow from one another, and the sum over $\\alpha$ stays bounded for every choice of the mixture studied here.</p>',
+  '<p>$$\\mathbf{Q}^{-1}\\begin{bmatrix}\\tilde{\\mathbf{x}}\\\\ \\hline\\cr 1\\end{bmatrix}=\\mathbf{x}.$$ (13)</p>',
+  '<p>$$\\frac{\\partial x_{i}}{\\partial\\tilde{x}_{j}}=\\mathbf{M}_{ij}.$$ (14)</p>',
+  '<p>Next, we define the matrix $\\Gamma$ with elements</p>',
+  '<p>$$\\Gamma_{\\alpha\\beta}=\\left(\\dfrac{\\partial\\mu_{\\alpha}}{\\partial\\tilde{x}_{\\beta}}\\right)_{\\tilde{x}\\neq\\tilde{x}_{\\beta}}=\\sum_{i=1}^{C}\\left(\\dfrac{\\partial\\mu_{\\alpha}}{\\partial n_{i}}\\right)\\left(\\dfrac{\\partial n_{i}}{\\partial\\tilde{x}_{\\beta}}\\right)_{\\tilde{x}\\neq\\tilde{x}_{\\beta}}\\\\ =\\sum_{i=1}^{C}N\\left(\\dfrac{\\partial\\mu_{\\alpha}}{\\partial n_{i}}\\right)\\left(\\dfrac{\\partial x_{i}}{\\partial\\tilde{x}_{\\beta}}\\right)_{\\tilde{x}\\neq\\tilde{x}_{\\beta}}+\\sum_{i=1}^{C}\\frac{n_{i}}{N}\\left(\\dfrac{\\partial\\mu_{\\alpha}}{\\partial n_{i}}\\right)\\left(\\dfrac{dN}{d\\tilde{x}_{\\beta}}\\right)_{\\tilde{x}\\neq\\tilde{x}_{\\beta}},$$ (15)</p>',
+  '<p>where the second term in the last line sums to zero.</p>',
+  '<p>$$\\Gamma=\\mathbf{U}\\mathbf{M}.$$ (16)</p>',
+  '<p>$$d\\mu_{\\alpha}=\\sum_{i=1}^{f}\\Gamma_{\\alpha i}d\\tilde{x}_{i},$$ (17)</p>',
+].join('');
+
 /** GET /web/page for the invented sites of dev/browser-checks.mjs (spec 015). @param {string} url @param {string | null} prefer */
 function webPage(url, prefer) {
   const host = new URL(url).hostname;
+  // a closed paper (2026-10-29): only its abstract, as a paper landing page (journal, date, abstract paragraphs, DOI,
+  // the publisher's page outside, a citation to copy)
+  if (url === 'https://doi.org/10.1/vole') return json({ mode: 'reader', url, title: 'Burrow microclimates in field voles', byline: 'A. Vole, B. Mole', abstract: 'Burrows stay four degrees warmer than the surface. CO2 under snow.', abstract_html: '<p>Burrows stay four degrees warmer than the surface.</p><p>CO<sub>2</sub> under snow rises <i>tenfold</i>.</p>', html: '', source: 'openalex', paper: { doi: '10.1/vole', journal: 'Journal of Vole Ecology', published: '28 Oct 2026', volume: '12', issue: '3', pages: '101-118', citation: 'Vole, A.; Mole, B. Burrow microclimates in field voles. Journal of Vole Ecology 2026, 12 (3), 101-118. https://doi.org/10.1/vole' }, links: [{ label: "Publisher's page", url: 'https://doi.org/10.1/vole', kind: 'outside' }] });
+  // the same with no graphical abstract anywhere (the usual closed paper): the page stands without a figure
+  if (url === 'https://doi.org/10.1/stoat') return json({ mode: 'reader', url, title: 'Stoat coat colour across a snow gradient', byline: 'C. Stoat, D. Ermine, E. Weasel', abstract: 'Coats turn white earlier where snow comes earlier.', abstract_html: `<p>${'Coats turn white earlier where snow comes earlier, and the timing follows day length more than temperature. '.repeat(3)}</p><p>${'We followed marked stoats across three valleys for six winters. '.repeat(3)}</p>`, html: '', source: 'openalex', paper: { doi: '10.1/stoat', journal: 'Journal of Mustelid Studies', published: '28 Oct 2026', citation: 'C. Stoat, D. Ermine, E. Weasel. Stoat coat colour across a snow gradient. Journal of Mustelid Studies 2026. https://doi.org/10.1/stoat' }, links: [{ label: "Publisher's page", url: 'https://doi.org/10.1/stoat', kind: 'outside' }] });
   // a paper link (spec 022): the server found an open-access preprint
   if (host === 'doi.org') return json({ mode: 'pdf', url: 'https://files.example/paper.pdf', title: 'Voles, the preprint', source: 'open access', version: 'submitted', where: 'arXiv (Cornell University)' });
   if (host === 'frame.example' && prefer !== 'reader') return json({ mode: 'frame', url, title: 'A framed page' });
+  // an arXiv paper (2026-10-29): the server's paper answer, with TeX in the abstract for KaTeX
+  if (url === 'https://arxiv.org/abs/2611.20723') return json({ mode: 'reader', url, title: ARXIV_2611.title, byline: ARXIV_2611.authors.join(', '), abstract: ARXIV_2611.abstract, html: '', source: 'arxiv', math: true, paper: { arxiv: '2611.20723', doi: '10.48550/arXiv.2611.20723' }, links: [{ label: 'PDF', url: 'https://files.example/paper.pdf', kind: 'pdf' }, { label: 'Full text', url: 'https://reader.example/other', kind: 'reader' }] });
+  if (host === 'arxiv.org') return json({ mode: 'reader', url, title: 'First-Principles Wannier Representation of Proximity Effects', byline: 'Yaroslav Zhumagulov, Johan Félisaz, Stepan S. Tsirkin, Denis Kochan, Oleg V. Yazyev', abstract: `Proximity effects in layered heterostructures are commonly represented by static parameters. ${'We downfold the heterostructure Hamiltonian onto a fixed Wannier subspace. '.repeat(3)}Graphene/PtSe$_2$ develops a sublattice-selective coupling.`, html: '', source: 'arxiv', math: true, paper: { arxiv: '2607.25690', version: 'v2', submitted: '28 Jul 2026', revised: '25 Oct 2026', doi: '10.48550/arXiv.2607.25690', subjects: [{ code: 'cond-mat.mes-hall', name: 'Mesoscale and Nanoscale Physics', primary: true }, { code: 'cond-mat.mtrl-sci', name: 'Materials Science', primary: false }] }, links: [{ label: 'PDF', url: 'https://files.example/paper.pdf', kind: 'pdf' }, { label: 'Full text', url: 'https://reader.example/other', kind: 'reader' }] });
+  // an ordinary page with prices: no math is drawn
+  if (host === 'shop.example') return json({ mode: 'reader', url, title: 'Tickets', byline: '', html: `<p>Tickets cost $5 and $10 at the door. ${'The late show is cheaper on weekdays. '.repeat(8)}</p>` });
   if (host === 'frame.example' || host === 'reader.example') {
     const html = `<p>Voles cache seeds in autumn and shift to roots in winter, which is why the study followed them for ${'a long season '.repeat(12)}.</p><p>Read <a href="https://reader.example/other">the other article</a>, <a href="https://files.example/paper.pdf">the preprint</a> or <a href="https://reader.example/blocked">a closed one</a>.</p>`;
+    if (url.endsWith('/figures')) return json({ mode: 'reader', url, title: 'Vole burrows in pictures', byline: 'Ann Chen', html: FIGURES });
+    if (url.endsWith('/equations')) return json({ mode: 'reader', url, title: 'Vole burrows as a mixture', byline: 'Ann Chen', html: EQUATIONS, math: true });
     return json({ mode: 'reader', url: url.replace('/other', '/other'), title: url.endsWith('/other') ? 'The other article' : 'Voles in the reader', byline: 'Ann Chen, Bo Ruiz', html });
   }
   if (host === 'slow.example') return json({ mode: 'blocked', url, title: 'slow.example', reason: 'The site took too long to answer.' });
@@ -158,8 +200,11 @@ export function answer(url, method, post, headers = {}) {
   if (url.hostname === 'frame.example') return { status: 200, contentType: 'text/html', body: '<!doctype html><title>Framed</title><h1 id="framed">A framed page</h1>' };
   if (url.pathname === '/sources' || url.pathname.startsWith('/sources/')) return folders(url, method, post);
   switch (url.pathname) {
+    // the server light (shell.js) and guided setup (setup-card.js) ask these; shapes as server/http_api.py and setup_suggest.py
+    case '/ping': return json({ ok: true, ready: true });
+    case '/setup/suggest': return json({ zotero: null, vaults: [], pdf_folders: [] });
     case '/web/page': return webPage(q.get('url') ?? '', q.get('prefer'));
-    case '/web/pdf': return q.get('url') === 'https://files.example/paper.pdf' ? { status: 200, contentType: 'application/pdf', body: PDF } : json({ error: 'This link is not a PDF' }, 415);
+    case '/web/pdf': return ['https://files.example/paper.pdf', 'https://arxiv.org/pdf/2611.20723'].includes(q.get('url') ?? '') ? { status: 200, contentType: 'application/pdf', body: PDF } : json({ error: 'This link is not a PDF' }, 415);
     case '/zotero/collections': return json(COLLECTIONS);
     case '/zotero/items': {
       const keys = (q.get('collections') ?? '').split(',').filter(Boolean);
@@ -242,4 +287,36 @@ export async function useFixtures(page) {
     return route.fulfill(reply);
   });
   return calls;
+}
+
+/** The desktop app's bridge (spec 027), before the app loads: `window.__TAURI__` with an `invoke` that records every
+ *  call in `window.__desk.calls` and answers like the app (browse_open refuses what is not a link or a DOI), and an
+ *  event emitter the checks drive with `window.__desk.emit(event, payload)`. @param {import("playwright").Page} page */
+export async function fakeDesktop(page) {
+  await page.addInitScript(() => {
+    /** @type {Map<string, Set<(e: { payload: any }) => void>>} */
+    const listeners = new Map();
+    const desk = {
+      calls: /** @type {{ cmd: string, args: any }[]} */ ([]),
+      emit(event, payload) { for (const fn of listeners.get(event) ?? []) fn({ payload }); },
+    };
+    /** @type {any} */ (window).__desk = desk;
+    /** @type {any} */ (window).__TAURI__ = {
+      core: {
+        async invoke(cmd, args) {
+          desk.calls.push({ cmd, args: args ? JSON.parse(JSON.stringify(args)) : undefined });
+          if (cmd === 'browse_available') return true;
+          if (cmd === 'browse_open' && !/^(https?:\/\/\S+|(doi:)?10\.\d{4,9}\/\S+)$/i.test(String(args?.text ?? '').trim())) throw 'Type a link or a DOI';
+          return null;
+        },
+      },
+      event: {
+        async listen(event, fn) {
+          if (!listeners.has(event)) listeners.set(event, new Set());
+          listeners.get(event).add(fn);
+          return () => listeners.get(event)?.delete(fn);
+        },
+      },
+    };
+  });
 }

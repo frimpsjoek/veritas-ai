@@ -6,11 +6,15 @@ import { citationKey } from './citations.js';
 import { migrateScope } from './scope.js';
 
 const PREFIX = 'zotero/';
+/** A Zotero item key: eight capitals and digits. */
+const ZOTERO_KEY = /^[A-Z0-9]{8}$/;
 /** The first /search after the server starts loads the embedding model: about 30 s was seen under load. */
 const SEARCH_TIMEOUT_MS = 90_000;
 const READ_TIMEOUT_MS = 30_000;
 /** Reading new arXiv papers whole, or calibrating with some (spec 021): one PDF every 3 s on the server. */
 const WHOLE_PAPERS_MS = 20 * 60_000;
+/** One PDF downloaded and read by the server (spec 031): a large one over a slow link takes a while. */
+const PAPER_TEXT_MS = 3 * 60_000;
 
 /** A path the server returned: "zotero/<KEY>" is a paper, anything else a vault note.
  *  @param {string} pathValue @returns {import("./domain").CitationRef} */
@@ -23,7 +27,10 @@ function refFromPath(pathValue) {
 /** @param {import("./domain").CitationRef} ref */
 function pathFromRef(ref) {
   if (ref.kind === 'note') return ref.path;
-  if (ref.kind === 'paper') return `${PREFIX}${ref.citekey}`;
+  // A paper ref holds either the Zotero item key the search returns (zotero/Q7RT2KXM) or a Better BibTeX citation key
+  // (a Find table's library rows, an answer's [@DOEX24]). zotero/<citekey> is no item, so a citation key is asked for
+  // as @<citekey>, which the server looks up (spec 030 R9).
+  if (ref.kind === 'paper') return ZOTERO_KEY.test(ref.citekey) ? `${PREFIX}${ref.citekey}` : `@${ref.citekey}`;
   return null; // web refs are not library reads
 }
 
@@ -102,7 +109,9 @@ export function createHttpSkillSource(fetchFn, opts) {
 
 /**
  * @param {typeof fetch} fetchFn
- * @param {{ baseUrl: string, token?: string | null, searchTimeoutMs?: number, timeoutMs?: number }} opts
+ * @param {{ baseUrl: string, token?: string | null, searchTimeoutMs?: number, timeoutMs?: number, slowFetch?: typeof fetch }} opts
+ *   `slowFetch`: for the whole-paper and calibration calls, which hold one request for many minutes while the server
+ *   reads PDFs; Node's own fetch gives up when a reply's headers take over 300 s (node/platform.mjs has one that waits).
  * @returns {import("./tools").LibraryBackend}
  */
 export function createHttpLibraryBackend(fetchFn, opts) {
@@ -136,7 +145,7 @@ export function createHttpLibraryBackend(fetchFn, opts) {
   }
 
   /** JSON in, JSON out, for the radar's POST/PUT routes. A failure carries `status` like getJSON's. */
-  async function sendJSON(method, routePath, body, limitMs = timeoutMs) {
+  async function sendJSON(method, routePath, body, limitMs = timeoutMs, send = fetchFn) {
     const controller = typeof AbortController === 'function' ? new AbortController() : null;
     let timer;
     const timedOut = new Promise((_, reject) => {
@@ -146,7 +155,7 @@ export function createHttpLibraryBackend(fetchFn, opts) {
       }, limitMs);
     });
     const request = (async () => {
-      const res = await fetchFn(new URL(routePath, opts.baseUrl), { method, headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify(body), ...(controller ? { signal: controller.signal } : {}) });
+      const res = await send(new URL(routePath, opts.baseUrl), { method, headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify(body), ...(controller ? { signal: controller.signal } : {}) });
       if (!res.ok) throw Object.assign(new Error(`${routePath}: HTTP ${res.status}`), { status: res.status });
       return res.json().catch(() => ({}));
     })();
@@ -210,6 +219,29 @@ export function createHttpLibraryBackend(fetchFn, opts) {
       return (Array.isArray(data) ? data : []).map((n) => ({ path: String(n.path), title: String(n.title ?? n.path), modified: String(n.modified ?? '') }));
     },
 
+    /** Spec 031 R3. A copy that cannot be read (422: not a PDF, no text layer, not a public address) is null.
+     *  @param {{ url: string, key: string }} q */
+    async paperText(q) {
+      try {
+        const data = await sendJSON('POST', '/paper/text', { url: q.url, key: q.key }, PAPER_TEXT_MS, opts.slowFetch ?? fetchFn);
+        return typeof data?.text === 'string' && data.text.trim() ? data.text : null;
+      } catch (error) {
+        if (/** @type {any} */ (error)?.status === 422) return null;
+        throw error;
+      }
+    },
+
+    /** Spec 032. @param {{ paper: import("./tools").KeptPaper, urls: string[] }} q @returns {Promise<import("./tools").KeepResult>} */
+    async paperKeep(q) {
+      return /** @type {any} */ (await sendJSON('POST', '/paper/keep', { paper: q.paper, urls: q.urls }, PAPER_TEXT_MS, opts.slowFetch ?? fetchFn));
+    },
+
+    /** @param {{ clear?: boolean }} q */
+    async paperTextCache(q) {
+      const data = await sendJSON('POST', '/paper/text-cache', q?.clear ? { clear: true } : {});
+      return { papers: Number(data?.papers) || 0, bytes: Number(data?.bytes) || 0 };
+    },
+
     /** @param {{ collections: string[] | null }} q */
     async items({ collections }) {
       const data = await getJSON('/zotero/items', collections?.length ? { collections: collections.join(',') } : {}, searchTimeoutMs);
@@ -231,13 +263,13 @@ export function createHttpLibraryBackend(fetchFn, opts) {
     /** Spec radar-seeds G3. The server reads each PDF at most one every 3 s, so 40 papers can take minutes.
      *  @param {{ seeds: import("./radar-types").SeedBody, items: { id: string, arxiv: string }[], baseline?: import("./radar-types").SeedBaseline | null }} q */
     async radarFulltext(q) {
-      const data = await sendJSON('POST', '/radar/fulltext', q, WHOLE_PAPERS_MS);
+      const data = await sendJSON('POST', '/radar/fulltext', q, WHOLE_PAPERS_MS, opts.slowFetch ?? fetchFn);
       return data?.scores ?? {};
     },
 
-    /** Spec radar-seeds G4. @param {{ seeds: import("./radar-types").SeedBody, unrelated: { title: string, abstract: string, arxiv: string | null }[], field?: { title: string, abstract: string, arxiv: string | null }[], full_papers?: number }} q */
+    /** Spec radar-seeds G4. @param {{ seeds: import("./radar-types").SeedBody, unrelated: { title: string, abstract: string, arxiv: string | null }[], field?: { title: string, abstract: string, arxiv: string | null, category?: string }[], full_papers?: number }} q */
     async radarCalibrate(q) {
-      return sendJSON('POST', '/radar/calibrate', q, WHOLE_PAPERS_MS);
+      return sendJSON('POST', '/radar/calibrate', q, WHOLE_PAPERS_MS, opts.slowFetch ?? fetchFn);
     },
 
     /** @param {string} file @param {string} text */

@@ -60,6 +60,8 @@ export function conversationStore(fs, dir, opts = {}) {
   const mirrorDir = opts.mirrorDir;
   /** id -> the mirror write in flight, so two appends to one chat rewrite its file in order. @type {Map<string, Promise<void>>} */
   const mirrorQueue = new Map();
+  /** id -> the mirror file name last written and cleaned up, so an append that keeps the name skips listing the folder. @type {Map<string, string>} */
+  const mirrorNames = new Map();
 
   /** The mirror files of chat `id` other than `keep` (an old title's name after a rename). */
   async function staleMirrors(id, keep) {
@@ -75,7 +77,9 @@ export function conversationStore(fs, dir, opts = {}) {
         const md = chatMarkdown((await readRecords(id)) ?? []);
         if (!md) return;
         await fs.writeAtomic(`${mirrorDir}/${md.name}`, md.text);
+        if (mirrorNames.get(id) === md.name) return;
         for (const old of await staleMirrors(id, md.name)) await fs.remove(`${mirrorDir}/${old}`);
+        mirrorNames.set(id, md.name);
       } catch (error) {
         console.error(`chat mirror: ${error instanceof Error ? error.message : error}`);
       }
@@ -90,8 +94,8 @@ export function conversationStore(fs, dir, opts = {}) {
     const rename = [...records].reverse().find((r) => r.type === 'rename');
     const moved = [...records].reverse().find((r) => r.type === 'project');
     const project = moved ? moved.project ?? null : meta?.project;
-    // Opening a chat (a `seen` record) is not activity: it must not move the chat up the history.
-    const last = [...records].reverse().find((r) => r.type !== 'seen');
+    // Opening a chat or viewing its papers (`seen`, `viewed`) is not activity: it must not move the chat up the history.
+    const last = [...records].reverse().find((r) => r.type !== 'seen' && r.type !== 'viewed');
     const news = newsOf(records);
     const extras = summaryExtras(records);
     const cover = coverOf(records);
@@ -123,7 +127,8 @@ export function conversationStore(fs, dir, opts = {}) {
       const summaries = [];
       for (const id of ids) {
         const records = await readRecords(id);
-        if (records?.length) summaries.push(summarize(id, records));
+        // A radar issue redone is kept on disk but listed nowhere: its replacement stands in for it.
+        if (records?.length && !records.some((r) => r.type === 'replaced')) summaries.push(summarize(id, records));
       }
       return summaries.sort((a, b) => (a.updated < b.updated ? 1 : -1));
     },
@@ -145,6 +150,7 @@ export function conversationStore(fs, dir, opts = {}) {
       await fs.removeTree?.(`${dir}/${id}.d`);
       if (mirrorDir) {
         await mirrorQueue.get(id);
+        mirrorNames.delete(id);
         try {
           for (const old of await staleMirrors(id, null)) await fs.remove(`${mirrorDir}/${old}`);
         } catch (error) {

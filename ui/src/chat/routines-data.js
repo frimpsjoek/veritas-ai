@@ -12,7 +12,7 @@ export { scheduleText, ordinal, MAX_TIMES } from '../../../agent/src/schedule.js
 /** @typedef {{
  *   id: string, name: string, prompt: string, skills: string[], depth: 'fastest' | 'quick' | 'standard' | 'deep', schedule: Schedule,
  *   target: { kind: 'artifact', session: string, result: { id: string } } | { kind: 'session' },
- *   status: 'active' | 'paused' | 'archived', lastRun: null | { at: string, slot?: string | null, status: 'done' | 'failed' | 'skipped', reason?: string, added?: number, summary?: string },
+ *   status: 'active' | 'paused' | 'archived', lastRun: null | { at: string, slot?: string | null, status: 'done' | 'failed' | 'skipped', reason?: string, added?: number, summary?: string, session?: string },
  *   nextRun?: string | null, running?: boolean
  * }} RoutineCard */
 /** @typedef {{ name: string, prompt: string, skills: string[], depth: 'fastest' | 'quick' | 'standard' | 'deep', schedule: Schedule, target: { kind: 'session' } }} RoutineTemplateDraft */
@@ -101,6 +101,47 @@ export function lastRunLine(routine, now = Date.now()) {
   const n = run.added;
   const found = typeof n === 'number' ? (n === 0 ? 'nothing new' : `${n} new ${n === 1 ? 'paper' : 'papers'}`) : (run.summary ?? 'done');
   return `Ran ${when}: ${found}`;
+}
+
+/** Why a run did not finish, in plain words: the engine's reasons are for the log. A reason not known here is shown as
+ *  it came, its first line only. @param {string | null | undefined} reason */
+export function plainRunReason(reason) {
+  const text = String(reason ?? '').split('\n')[0].replace(/^\w*Error:\s*/, '').trim();
+  if (text === 'stopped') return 'The server stopped during the run.';
+  if (/\b429\b|too many requests|rate limit|request limit/i.test(text)) return 'A request limit was reached.';
+  if (/fetch failed|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|network|timed out/i.test(text)) return 'A source did not answer.';
+  return text;
+}
+
+/**
+ * The line under Home's banner: a run going, a run that did not finish, or when the issue came and when the next will.
+ * The engine says only whether a run is going (`running`), not when it began or how far it got: `startedAt` is when this
+ * page started it, `seenAt` when this page first saw it going. `unanswered`: the last look at the server got no answer,
+ * which says nothing about the run.
+ * @param {Pick<RoutineCard, 'status' | 'nextRun' | 'running' | 'lastRun'>} routine
+ * @param {{ now?: number, startedAt?: number | null, seenAt?: number | null, unanswered?: boolean }} [seen]
+ * @returns {{ kind: 'running' | 'failed' | 'quiet', lead: string, detail: string, action: 'again' | 'redo' | null }}
+ */
+export function runStatus(routine, { now = Date.now(), startedAt = null, seenAt = null, unanswered = false } = {}) {
+  if (routine.running) {
+    const when = startedAt != null ? `started ${ago(new Date(startedAt).toISOString(), now)}` : seenAt != null ? `seen running since ${hhmm(new Date(seenAt))}` : '';
+    const parts = [when, unanswered ? 'the server is not answering, so this may be out of date' : ''].filter(Boolean);
+    return { kind: 'running', lead: 'Running', detail: parts.join(' · '), action: null };
+  }
+  const run = routine.lastRun;
+  const at = run ? Date.parse(run.at) : NaN;
+  const today = Number.isFinite(at) && dayStart(at) === dayStart(now);
+  if (run && run.status !== 'done') {
+    const happened = run.status === 'skipped' ? 'was skipped' : 'did not finish';
+    return { kind: 'failed', lead: today ? `Today's run ${happened}` : `The last run ${happened} (${ago(run.at, now)})`, detail: plainRunReason(run.reason), action: 'again' };
+  }
+  const yesterday = Number.isFinite(at) && dayStart(at) === dayStart(now - 86_400_000);
+  const day = today ? '' : yesterday ? 'yesterday' : Number.isFinite(at) ? new Date(at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '';
+  const built = !run ? 'No issue yet'
+    : run.session ? (today ? `Issue built at ${hhmm(new Date(at))}` : `Last issue built ${day}`)
+    : `Last run ${today ? `at ${hhmm(new Date(at))}` : day} found nothing new`;
+  const next = nextRunText(routine, now).replace(/^Next run: /, 'next ').replace(/^(Paused|Archived)$/, (word) => word.toLowerCase());
+  return { kind: 'quiet', lead: '', detail: [built, next].filter(Boolean).join(' · '), action: run?.session ? 'redo' : null };
 }
 
 /** What the card's buttons are, in order, for a routine's state. @param {Pick<RoutineCard, 'status' | 'running'>} routine */

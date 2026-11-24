@@ -93,3 +93,55 @@ def test_year_range_keeps_only_papers_inside_it(fixture_searcher):
     assert paths(year_from=2010, year_to=2025) == {"zotero/OLD", "zotero/NEW"}
     assert "personal/sleep-notes.md" in paths()
     assert paths(year_from=1900) == {"zotero/OLD", "zotero/NEW"}
+
+
+def _add_item(searcher, key, title, meta, text):
+    import json
+    searcher.db.execute(
+        "INSERT INTO notes (path, title, folder, source, tags, mtime, size, frontmatter, meta) "
+        "VALUES (?, ?, 'zotero', 'zotero', '', ?, 100, '', ?)",
+        (f"zotero/{key}", title, time.time(), json.dumps(meta)),
+    )
+    searcher.db.execute(
+        "INSERT INTO chunks (id, path, ord, heading, text) VALUES ((SELECT COALESCE(MAX(id), 0) + 1 FROM chunks), ?, 0, NULL, ?)",
+        (f"zotero/{key}", text),
+    )
+    searcher.db.commit()
+
+
+def test_items_sharing_a_doi_are_one_result_listing_the_others(fixture_searcher):
+    import json
+    _add_item(fixture_searcher, "DUPA", "Sleep spindles", {"doi": "10.1000/xyz1"}, "sleep spindles sleep spindles sleep")
+    _add_item(fixture_searcher, "DUPB", "Sleep spindles (copy)", {"doi": "10.1000/other"}, "sleep spindles in a copy")
+    before = [h["path"] for h in fixture_searcher.search("sleep spindles", limit=20) if h["path"] in ("zotero/DUPA", "zotero/DUPB")]
+    fixture_searcher.db.execute("UPDATE notes SET meta=? WHERE path='zotero/DUPB'", (json.dumps({"doi": "10.1000/XYZ1"}),))
+    fixture_searcher.db.commit()
+    hits = fixture_searcher.search("sleep spindles", limit=20)
+    paths = [h["path"] for h in hits]
+    best, other = before
+    assert best in paths and other not in paths
+    hit = next(h for h in hits if h["path"] == best)
+    assert hit["duplicates"] == [other]
+    assert set(hit) == {"path", "title", "source", "tags", "modified", "score", "passages", "zotero", "duplicates"}
+
+
+def test_items_without_doi_collapse_on_title_and_year(fixture_searcher):
+    _add_item(fixture_searcher, "T1", "Sleep and memory.", {"year": "2020"}, "sleep consolidates memory in adults")
+    _add_item(fixture_searcher, "T2", "Sleep, and Memory", {"year": 2020}, "sleep and memory, another copy of the paper")
+    _add_item(fixture_searcher, "T3", "Sleep and memory", {"year": "2011"}, "sleep and memory in an older paper")
+    hits = {h["path"]: h for h in fixture_searcher.search("sleep memory", limit=20)}
+    kept = [p for p in ("zotero/T1", "zotero/T2") if p in hits]
+    assert len(kept) == 1
+    assert hits[kept[0]]["duplicates"] == [({"zotero/T1", "zotero/T2"} - set(kept)).pop()]
+    assert "zotero/T3" in hits and "duplicates" not in hits["zotero/T3"]
+
+
+def test_results_without_duplicates_keep_their_shape(fixture_searcher):
+    for hit in fixture_searcher.search("sleep", limit=20):
+        assert "duplicates" not in hit
+
+
+def test_a_personal_note_is_never_collapsed_into_a_paper(fixture_searcher):
+    _add_item(fixture_searcher, "MYSLEEP", "My sleep notes", {}, "sleep notes from a paper with the same title")
+    paths = {h["path"] for h in fixture_searcher.search("sleep notes", limit=20)}
+    assert {"zotero/MYSLEEP", "personal/sleep-notes.md"} <= paths

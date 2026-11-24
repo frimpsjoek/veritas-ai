@@ -44,7 +44,7 @@ export interface RadarSeeds {
   categories: string[];
 }
 export interface ThresholdStats { threshold: number; overlap: boolean; related: Record<string, number>; unrelated: Record<string, number>; n_related: number; n_unrelated: number;
-  /** The similarity that keeps the closest tenth of the seeds' own field; the threshold is never below it. */
+  /** The similarity that keeps the closest tenth of the seeds' own field; it raises the threshold as far as the median seed. */
   field_cut?: number }
 /** Per seed, its mean similarity to recent papers of its own field; subtracted before the closest seed is taken. */
 export interface SeedBaseline { labels: string[]; abstract: number[]; full: number[] }
@@ -53,12 +53,14 @@ export interface RadarThreshold {
   abstract: number;
   /** One read whole from arXiv, at or above this; null until calibrated with whole papers. */
   full: number | null;
-  calibration?: { abstract: ThresholdStats; full: ThresholdStats | null; seeds: number; at: string; baseline?: SeedBaseline | null; field?: { abstracts: number; whole: number } } | null;
+  calibration?: { abstract: ThresholdStats; full: ThresholdStats | null; seeds: number; at: string; baseline?: SeedBaseline | null; field?: { abstracts: number; whole: number }; seedsKey?: string; /** The calibration logic that made it (radar-seeds.js); absent is 1. */ version?: number } | null;
 }
 
 /** What a fetcher returns before normalising: scholarly.js results, feed items and MCP text rows all fit. */
 export interface RawPaper {
   doi?: string | null; arxiv?: string | null; openalexId?: string | null; title?: string; authors?: string[];
+  /** OpenAlex author ids, one per name in `authors` (null where it has none); absent when the source gives no ids. */
+  authorIds?: (string | null)[];
   venue?: string; date?: string | null; year?: number | null; abstract?: string; url?: string | null;
   /** The source's record type (OpenAlex `type`, Crossref `type` mapped, arXiv `preprint`); absent for feeds and MCP rows. */
   kind?: string | null;
@@ -70,46 +72,63 @@ export type PaperId = string; // 'doi:<lower>' | 'arxiv:<id>' | 'title:<normalis
 
 export interface RadarWhy {
   similarity: number; author: number; journal: number; topic: number; negative: number;
-  /** Spec radar-seeds: the closest seed ("zotero/KEY" or "text:<title>"), its title, and whether the paper was read whole. */
-  seed?: { label: string; title: string; whole: boolean; margin?: number };
+  /** Spec radar-seeds: the closest seed ("zotero/KEY" or "text:<title>"), its title, and whether the paper was read whole.
+   *  `second`: the next seed's margin; `lonely`: this seed stands alone among the seeds (radar-score.js hubOnly). */
+  seed?: { label: string; title: string; whole: boolean; margin?: number; second?: number; lonely?: boolean };
   /** Worth reading rows: how many library papers cite it (and up to 3 titles), and how many of this run's New rows. */
   citedBy?: { count: number; titles: string[]; newCount?: number };
   /** The learned topic this row matched (spec 017): the why-line says so. */
   learned?: string;
+  /** No abstract: the paper was judged on its title alone, and counts this much less (negative). */
+  titleOnly?: number;
 }
 
 export interface RadarItem {
   id: PaperId; doi: string | null; arxiv: string | null; openalexId: string | null;
   title: string; authors: string[]; venue: string; date: string | null; year: number | null;
+  /** As RawPaper.authorIds: one per name, absent when the source gave none. */
+  authorIds?: (string | null)[];
   abstract: string; url: string | null; links: string[]; sources: string[]; kind?: string | null; keywords?: string[];
   score?: number; why?: RadarWhy;
+  /** radar-score.js: the raw closeness to the dismissed examples (why.negative is what it cost). */
+  negSim?: number;
   /** Worth reading rows: OpenAlex citation count and the plain-language reason shown on the row. */
   cites?: number; reason?: string;
+  /** Under the bar, shown to fill a short day (radar-run.js FILL_TO); read by the profile check, not a hub or judge reject. */
+  nearBar?: boolean;
+  /** OpenAlex's field for the work (Worth reading rows); `afield`: the same, when this row holds the place kept for another field. */
+  field?: string; afield?: string;
 }
 
 export interface LibraryItem { key: string; doi: string | null; title: string; year: number | null; citekey: string | null; authors?: string[]; venue?: string; abstract?: string }
 
 export type ScoreScope = { collections: string[] | null };
 /** What the server needs to know the seeds by (radar_api.seed_matrix). */
-export interface SeedBody { keys: string[]; collections: string[]; texts: { title: string; text: string }[] }
+export interface SeedBody { keys: string[]; collections: string[]; texts: { title: string; text: string }[];
+  /** Papers the user liked or added (radar-feedback.js taughtSeeds), compared at a lower weight; never calibrated. */
+  taught?: { title: string; text: string }[] }
 export interface ScoreRequest { scope: ScoreScope; positives: string[]; negatives: string[]; items: { id: string; text: string }[]; seeds?: SeedBody; baseline?: SeedBaseline | null }
 /** `seed_max`: the margin over the closest seed's baseline (what thresholds compare); `seed_raw`: its plain similarity (what is shown). */
-export interface SeedScore { similarity: number; negative: number; seed_max?: number; seed_best?: string | null; seed_raw?: number }
+export interface SeedScore { similarity: number; negative: number; seed_max?: number; seed_best?: string | null; seed_raw?: number; seed_second?: number | null; seed_lonely?: boolean }
 export interface SeedProfile { topics: { text: string; weight: number }[]; authors: { name: string; count: number }[]; journals: { name: string; count: number }[] }
 
 /** `liked`: a thumbs-up, a positive example like `later` but nothing is saved. */
-export type Verdict = "shown" | "added" | "later" | "liked" | "dismissed";
+/** `off`: the profile check judged it outside the user's field; it was never shown. */
+export type Verdict = "shown" | "added" | "later" | "liked" | "dismissed" | "off";
 export interface Example { id: PaperId; text: string; at: string }
 /** `suggestRemove`: three dismissals in a row from this source (spec 012 section 7); the setup sheet shows it quietly. */
 export interface SourceStatus { at: string; items: number; error: string | null; quietRuns: number; suggestRemove?: boolean;
   /** Spec radar-seeds G2b: the last 7 days of runs, how many items it gave and how many were kept. */
   history?: { at: string; items: number; kept: number }[];
   /** Records the run left out as not papers (datasets, theses, repository uploads), for databases, journals and authors. */
-  skipped?: number }
+  skipped?: number;
+  /** The last run read only `fetched` of the `total` papers in the source's window (a journal's cap, the request budget). */
+  truncated?: { fetched: number; total: number; reason: "cap" | "budget" | "error" } }
 /** What feedback needs to know about a paper a digest showed, kept for the newest rows only. */
-export interface ShownPaper { keys: string[]; title: string; text: string; authors: string[]; venue: string; sources: string[]; keywords?: string[] }
+export interface ShownPaper { keys: string[]; title: string; text: string; authors: string[]; authorIds?: (string | null)[]; venue: string; sources: string[]; keywords?: string[] }
 /** A change the radar made to its own profile after an Add: `created` means the entry did not exist before. */
-export interface LearnedEntry { id: string; paper: PaperId; title: string; kind: "author" | "venue"; name: string; created: boolean; at: string }
+/** `step`: the weight it added (Like teaches less than Add); absent in entries written before Like taught people, read as PROFILE_STEP. */
+export interface LearnedEntry { id: string; paper: PaperId; title: string; kind: "author" | "venue"; name: string; created: boolean; at: string; step?: number; openalexId?: string | null }
 /** A phrase seen in liked papers but not yet a search topic (spec 017). `key` is the folded, stemmed, sorted word set. */
 export interface PhraseCandidate { key: string; text: string; papers: PaperId[] }
 /** Spec 017: the learning list, phrases never to learn again, the run counter that picks the rotating search slot,
@@ -123,9 +142,9 @@ export type PhraseDelta =
   | { kind: "dropped"; topic: Weighted; blocked: boolean; announced: boolean };
 /** Exactly what one verdict changed, so `undo` can put it back. */
 export interface UndoRecord {
-  verdict: Exclude<Verdict, "shown">;
+  verdict: Exclude<Verdict, "shown" | "off">;
   /** The verdict this one replaced (re-applied when this one is undone). */
-  replaced: Exclude<Verdict, "shown"> | null;
+  replaced: Exclude<Verdict, "shown" | "off"> | null;
   seen: Record<string, Verdict | null>;
   pushed: { list: "positive" | "negative"; id: PaperId } | null;
   /** Examples the cap pushed out of the front of the list that was pushed to. */
@@ -135,6 +154,8 @@ export interface UndoRecord {
   /** Spec 017: what the click taught or took back (absent on records made before it). */
   phrases?: PhraseDelta[];
 }
+/** What a run cut near the bar, and at which stage: under the `bar`, the `judge` (profile check) or the `hub gap` (hubOnly). */
+export interface NearBarLedger { at: string; rows: { title: string; seed: string; margin: number; stage: "bar" | "judge" | "hub gap" }[] }
 export type FeedbackVerdict = "added" | "later" | "liked" | "dismissed" | "undo";
 export interface RadarState {
   seen: Record<PaperId, { at: string; verdict: Verdict }>;
@@ -150,6 +171,16 @@ export interface RadarState {
   undo: Record<PaperId, UndoRecord>;
   /** Spec 017; absent in state files written before it, read as empty. */
   phrases: PhraseLedger;
+  /** Abstracts looked up for papers that came without one, by "doi:<doi>" or "arxiv:<id>"; text '' is a miss (asked again after 30 days). Absent in older files. */
+  abstracts?: Record<string, { text: string; at: number }>;
+  /** When a run last tried to calibrate a seed radar that had no calibration (ISO); a failed try waits a day. */
+  calibrateTried?: string;
+  /** The last run's near-bar ledger; absent until a calibrated seed radar cut something near it. */
+  nearBar?: NearBarLedger;
+  /** A run's candidate-log lines on their way to radar-candidates.jsonl (radar-state.js write); never in state.json. */
+  pendingLog?: Record<string, unknown>[];
+  /** The last write could not append to the candidate log; the next one that can clears it. */
+  logProblem?: { at: string; error: string };
 }
 
 /** A journal OpenAlex knows, as the setup sheet offers it. */

@@ -7,6 +7,7 @@
 import { el, button, installStyle } from './dom-helpers.js';
 import { toRis } from '../export/ris.js';
 import { addLabel } from '../host-words.js';
+import { batchLine, gotState } from '../get-paper-data.js';
 
 // "searches", not "finds": the pre-005 folder name (PathUtils.join(dataDir, "second-brain", "searches")), kept
 // so saved Find papers searches from before this move still open (success check 9).
@@ -33,7 +34,7 @@ export class FindView {
       if (!path.endsWith('.json')) continue;
       try {
         const saved = JSON.parse(await host.files.read(path));
-        out.push({ id: saved.id, query: saved.query, at: saved.at, count: saved.rows?.length ?? 0, session: saved.session ?? null });
+        out.push({ id: saved.id, query: saved.query, at: saved.at, count: saved.rows?.length ?? 0, session: saved.session ?? null, ...(saved.inThread ? { inThread: true } : {}) });
       } catch (error) { host.logError(error); }
     }
     return out.sort((a, b) => (a.at < b.at ? 1 : -1));
@@ -68,6 +69,8 @@ export class FindView {
       : sources;
     this.at = saved?.at ?? new Date().toISOString();
     this.session = saved?.session ?? null; // spec 007 E3: the session that holds this search's papers as a result
+    /** spec 030 R2: run as a later step of a thread (not the search a session started from): the history lists the thread, not it */
+    this.inThread = Boolean(saved?.inThread);
     this.rows = saved?.rows ?? [];
     this.summary = saved?.summary ?? null;
     this.failed = saved?.failed ?? [];
@@ -366,7 +369,7 @@ export class FindView {
       this.chat.stop(); // the summary may still be writing; the mode can't change until it ends
       await this.chat.job;
     }
-    this.chat.setMode('chat');
+    this.chat.switchMode('chat'); // spec 030 R4: the chat goes on in this thread, not in a new one
     for (const row of rows) {
       const attachment = row.citekey ? { kind: 'zoteroItem', citekey: row.citekey }
         : { kind: 'quote', text: `${row.title} (${row.year || 'n.d.'})${row.doi ? ` https://doi.org/${row.doi}` : ''}. Abstract: ${row.abstract || 'none'}` };
@@ -381,13 +384,19 @@ export class FindView {
   async addToZotero(btn) {
     const rows = this.picked().filter((r) => !r.key);
     btn.disabled = true;
-    const outsidePapers = rows.map((row) => ({
+    // spec 031 R5/R6: a free copy of each paper is looked for first and goes along as its PDF
+    /** @type {import("../get-paper-data.js").Access[]} */
+    let access = [];
+    try { access = await (await this.host.ai()).papers.access(rows.map((r) => ({ doi: r.doi ?? null, url: r.url ?? null, pdfUrl: r.pdf ?? null, arxiv: r.arxiv ?? null }))); } catch (error) { this.host.logError(error); }
+    const outsidePapers = rows.map((row, i) => ({
       title: row.title, authors: row.authors, year: row.year || null, venue: row.venue, doi: row.doi,
       abstract: row.abstract, url: row.doi ? `https://doi.org/${row.doi}` : null, source: row.sources[0] ?? 'unknown',
-      arxiv: row.arxiv, pmid: row.pmid, pdf: row.pdf, type: row.type, key: row.key,
+      arxiv: row.arxiv, pmid: row.pmid, pdf: row.pdf ?? (access[i]?.access === 'open' ? access[i].pdfUrl : null), type: row.type, key: row.key,
     }));
     try {
       const result = await this.host.addToLibrary?.(outsidePapers);
+      const line = batchLine(rows.map((_, i) => gotState(access[i], Boolean(result?.items?.[i]))));
+      if (line) this.host.notice?.(`${addLabel(this.host).replace(/^Add/, 'Added')}: ${line}.`);
       // Mutate each row in place (same objects this.rows holds), the way the pre-005 code updated .key/.citekey
       // as discover.add() finished each one — result.items is parallel to `rows`, index for index.
       result?.items?.forEach((item, i) => {
@@ -429,7 +438,8 @@ export class FindView {
   }
 
   async save() {
-    const saved = { id: this.id, query: this.query, at: this.at, scope: this.scope, sources: this.sources, failed: this.failed, rows: this.rows, summary: this.summary, session: this.session };
+    const saved = { id: this.id, query: this.query, at: this.at, scope: this.scope, sources: this.sources, failed: this.failed, rows: this.rows, summary: this.summary, session: this.session,
+      ...(this.inThread ? { inThread: true } : {}) };
     await this.host.files.write(`${DIR}/${this.id}.json`, JSON.stringify(saved));
   }
 

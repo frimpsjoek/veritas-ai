@@ -1,6 +1,6 @@
 """Keeps the tests off the machine's own setup: no data/sources.json, data/kb.sqlite or real Zotero library is read.
 
-Set before any test module imports kb (which resolves the folder layout at import). Tests that need a layout build
+Set before any test module imports kb (which resolves the folder layout on first use, kb.ensure_layout). Tests that need a layout build
 their own in tmp_path; the stand-in library here only makes the Zotero routes answer instead of "needs Zotero".
 """
 import os

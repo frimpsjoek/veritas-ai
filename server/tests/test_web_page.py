@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import sqlite3
+import urllib.parse
 
 import pytest
 
@@ -50,7 +52,7 @@ def html_page(url, body, headers=None, status=200):
 
 def openalex_url(doi):
     return (f"https://api.openalex.org/works/doi:{doi}?select=title,display_name,authorships,abstract_inverted_index,"
-            "best_oa_location,locations,primary_location")
+            "best_oa_location,locations,primary_location,publication_date,publication_year,biblio,open_access")
 
 
 # --- G1 ordinary pages ---------------------------------------------------------------------------------------------
@@ -155,7 +157,9 @@ def test_an_open_access_copy_comes_before_the_publisher(web):
     pages[openalex_url(DOI)] = Response("x", 200, {}, json.dumps(WORK_GREEN).encode())
     answer = web_page.page(f"https://doi.org/{DOI}", get=get)
     assert answer == {"mode": "pdf", "url": "https://arxiv.org/pdf/2301.06171", "title": WORK_GREEN["title"],
-                      "source": "open access", "version": "submitted", "where": "arXiv (Cornell University)"}
+                      "source": "open access", "version": "submitted", "where": "arXiv (Cornell University)",
+                      "byline": "A. Author, B. Author", "abstract": "Spins flip here.",
+                      "paper": {"doi": DOI, "authors": ["A. Author", "B. Author"]}}
     assert not any("doi.org/10" in c and "openalex" not in c for c in calls), "the publisher is never asked"
     n = len(calls)
     web_page.page(f"https://doi.org/{DOI}", get=get)
@@ -175,8 +179,88 @@ def test_a_closed_paper_shows_its_abstract_and_the_publisher_link(web):
     pages[openalex_url(DOI)] = Response("x", 200, {}, json.dumps(WORK_CLOSED).encode())
     answer = web_page.page(f"https://doi.org/{DOI}", get=get)
     assert answer["mode"] == "reader" and answer["source"] == "openalex"
-    assert "Spins flip here." in answer["html"] and 'href="https://pubs.acs.org/doi/10.1021/acsnano.6c11666"' in answer["html"]
+    # the same paper shape as an arXiv answer: the abstract under its label, the way out as a header button that opens
+    # outside (publishers refuse in-app loads), at doi.org whatever OpenAlex's landing page is
+    assert answer["abstract"] == "Spins flip here." and answer["abstract_html"] == "<p>Spins flip here.</p>"
+    assert answer["html"] == ""
+    assert answer["links"] == [{"label": "Publisher's page", "url": f"https://doi.org/{DOI}", "kind": "outside"}]
     assert answer["byline"] == "A. Author, B. Author"
+    assert answer["paper"]["doi"] == DOI
+
+
+JCTC = json.loads((Path(__file__).parent / "fixtures" / "web_page" / "jctc-6c01423.json").read_text())
+JCTC_DOI = "10.1021/acs.jctc.6c01423"
+
+
+def test_a_closed_paper_is_a_landing_page_from_openalex_and_crossref(web):
+    """The user's JCTC paper (OpenAlex and Crossref answers of 2026-10-29): journal on one line and the date, authors,
+    the abstract's paragraph without its JATS "Abstract" title, the DOI, no PDF (closed), a citation to copy."""
+    pages, calls, get = web
+    pages[openalex_url(JCTC_DOI)] = Response("x", 200, {}, json.dumps(JCTC["openalex"]).encode())
+    pages[f"https://api.crossref.org/works/{JCTC_DOI}"] = Response("x", 200, {}, json.dumps(JCTC["crossref"]).encode())
+    answer = web_page.page(f"https://doi.org/{JCTC_DOI}", get=get)
+    assert answer["title"] == "Multipolar Polarizabilities in Materials: Ab Initio Calculations with Wannier Functions"
+    assert answer["byline"] == "Diem Thi-Xuan Dang, Dai-Nam Le, Lilia M. Woods"
+    paper = answer["paper"]
+    assert paper["journal"] == "Journal of Chemical Theory and Computation" and paper["published"] == "28 Oct 2026"
+    assert paper["doi"] == JCTC_DOI and "volume" not in paper and "pages" not in paper
+    text = answer["abstract_html"]
+    assert text.startswith("<p>We develop a first-principles approach") and text.count("<p>") == 1
+    assert "jats" not in text and "Abstract" not in text and "  " not in text
+    assert answer["abstract"].startswith("We develop") and "<" not in answer["abstract"]
+    assert [link["label"] for link in answer["links"]] == ["Publisher's page"]
+    assert paper["citation"] == ("Diem Thi-Xuan Dang, Dai-Nam Le, Lilia M. Woods. Multipolar Polarizabilities in "
+                                 "Materials: Ab Initio Calculations with Wannier Functions. Journal of Chemical Theory "
+                                 f"and Computation 2026. https://doi.org/{JCTC_DOI}")
+    assert not any(c.startswith("https://doi.org/") or "pubs.acs.org" in c for c in calls), "the publisher is never asked"
+    n = len(calls)
+    web_page.page(f"https://doi.org/{JCTC_DOI}", get=get)
+    assert len(calls) == n, "both answers are kept"
+
+
+def test_without_crossref_the_openalex_words_lose_their_leading_abstract(web):
+    pages, _, get = web
+    pages[openalex_url(JCTC_DOI)] = Response("x", 200, {}, json.dumps(JCTC["openalex"]).encode())
+    answer = web_page.page(f"https://doi.org/{JCTC_DOI}", get=get)  # Crossref unreachable
+    assert answer["abstract_html"].startswith("<p>We develop a first-principles") and answer["abstract"].startswith("We develop")
+    assert answer["paper"]["journal"] == "Journal of Chemical Theory and Computation"
+
+
+@pytest.mark.parametrize("jats, expected", [
+    ("<jats:title>Abstract</jats:title><jats:p>CO<jats:sub>2</jats:sub> on Cu<jats:sup>+</jats:sup> is "
+     "<jats:italic>fast</jats:italic>.</jats:p>", "<p>CO<sub>2</sub> on Cu<sup>+</sup> is <i>fast</i>.</p>"),
+    ("<jats:sec><jats:title>Background</jats:title><jats:p>One.</jats:p></jats:sec>"
+     "<jats:sec><jats:title>Results:</jats:title><jats:p>Two\n   lines &amp; more.</jats:p></jats:sec>",
+     "<h3>Background</h3><p>One.</p><h3>Results:</h3><p>Two lines &amp; more.</p>"),
+    ("Abstract We study <b onclick='x()'>bold</b> things.", "<p>We study <b>bold</b> things.</p>"),
+    ("Abstract reasoning is hard.", "<p>Abstract reasoning is hard.</p>"),
+    ("<p>First.</p><p>Second <jats:inline-formula><mml:math><mml:mi>x</mml:mi></mml:math></jats:inline-formula>.</p>",
+     "<p>First.</p><p>Second x.</p>"),
+    ("<jats:list><jats:list-item><jats:p>a</jats:p></jats:list-item><jats:list-item>b</jats:list-item></jats:list>",
+     "<ul><li>a</li><li>b</li></ul>"),
+    ("<jats:p>&lt;script&gt;alert(1)&lt;/script&gt;</jats:p>", "<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>"),
+    ("", ""),
+])
+def test_jats_abstracts_become_clean_paragraphs(jats, expected):
+    assert web_page.jats_html(jats) == expected
+
+
+def test_a_paper_with_volume_pages_and_a_free_copy():
+    work = {**WORK_CLOSED, "publication_date": "2026-03-05", "publication_year": 2026,
+            "biblio": {"volume": "12", "issue": "3", "first_page": "101", "last_page": "118"},
+            "open_access": {"is_oa": True, "oa_url": "https://repo.example/paper.pdf"},
+            "primary_location": {"source": {"display_name": "ACS Nano"}}}
+    answer = web_page._landing("u", DOI, work, None, "<p>Text.</p>")
+    assert answer["paper"]["published"] == "5 Mar 2026" and answer["paper"]["pages"] == "101-118"
+    assert answer["paper"]["citation"] == f"A. Author, B. Author. {WORK_CLOSED['title']}. ACS Nano 2026, 12 (3), 101-118. https://doi.org/{DOI}"
+    assert answer["links"][1] == {"label": "PDF", "url": "https://repo.example/paper.pdf", "kind": "pdf"}
+
+
+def test_journal_and_date_fall_back_to_crossref():
+    record = {"container-title": ["Journal of Chemical Theory\nand Computation"], "published": {"date-parts": [[2026, 10]]}}
+    assert web_page.journal_of({}, record) == "Journal of Chemical Theory and Computation"
+    assert web_page.published_of({}, record) == "Oct 2026"
+    assert web_page.published_of({"publication_year": 2025}, None) == "2025"
 
 
 def test_openalex_away_falls_back_to_the_publisher(web):
@@ -246,3 +330,307 @@ def test_pdf_file_for_a_doi_in_the_library_is_the_library_file(web, monkeypatch,
     monkeypatch.setattr(web_page, "library_pdf", lambda doi, **kwargs: ("ATTA1234", "t"))
     monkeypatch.setattr(pdf_route, "resolve", lambda key: mine)
     assert web_page.pdf_file(f"https://doi.org/{DOI}", get=get) == mine and not calls
+
+
+# --- a cleaner reader view (2026-10-29) ----------------------------------------------------------------------------
+
+ARXIV_ABS = (Path(__file__).parent / "fixtures" / "web_page" / "arxiv-abs-2607.25690.html").read_bytes()
+CHROME = ["Condensed Matter &gt; Mesoscale", "View a PDF of the paper", "View PDF", "HTML (experimental)",
+          "Submission history", "Full-text links", "Current browse context", "References &amp; Citations",
+          "Loading...", "Toggle", "(What is", "Bookmark", "Cite as", "Change to browse by",
+          "Which authors of this paper", "Disable MathJax", "F\\'elisaz", "Title:", "Authors:", "Abstract:"]
+
+
+def test_a_page_without_an_article_loses_its_chrome_and_keeps_its_text():
+    """The real arXiv abstract page (fetched once, 2026-10-28): no <article> or <main>, so the whole body is read and
+    the menus, toggles, link lists and labels around the abstract have to go structurally."""
+    read = web_page.reader("https://arxiv.org/abs/2607.25690", ARXIV_ABS, "text/html; charset=utf-8")
+    body = read["html"]
+    for phrase in CHROME:
+        assert phrase not in body, phrase
+    assert read["title"] == "First-Principles Wannier Representation of Proximity Effects"
+    assert "First-Principles Wannier Representation" not in body, "the title shows once, in the header"
+    assert read["byline"] == "Yaroslav Zhumagulov, Johan Félisaz, Stepan S. Tsirkin, Denis Kochan, Oleg V. Yazyev"
+    assert "Proximity effects in layered heterostructures" in body and "correlated-phase calculations." in body
+    assert '<h2 class="sbw-reader-label">Abstract</h2><p>Proximity effects' in body, "a small label, not a blockquote"
+    assert "<blockquote>" not in body
+    assert "Mesoscale and Nanoscale Physics (cond-mat.mes-hall)" in body, "the subjects row is content"
+
+
+BLOG = """<header><a href="/">Home</a> <a href="/about">About</a></header>
+<article><h1>Voles of the northern meadows</h1>
+<p>By Ana Field</p>
+<p>Field voles dig shallow runways under the grass, and in a wet spring those runways flood within hours.</p>
+<p>See <a href="/maps">the maps</a>.</p>
+<ul><li><a href="/a">One study</a></li><li><a href="/b">Another study</a></li></ul>
+<p>Toggle the layers on the map to compare the two winters; the difference is clearest along the river.</p>
+<p>Loading the burrows by hand took us three seasons, and the counts below are the result of that work.</p>
+</article>"""
+
+
+def test_an_article_keeps_every_paragraph():
+    read = web_page.reader("https://blog.example/voles", f"<html><head><title>Voles of the northern meadows</title></head><body>{BLOG}</body></html>".encode())
+    body = read["html"]
+    for kept in ["By Ana Field", "Field voles dig", '<a href="https://blog.example/maps">the maps</a>', "One study",
+                 "Another study", "Toggle the layers", "Loading the burrows"]:
+        assert kept in body, kept
+    assert "Voles of the northern meadows" not in body, "the heading repeating the title goes"
+
+
+def test_a_page_without_an_article_keeps_its_paragraphs_and_drops_link_lists():
+    page = ("<div class=menu><a href=/a>Alpha</a> | <a href=/b>Beta</a> | <a href=/c>Gamma</a></div>"
+            "<div class=post><h2>Winter counts</h2><div>Read Later</div>"
+            "<div>Field voles dig shallow runways under the grass, and in a wet spring those runways flood.</div>"
+            "<p>See <a href='/maps'>the maps</a> for where we counted, and the table for how many we found.</p>"
+            "<p>Toggle the layers on the map to compare the two winters; the river shows it most clearly.</p>"
+            "<p>" + "We counted every burrow along the transects twice, once in each winter. " * 3 + "</p><div>Read Later</div></div>"
+            "<div><ul><li><a href=/x>Privacy</a></li><li><a href=/y>Terms</a></li><li><a href=/z>Contact</a></li></ul></div>")
+    read = web_page.reader("https://blog.example/c", f"<html><body>{page}</body></html>".encode())
+    body = read["html"]
+    for kept in ["Winter counts", "Field voles dig", "the maps", "Toggle the layers", "We counted every burrow"]:
+        assert kept in body, kept
+    for gone in ["Alpha", "Privacy", "Terms", "Read Later"]:  # a short line repeated is a button's label
+        assert gone not in body, gone
+    assert "<p>Field voles dig" in body, "loose text in a div becomes its own paragraph"
+
+
+def test_money_is_not_math_but_mathml_is():
+    prices = "<article><p>" + "Tickets cost $5 and $10 at the door, and the late show is cheaper on weekdays. " * 4 + "</p></article>"
+    read = web_page.reader("https://shop.example/", f"<html><body>{prices}</body></html>".encode())
+    assert "$5 and $10" in read["html"] and not read.get("math")
+    formula = ('<article><p>' + "The energy of the state follows from the equation below, as derived above. " * 3 +
+               '<math alttext="E=mc^{2}" display="inline"><mi>E</mi><annotation encoding="application/x-tex">E=mc^{2}'
+               '</annotation></math> holds.</p></article>')
+    read = web_page.reader("https://physics.example/", f"<html><body>{formula}</body></html>".encode())
+    assert "$E=mc^{2}$ holds." in read["html"] and read["math"] is True
+
+
+def test_a_byline_of_last_first_names_reads_first_last():
+    def byline(*authors):
+        metas = "".join(f'<meta name="citation_author" content="{a}">' for a in authors)
+        return web_page.reader("https://x.example/", f"<html><head>{metas}</head><body><article>{ARTICLE}</article></body></html>".encode())["byline"]
+    assert byline("Curie, Marie", "Bohr, Niels") == "Marie Curie, Niels Bohr"
+    assert byline("Marie Curie", "Bohr, Niels") == "Marie Curie, Bohr, Niels", "flipped only when every name has one comma"
+    assert byline(*[f"Last{i}, First{i}" for i in range(8)]) == ", ".join(f"First{i} Last{i}" for i in range(6)) + " et al."
+
+
+def test_a_title_with_the_site_name_still_counts_as_repeated():
+    """Quanta (2026-10-29): <title> "Story | Quanta Magazine", and the story's name twice at the top of its text."""
+    head = '<title>How Spiders Spin Silk | Field Notes</title><meta property="og:site_name" content="Field Notes">'
+    page = f"<html><head>{head}</head><body><main><p>How Spiders Spin Silk</p><h1>How Spiders Spin Silk</h1>{ARTICLE}</main></body></html>"
+    read = web_page.reader("https://notes.example/silk", page.encode())
+    assert read["title"] == "How Spiders Spin Silk", "the site's name is not part of the title"
+    assert "How Spiders Spin Silk" not in read["html"]
+
+
+FAKE_PDF_URL = "https://repository.example/item/1"
+REAL_PDF_URL = "https://repository.example/download/2"
+
+
+def _copies(*urls):
+    locations = [{"is_oa": True, "pdf_url": u, "version": "submittedVersion", "source": {"display_name": "A repository"}} for u in urls]
+    return {"title": "A paper", "abstract_inverted_index": {"We": [0], "show": [1], "it": [2]}, "locations": locations}
+
+
+def test_a_listed_pdf_that_is_a_web_page_falls_back_to_the_abstract(web):
+    pages, _calls, get = web
+    pages[openalex_url(DOI)] = Response("x", 200, {}, json.dumps(_copies(FAKE_PDF_URL)).encode())
+    pages[FAKE_PDF_URL] = Response(FAKE_PDF_URL, 200, {"content-type": "text/html"}, b"<html>landing page</html>")
+    answer = web_page.page(f"https://doi.org/{DOI}", get=get)
+    assert answer["mode"] == "reader" and answer["source"] == "openalex" and "We show it" in answer["abstract"]
+
+
+def test_a_blocked_copy_gives_way_to_the_next_one_that_is_a_pdf(web):
+    pages, _calls, get = web
+    pages[openalex_url(DOI)] = Response("x", 200, {}, json.dumps(_copies(FAKE_PDF_URL, REAL_PDF_URL)).encode())
+    pages[FAKE_PDF_URL] = Response(FAKE_PDF_URL, 403, {"content-type": "text/html"}, b"Forbidden")
+    pages[REAL_PDF_URL] = Response(REAL_PDF_URL, 200, {"content-type": "application/pdf"}, b"%PDF-1.7 ...")
+    answer = web_page.page(f"https://doi.org/{DOI}", get=get)
+    assert answer["mode"] == "pdf" and answer["url"] == REAL_PDF_URL
+
+
+def test_a_publisher_pdf_link_that_serves_a_web_page_falls_back_to_the_abstract(web):
+    """The link says .pdf, the site answers with its sign-in wall: PDF.js would fail on it."""
+    pages, _calls, get = web
+    wall = "https://publisher.example/doi/10.1/x.pdf"
+    pages[openalex_url(DOI)] = Response("x", 200, {}, json.dumps(_copies(wall)).encode())
+    pages[wall] = Response(wall, 200, {"content-type": "text/html"}, b"<html>Sign in to read</html>")
+    answer = web_page.page(f"https://doi.org/{DOI}", get=get)
+    assert answer["mode"] == "reader" and "We show it" in answer["abstract"]
+
+
+def test_a_pdf_link_refused_by_its_site_gives_way_to_the_next_copy(web):
+    pages, _calls, get = web
+    refused, real = "https://publisher.example/x.pdf", "https://repository.example/y.pdf"
+    pages[openalex_url(DOI)] = Response("x", 200, {}, json.dumps(_copies(refused, real)).encode())
+    pages[refused] = Response(refused, 403, {"content-type": "text/html"}, b"Forbidden")
+    pages[real] = Response(real, 200, {"content-type": "application/pdf"}, b"%PDF-1.7 ...")
+    answer = web_page.page(f"https://doi.org/{DOI}", get=get)
+    assert answer["mode"] == "pdf" and answer["url"] == real
+
+
+def test_a_pdf_link_that_cannot_be_reached_now_is_still_taken_at_its_word(web):
+    """Nothing says it is not a PDF; the reader's own request may get through, and /web/pdf answers 415 if not."""
+    pages, _calls, get = web
+    away = "https://repository.example/away.pdf"
+    pages[openalex_url(DOI)] = Response("x", 200, {}, json.dumps(_copies(away)).encode())
+    answer = web_page.page(f"https://doi.org/{DOI}", get=get)
+    assert answer["mode"] == "pdf" and answer["url"] == away
+
+
+def test_arxiv_stays_trusted_without_a_request(web):
+    pages, calls, get = web
+    pages[openalex_url(DOI)] = Response("x", 200, {}, json.dumps(WORK_GREEN).encode())
+    answer = web_page.page(f"https://doi.org/{DOI}", get=get)
+    assert answer["mode"] == "pdf" and "https://arxiv.org/pdf/2301.06171" not in calls
+
+
+def test_at_most_three_listed_copies_are_tried(web):
+    pages, calls, get = web
+    urls = [f"https://repository.example/item/{n}" for n in range(5)]
+    pages[openalex_url(DOI)] = Response("x", 200, {}, json.dumps(_copies(*urls)).encode())
+    for url in urls[:4]:
+        pages[url] = Response(url, 200, {"content-type": "text/html"}, b"<html>landing page</html>")
+    pages[urls[4]] = Response(urls[4], 200, {"content-type": "application/pdf"}, b"%PDF-1.7 ...")
+    answer = web_page.page(f"https://doi.org/{DOI}", get=get)
+    assert answer["mode"] == "reader"
+    assert [u for u in calls if u in urls] == urls[:3]
+
+
+def test_an_equation_table_becomes_display_math_with_its_number():
+    words = "Words about the method go here, enough to keep as text. " * 8
+    page = (f"<article><p>{words}</p>"
+            '<table class="ltx_equation ltx_eqn_table"><tbody><tr class="ltx_equation ltx_eqn_row"><td class="ltx_eqn_cell"></td>'
+            '<td class="ltx_eqn_cell"><math alttext="a=b\\\\\n=c" display="block"><mi>a</mi></math></td>'
+            '<td class="ltx_eqn_cell ltx_eqn_eqno"><span class="ltx_tag">(15)</span></td></tr></tbody></table>'
+            '<p>And <math alttext="x" display="inline"><mi>x</mi></math> follows.</p>'
+            '<table><tr><td>Plain</td><td>table</td></tr></table></article>')
+    read = web_page.reader("https://arxiv.org/html/1", f"<html><body>{page}</body></html>".encode())
+    assert "<p>$$a=b\\\\ =c$$ (15)</p>" in read["html"], "one line, display, with its number"
+    assert "$x$ follows" in read["html"]
+    assert read["html"].count("<table>") == 1, "an ordinary table stays a table"
+    assert read["math"] is True
+
+
+def _latexml(body: str):
+    words = "Words about the method go here, enough to keep as text. " * 8
+    return web_page.reader("https://arxiv.org/html/1", f"<html><body><article><p>{words}</p>{body}</article></body></html>".encode())["html"]
+
+
+def test_a_preamble_latexml_could_not_convert_goes_whole():
+    macro = lambda name: f'<span class="ltx_ERROR undefined">\\{name}</span>'
+    html = _latexml(f'<div>{macro("labname")}<p>Some Lab {macro("labshort")}SL {macro("school")}XYZ {macro("site")}example.org</p></div>')
+    assert "labname" not in html and "Some Lab" not in html and "example.org" not in html
+
+
+def test_a_macro_in_a_sentence_goes_and_the_sentence_stays():
+    html = _latexml('<p>Seven tiers (<span class="ltx_ERROR undefined">\\cref</span>sch:tiers) follow, with <span class="ltx_ERROR undefined">\\mybold</span>care.</p>')
+    assert "<p>Seven tiers follow, with care.</p>" in html
+    assert "\x02" not in html and "\x03" not in html
+
+
+def test_a_figure_whose_picture_did_not_convert_keeps_its_caption_and_says_so():
+    html = _latexml('<figure class="ltx_float"><span class="ltx_ERROR undefined">{tikzpicture}</span><p>[ tier/.style=ddnode ] '
+                    '<span class="ltx_ERROR undefined">\\node</span>[fill=DDNavy!9] (t1) Tier 1</p>'
+                    '<figcaption>Scheme 1: the seven tiers.</figcaption></figure><p>Text after the figure.</p>')
+    assert "ddnode" not in html and "tikzpicture" not in html and "DDNavy" not in html
+    assert web_page.FIGURE_NOT_DRAWN in html
+    assert "Scheme 1: the seven tiers." in html and "Text after the figure." in html
+
+
+def test_a_colour_name_does_not_run_into_the_words_after_it():
+    html = _latexml('<div><span class="ltx_ERROR undefined">\\color</span> <p><span class="ltx_text">DDNavyGenerate credible structures.</span></p></div>')
+    assert "<p>Generate credible structures.</p>" in html
+
+
+def test_a_figure_keeps_its_picture_with_an_absolute_address():
+    read = web_page.reader("https://arxiv.org/html/2608.23130v2", (
+        "<html><body><article><p>" + "Words about the method go here, enough to keep as text. " * 8 + "</p>"
+        '<figure id="S3.F1" class="ltx_figure"><img src="2608.23130v2/Figure1.png" class="ltx_graphics" width="357" height="339" '
+        'alt="Refer to caption"><figcaption>Figure 1: the clusters.</figcaption></figure></article></body></html>').encode())
+    assert ('<figure><img src="https://arxiv.org/html/2608.23130v2/Figure1.png" alt="Refer to caption" width="357" height="339">'
+            "<figcaption>Figure 1: the clusters.</figcaption></figure>") in read["html"]
+
+
+def test_a_picture_with_no_caption_survives_a_page_without_an_article():
+    words = "<p>" + "A paragraph of the story with enough words to count as text. " * 6 + "</p>"
+    read = web_page.reader("https://blog.example/post/one", (
+        f'<html><body>{words}<div><img src="/media/plot.png" alt="A plot"></div>{words}</body></html>').encode())
+    assert '<img src="https://blog.example/media/plot.png" alt="A plot">' in read["html"]
+
+
+def test_pixels_icons_hidden_and_odd_pictures_go_and_a_lazy_one_takes_its_real_address():
+    words = "Words about the method go here, enough to keep as text. " * 8
+    read = web_page.reader("https://blog.example/post/", (
+        f"<html><body><article><p>{words}</p>"
+        '<img src="https://track.example/p.gif" width="1" height="1">'
+        '<img src="/icons/share.svg" width="24" height="24" alt="Share">'
+        '<img src="/hidden.png" hidden><img src="javascript:alert(1)"><img src="data:image/png;base64,AAAA" alt="inline">'
+        '<figure><img src="data:image/gif;base64,R0lGOD" data-src="figs/lazy.png" alt="Lazy"></figure>'
+        "</article></body></html>").encode())
+    html = read["html"]
+    assert "track.example" not in html and "share.svg" not in html and "hidden.png" not in html
+    assert "javascript" not in html and "base64" not in html
+    assert '<figure><img src="https://blog.example/post/figs/lazy.png" alt="Lazy"></figure>' in html
+
+
+def test_subfigures_close_in_order_and_a_tikz_panel_still_drops_its_source():
+    html = _latexml('<figure class="ltx_figure"><div class="ltx_flex_figure">'
+                    '<figure class="ltx_figure_panel"><img src="a.png" alt="a"></figure>'
+                    '<figure class="ltx_figure_panel"><span class="ltx_ERROR undefined">{tikzpicture}</span><p>\\node (t1) x</p></figure>'
+                    '</div><figcaption>Figure 2: two panels.</figcaption></figure><p>Text after the figure.</p>')
+    assert '<img src="https://arxiv.org/html/a.png" alt="a">' in html and "node (t1)" not in html
+    assert html.endswith("<p>Text after the figure.</p>"), "the text after the figure is not inside it"
+    assert html.count("<figure>") == html.count("</figure>")
+
+
+def test_an_svg_figure_in_an_object_becomes_a_picture_and_other_objects_still_go():
+    html = _latexml('<figure class="ltx_figure"><object type="image/svg+xml" data="2608.1/abs.svg" width="476" height="310">'
+                    'fallback text</object><figcaption>Figure 3: spectra.</figcaption></figure>'
+                    '<object type="application/x-shockwave-flash" data="game.swf">old plugin</object>')
+    assert '<figure><img src="https://arxiv.org/html/2608.1/abs.svg" alt="" width="476" height="310"><figcaption>' in html
+    assert "fallback text" not in html and "swf" not in html and "old plugin" not in html
+
+
+# --- ChemRxiv's Engage links: chemrxiv.org answers only browsers (Cloudflare), so the DOI comes from OpenAlex --------
+
+ENGAGE_ID = "66c9d14420ac769e5fb4ddd1"
+ENGAGE = f"https://chemrxiv.org/engage/chemrxiv/article-details/{ENGAGE_ID}"
+CHEMRXIV_DOI = "10.26434/chemrxiv-2024-wdv4b"
+
+
+def engage_lookup(url=ENGAGE):
+    return f"https://api.openalex.org/works?filter=locations.landing_page_url:{url}&select=doi"
+
+
+@pytest.mark.parametrize("url", [ENGAGE, f"https://www.chemrxiv.org/engage/chemrxiv/article-details/{ENGAGE_ID}?x=1",
+                                 f"{ENGAGE}/", f"https://chemrxiv.org/engage/api-gateway/chemrxiv/assets/orp/resource/item/{ENGAGE_ID}/original/x.pdf"])
+def test_engage_ids(url):
+    assert web_page.engage_id(url) == ENGAGE_ID
+
+
+def test_not_an_engage_link():
+    assert web_page.engage_id("https://chemrxiv.org/doi/full/10.26434/chemrxiv.15000484/v1") is None
+    assert web_page.engage_id(f"https://example.org/engage/chemrxiv/article-details/{ENGAGE_ID}") is None
+
+
+def test_an_engage_link_opens_as_its_paper_without_asking_chemrxiv(web):
+    pages, calls, get = web
+    pages[engage_lookup()] = Response("x", 200, {}, json.dumps({"results": [{"doi": f"https://doi.org/{CHEMRXIV_DOI}"}]}).encode())
+    pages[openalex_url(CHEMRXIV_DOI)] = Response("x", 200, {}, json.dumps(WORK_CLOSED).encode())
+    answer = web_page.page(ENGAGE, get=get)
+    assert answer["mode"] == "reader" and answer["source"] == "openalex"
+    assert answer["paper"]["doi"] == CHEMRXIV_DOI
+    assert not any("chemrxiv.org" in urllib.parse.urlparse(c).netloc for c in calls)
+    # the DOI is remembered: a second open asks OpenAlex for the work only (itself kept a day)
+    calls.clear()
+    web_page.page(ENGAGE, get=get)
+    assert engage_lookup() not in calls
+
+
+def test_an_engage_link_openalex_does_not_know_still_says_why(web):
+    pages, _, get = web
+    pages[engage_lookup()] = Response("x", 200, {}, json.dumps({"results": []}).encode())
+    pages[ENGAGE] = Response(ENGAGE, 403, {"cf-mitigated": "challenge", "server": "cloudflare"}, b"")
+    answer = web_page.page(ENGAGE, get=get)
+    assert answer["mode"] == "blocked" and answer["reason"] == web_page.BOT

@@ -86,6 +86,7 @@ export function routes() {
     { method: 'POST', path: '/conversations', call: (svc, { mode, project }) => svc.conversations.create(mode, project ? { project } : undefined) },
     { method: 'POST', path: '/conversations/rename', call: (svc, { id, title }) => svc.conversations.rename(id, title) },
     { method: 'POST', path: '/conversations/seen', call: async (svc, { id }) => { await svc.conversations.markSeen(id); return { ok: true }; } },
+    { method: 'POST', path: '/conversations/viewed', call: async (svc, { id, rows }) => { await svc.conversations.markViewed(id, Array.isArray(rows) ? rows : []); return { ok: true }; } },
     { method: 'DELETE', path: '/conversations', call: (svc, { id }) => svc.conversations.remove(id) },
     { method: 'POST', path: '/conversations/cancel', call: async (svc, { id }) => { await svc.conversations.cancel(id); return { ok: true }; } },
     { method: 'GET', path: '/conversations/cursor', call: (svc, { id }) => svc.conversations.cursor(id) },
@@ -171,6 +172,7 @@ export function routes() {
     { method: 'POST', path: '/routines', call: (svc, body) => svc.routines.create(body) },
     { method: 'POST', path: '/routines/update', call: (svc, { id, patch }) => svc.routines.update(id, patch ?? {}) },
     { method: 'POST', path: '/routines/run', call: (svc, { id }) => svc.routines.runNow(id) },
+    { method: 'POST', path: '/routines/redo', call: (svc, { id }) => svc.routines.redo(id) },
     { method: 'POST', path: '/routines/pause', call: (svc, { id }) => svc.routines.pause(id) },
     { method: 'POST', path: '/routines/resume', call: (svc, { id }) => svc.routines.resume(id) },
     { method: 'POST', path: '/routines/archive', call: (svc, { id }) => svc.routines.archive(id) },
@@ -190,6 +192,13 @@ export function routes() {
     { method: 'POST', path: '/radar/forget', call: (svc, { routineId, text }) => svc.radar.forgetTopic(routineId, text) },
     { method: 'POST', path: '/radar/verdicts', call: (svc, { routineId }) => svc.radar.verdicts(routineId) },
     { method: 'POST', path: '/radar/feedback', call: (svc, { routineId, paperKey, verdict }) => svc.radar.feedback(routineId, paperKey, verdict) },
+    { method: 'POST', path: '/papers/access', call: (svc, { papers }) => svc.papers.access(papers) },
+    { method: 'POST', path: '/papers/text-cache', call: (svc, { clear }) => svc.papers.textCache({ clear: Boolean(clear) }) },
+    { method: 'POST', path: '/papers/keep', call: (svc, { paper }) => svc.papers.keep(paper ?? {}) },
+    { method: 'GET', path: '/reading-list', call: (svc) => svc.readingList.list() },
+    { method: 'POST', path: '/reading-list/add', call: (svc, { paper }) => svc.readingList.add(paper) },
+    { method: 'POST', path: '/reading-list/remove', call: (svc, { id }) => svc.readingList.remove(id) },
+    { method: 'POST', path: '/reading-list/read', call: (svc, { id, read }) => svc.readingList.markRead(id, read !== false) },
     { method: 'POST', path: '/scholarly/search', call: (svc, { query, perSource }) => svc.scholarly.search(query, perSource) },
     { method: 'GET', path: '/mcp-servers', call: (svc) => svc.mcp.list() },
     { method: 'POST', path: '/mcp-servers', call: (svc, body) => svc.mcp.save(body) },
@@ -351,16 +360,18 @@ async function main() {
   const secret = process.env.SECOND_BRAIN_AGENTD_SECRET;
   if (!secret) { console.error('SECOND_BRAIN_AGENTD_SECRET is required (set by the Python supervisor)'); process.exit(1); }
 
-  const platform = createNodePlatform({ homeDir: process.env.HOME ?? '' });
-  const library = createHttpLibraryBackend(platform.fetch, { baseUrl: kbBaseUrl, token: process.env.SECOND_BRAIN_KB_TOKEN ?? null });
+  const platform = createNodePlatform();  // home from os.homedir(): Windows sets USERPROFILE, not HOME
+  const library = createHttpLibraryBackend(platform.fetch, { baseUrl: kbBaseUrl, token: process.env.SECOND_BRAIN_KB_TOKEN ?? null, slowFetch: /** @type {typeof fetch} */ (/** @type {unknown} */ (platform.slowFetch)) });
   // T6.2: the one persisted settings.json under `dataDir` (settings.js) is what createLocalRuntime's own
   // internal store reads and writes from here on; this one read just seeds the gateway's McpHub with whatever
   // servers were already saved, so they're connected on this very startup, not just the next one.
   // with the secret store, so a saved key (a Valency token) reaches the hub; without it every restart connected keyless (401)
   const saved = await createSettingsStore(platform.fs, dataDir, { secrets: createSecretStore(platform, dataDir) }).get();
-  const gatewaySettings = { scholarly: ['openalex', 'arxiv', 'crossref', 'europepmc'], mcpUrl: /** @type {string | undefined} */ (undefined), spawn: platform.spawn, mcp: saved.mcp };
+  const gatewaySettings = { scholarly: ['openalex', 'arxiv', 'crossref', 'europepmc'], mcpUrl: /** @type {string | undefined} */ (undefined), spawn: platform.spawn, mcp: saved.mcp,
+    // spec 031 R7: read_paper asks Unpaywall with the email in Settings, read fresh on each call
+    paperEmail: async () => (await createSettingsStore(platform.fs, dataDir).get()).papers?.email ?? null };
   const gateway = await createToolGateway(platform.fetch, library, gatewaySettings);
-  const providers = createProviders(platform, { dataDir, home: process.env.HOME ?? '', codex: { binaryPath: process.env.CODEX_BINARY ?? null } });
+  const providers = createProviders(platform, { dataDir, home: platform.homeDir, codex: { binaryPath: process.env.CODEX_BINARY ?? null } });
   const notes = createHttpNoteSink(platform.fetch, { baseUrl: kbBaseUrl });
   // No getRoleModel override: it now defaults (core.js) to the same settings.json, read live on every turn, so
   // providers.setRole takes effect on the very next message with no restart (criterion 10).

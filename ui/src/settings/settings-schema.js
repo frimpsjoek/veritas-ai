@@ -16,7 +16,7 @@
  *   id: string, section: string, label: string, help: string, kind: RowKind, hosts: SettingsHost[],
  *   advanced?: boolean, store: "prefs" | "engine" | "none", key?: string,
  *   options?: [string, string][], numeric?: boolean, nullable?: boolean, min?: number, max?: number, scale?: number, unit?: string,
- *   def?: unknown, needs?: "linksInside", custom?: string, action?: string, when?: "desktop" | "mobile", placeholder?: string, buttonLabel?: string, keywords?: string,
+ *   def?: unknown, needs?: "linksInside" | "addToLibrary", custom?: string, action?: string, when?: "desktop" | "mobile", placeholder?: string, buttonLabel?: string, keywords?: string,
  * }} SettingsRow */
 /** @typedef {{ id: string, label: string, icon: string, lead?: string }} SettingsSection */
 
@@ -24,7 +24,7 @@
 export const SECTIONS = [
   { id: 'general', label: 'General', icon: 'settingsGeneral' },
   { id: 'models', label: 'Models', icon: 'settingsModels' },
-  { id: 'mac', label: 'On this Mac', icon: 'settingsMac' },
+  { id: 'mac', label: 'On this computer', icon: 'settingsMac' },
   { id: 'research', label: 'Research', icon: 'settingsResearch' },
   { id: 'papers', label: 'Finding papers', icon: 'settingsPapers' },
   { id: 'radar', label: 'Reading radar', icon: 'settingsRadar' },
@@ -70,12 +70,14 @@ export const ROWS = [
   // ------------------------------------------------------------------ Models (models-widget.js draws it whole)
   { id: 'models.main', section: 'models', label: '', help: '', kind: 'custom', hosts: ALL, store: 'none', custom: 'models', keywords: 'models default model per task effort claude codex sonnet opus haiku provider cloud service endpoint openrouter lm studio add model id answer with menu' },
 
-  // ------------------------------------------------------------------ On this Mac
+  // ------------------------------------------------------------------ On this computer (local models; how scans are read)
   { id: 'mac.scanDirs', section: 'mac', label: 'Folders to look for models in', help: 'One folder per line. Models are found live, so adding one here is enough.', kind: 'lines', hosts: ALL, store: 'engine', key: 'local.scanDirs' },
   { id: 'mac.idleMinutes', section: 'mac', label: 'Stop an idle model after', help: 'Minutes without a question. The model opens again on the next one. Stopping it frees the memory it uses.', kind: 'number', hosts: ALL, store: 'engine', key: 'local.idleMinutes', min: 1, def: 5, unit: 'minutes' },
   { id: 'mac.allowReports', section: 'mac', label: 'Allow local models for reports', help: 'Not recommended. In tests a small model made up numbers and looped on long reports. Reports are written by Codex or Claude Code unless you turn this on.', kind: 'toggle', hosts: ALL, store: 'engine', key: 'local.allowReports', def: false },
   { id: 'mac.python', section: 'mac', label: 'Python for local models', help: 'Leave empty to use the arm64 environment Veritas set up. Only change it if you moved that environment.', kind: 'text', hosts: ALL, store: 'engine', key: 'local.python', nullable: true, advanced: true, def: null, placeholder: 'Automatic' },
+  { id: 'mac.ocr', section: 'mac', label: 'Reading scans and images', help: '', kind: 'custom', hosts: WEB, store: 'none', custom: 'ocrEngine', keywords: 'ocr text recognition scan image tesseract vision' },
   { id: 'mac.external', section: 'mac', label: 'Use models from other apps', help: 'Also offer models that other apps on this Mac already downloaded.', kind: 'toggle', hosts: ALL, store: 'engine', key: 'local.external', advanced: true, def: true },
+  { id: 'mac.signOutSites', section: 'mac', label: 'Sign out of sites', help: 'Clears the sign-ins, cookies and site data of Browse, the publishers\' pages in this app. Your library, notes and settings stay.', kind: 'action', hosts: WEB, store: 'none', action: 'signOutSites', buttonLabel: 'Sign out of sites', keywords: 'browse cookies institution login logout' },
 
   // ------------------------------------------------------------------ Research
   { id: 'research.web', section: 'research', label: 'Search the web', help: 'A change here applies to new messages, with nothing to restart.', kind: 'select', hosts: ALL, store: 'engine', key: 'webSearchDefault', def: 'off',
@@ -92,12 +94,16 @@ export const ROWS = [
 
   // ------------------------------------------------------------------ Finding papers
   { id: 'papers.email', section: 'papers', label: 'Email', help: 'Unpaywall asks for a real address you read, as its terms request. It also makes Crossref faster. It stays on this computer.', kind: 'text', hosts: ZOTERO, store: 'prefs', key: 'email', placeholder: 'you@university.edu', keywords: 'unpaywall crossref' },
+  // spec 031 D3: the same email for the engine's free-copy finder, where there is no Zotero pref (Zotero copies its own over)
+  { id: 'papers.engineEmail', section: 'papers', label: 'Email', help: 'Unpaywall asks for a real address you read, as its terms request. It finds free copies of papers so reports can read them in full. It stays on this computer.', kind: 'text', hosts: ['obsidian', 'web'], store: 'engine', key: 'papers.email', nullable: true, def: null, placeholder: 'you@university.edu', keywords: 'unpaywall email free open access pdf' },
+  { id: 'papers.textCache', section: 'papers', label: 'Saved paper text', help: 'Reports read free copies of papers they find online and keep only the text (up to 2 GB, oldest out first), so a paper is downloaded once. The PDFs are not kept.', kind: 'action', hosts: ALL, store: 'none', action: 'clearPaperText', buttonLabel: 'Clear', keywords: 'cache free copies open access pdf text clear' },
   { id: 'papers.openalex', section: 'papers', label: 'OpenAlex API key', help: 'OpenAlex limits how much anyone can search without a key. A free key from openalex.org removes the limit, for every app.', kind: 'custom', hosts: ALL, store: 'none', custom: 'openalexKey', keywords: 'openalex key api limit' },
   { id: 'papers.unpaywall', section: 'papers', label: 'Unpaywall API key', help: 'Optional. Leave empty to use your email instead. If it says "Invalid api_key", clear it.', kind: 'password', hosts: ZOTERO, store: 'prefs', key: 'unpaywallKey', placeholder: 'api_key' },
   { id: 'papers.s2', section: 'papers', label: 'Semantic Scholar API key', help: 'Free. Without a key it often says "too many requests". Request one at semanticscholar.org/product/api.', kind: 'password', hosts: ZOTERO, store: 'prefs', key: 'semanticScholarKey', placeholder: 'x-api-key' },
   { id: 'papers.test', section: 'papers', label: 'Test keys', help: 'Each service should say "works". Nothing here is required: without keys the PDF finder still tries arXiv, Semantic Scholar and Europe PMC.', kind: 'action', hosts: ZOTERO, store: 'none', action: 'testKeys', buttonLabel: 'Test keys' },
 
   // ------------------------------------------------------------------ Reading radar and routines (web: moved here from the sidebar)
+  { id: 'radar.likeToZotero', section: 'radar', label: 'Add liked papers to Zotero', help: 'A like always teaches the radar to show more like it. With this on, the paper is also added to Zotero, tagged Liked, in a collection called To classify where it waits for you to file it.', kind: 'toggle', hosts: ['web', 'zotero'], needs: 'addToLibrary', store: 'prefs', key: 'likeToZotero', def: false, keywords: 'like thumbs up zotero collection tag classify' },
   { id: 'radar.setup', section: 'radar', label: '', help: '', kind: 'custom', hosts: WEB, store: 'none', custom: 'radarSetup', keywords: 'radar reading new papers seeds my papers journals feeds arxiv sources topics authors daily' },
   { id: 'routines.list', section: 'routines', label: 'Your routines', help: 'Reports and watches that run on a schedule, and the reading radar. Open one to change it, run it now or pause it.', kind: 'custom', hosts: WEB, store: 'none', custom: 'routinesList', keywords: 'routines schedule watch digest daily weekly report automation' },
 
@@ -127,11 +133,21 @@ export const ROWS = [
   { id: 'server.phone', section: 'server', label: 'Use on your phone', help: 'Opens Veritas on your phone, already signed in.', kind: 'custom', hosts: ['web', 'obsidian'], store: 'none', custom: 'phone', keywords: 'phone qr tailscale iphone' },
 
   // ------------------------------------------------------------------ About
+  // spec 033 R3: shown only in the desktop app (the web app draws it when the app's bridge is there)
+  { id: 'about.updates', section: 'about', label: 'Updates', help: 'Veritas checks for a new version every few hours, downloads it, and installs it when you have not used Veritas for 15 minutes; then it restarts. Off: it asks first.', kind: 'custom', hosts: WEB, store: 'none', custom: 'appUpdates', keywords: 'update automatic install version release' },
   { id: 'about.version', section: 'about', label: 'Version', help: 'The build you are running.', kind: 'custom', hosts: ALL, store: 'none', custom: 'version' },
   { id: 'about.update', section: 'about', label: 'Check for updates', help: 'Looks for a newer build now instead of waiting for the next check.', kind: 'action', hosts: ['zotero', 'obsidian'], store: 'none', action: 'checkUpdates', buttonLabel: 'Check now' },
   { id: 'about.logs', section: 'about', label: 'Logs folder', help: 'Where Veritas writes its logs, for when something goes wrong.', kind: 'action', hosts: ALL, store: 'none', action: 'openLogs', buttonLabel: 'Show' },
   { id: 'about.diagnostics', section: 'about', label: 'Copy diagnostics', help: 'Copies version and status details you can paste into a message. It contains no keys or notes.', kind: 'action', hosts: ALL, store: 'none', action: 'copyDiagnostics', buttonLabel: 'Copy' },
 ];
+
+/** The server's OCR engine (GET /status `ocr`, server/media.py) in one sentence, for On this computer (spec 024 G2).
+ *  @param {string | null | undefined} engine "vision", "tesseract" or none */
+export function ocrLine(engine) {
+  if (engine === 'vision') return 'Scanned pages and images are read on this computer with Apple Vision.';
+  if (engine === 'tesseract') return 'Scanned pages and images are read on this computer with Tesseract.';
+  return 'No text recognition here, so only PDFs with a text layer are searchable. Install Tesseract, restart Veritas and re-read images to search scans and images too.';
+}
 
 // ---------------------------------------------------------------------------------------- reading and writing
 

@@ -175,6 +175,32 @@ export async function runReportChecks(browser, port, outDir) {
       // the second claim rests only on a "not found" cell: nothing to show, so it opens nothing
       await page.locator('.sb-rp-evidence tr').nth(2).click().catch(() => {});
       check(`${tag}: a claim whose cells hold no quotes is not a link`, (await page.locator('.sb-rp-evidence tr.is-linked').count()) === 1, await page.locator('.sb-rp-evidence tr.is-linked').count());
+      // spec 030 R9: a claim resting on a paper outside the library names it by link, which opens through the host
+      const link = await page.evaluate(() => { const a = document.querySelector('.sb-rp-evidence .sb-rp-evidence-link'); return a ? { text: a.textContent, href: a.getAttribute('href') } : null; });
+      await page.locator('.sb-rp-evidence .sb-rp-evidence-link').first().click();
+      const opened = await page.evaluate(() => (window.__opened ?? []).map((o) => o.url));
+      check(`${tag} R9: an outside paper in the evidence is a link with its title and year, opened through the host`,
+        link?.text === 'Burrows under deep snow (2019)' && link.href === 'https://doi.org/10.9999/burrows' && opened.includes('https://doi.org/10.9999/burrows')
+        && (await page.locator('.sb-rp-evidence-cells').count()) === 0, { link, opened });
+      // spec 031 R5/R6: the papers outside the library: Get PDFs for all three, then what happened to each
+      const outside = page.locator('.sb-rp-outside');
+      const getAll = outside.locator('button', { hasText: 'Get PDFs for these 3' });
+      const before = { all: await getAll.count(), each: await outside.locator('.sb-rp-paper button', { hasText: 'Get PDF' }).count() };
+      await getAll.click();
+      await page.waitForSelector('.sb-rp-outside .sb-rp-got-line', { timeout: 4000 }).catch(() => {});
+      const after = await page.evaluate(() => ({
+        line: document.querySelector('.sb-rp-outside .sb-rp-got-line')?.textContent,
+        states: [...document.querySelectorAll('.sb-rp-outside .sb-rp-got')].map((n) => n.className.replace('sb-rp-got ', '')),
+        added: window.__sbRp.calls.filter((c) => c.kind === 'add-to-library').flatMap((c) => c.pdfs),
+        buttons: [...document.querySelectorAll('.sb-rp-outside .sb-rp-paper button')].map((b) => [b.textContent, b.disabled]),
+        page: document.querySelector('.sb-rp-outside .sb-rp-got-link')?.textContent,
+      }));
+      check(`${tag} R5/R6: Get PDFs for these 3 adds each with its free PDF when there is one, and says how it went`,
+        before.all === 1 && before.each === 3 && after.line === '1 with a free PDF · 1 needs the publisher’s page · 1 not found yet (Zotero keeps looking)'
+        && JSON.stringify(after.states) === '["is-pdf","is-publisher","is-searching"]' && JSON.stringify(after.added) === '["https://oa.example/10.9999%2Fopen.burrows.pdf",null,null]'
+        && after.buttons.every(([t, d]) => t === 'Saved' && d) && after.page === 'Open the publisher’s page', { before, after });
+      await page.locator('.sb-rp-outside').scrollIntoViewIfNeeded();
+      await page.screenshot({ path: join(outDir, `report-get-pdf-${tag.replace('/', '-')}.png`) });
       check(`${tag}: no page errors`, page.errors.length === 0, page.errors);
       await page.close();
     }

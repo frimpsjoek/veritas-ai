@@ -12,3 +12,5 @@ perf/history.jsonl
 perf/reports/
 perf/run.log
 perf/*.lock
+build/
+*.egg-info/

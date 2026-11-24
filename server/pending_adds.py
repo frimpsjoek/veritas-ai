@@ -4,9 +4,11 @@
                                           library: an online one directly (Web API), a local one through this queue
     tag_item(key, doi, title, tag)        the same for a tag edit (Read later)
     annotate(key, annotation)             a highlight made in the web reader, for the PDF attachment `key` (spec 014 G3)
+    attach_pdf(body, doi, title, url)     a publisher's PDF saved from a Browse tab (spec 027 G3), kept in data/pdf-inbox/
+                                          until the plugin has attached it (or the entry failed)
     pending()  done(ids)  attempt(id, message)   the queue the Zotero plugin drains
 
-Everything is queued first in data/web/pending-adds.json: [{id, at, kind: add | tag | collection | annotation, paper?,
+Everything is queued first in data/web/pending-adds.json: [{id, at, kind: add | tag | collection | annotation | attach, paper?,
 key?, doi?, title?, collection, tag, annotation?, done, attempts, failed?, message?}]. If Zotero runs, the plugin is then asked to
 apply those entries now through its own endpoint; Zotero's connector cannot do this (it saves nothing without a
 browser window). Otherwise the plugin applies the queue at its next start or poll. Zotero owns its database, so
@@ -87,7 +89,7 @@ def _queue_entry(kind: str, **fields) -> str:
         for e in queue:
             if e.get("done") or e.get("failed") or e["kind"] != kind or not _same(e, doi, title, fields.get("key")):
                 continue
-            if e.get("tag") == fields.get("tag") and e.get("collection") == fields.get("collection"):
+            if (e.get("tag"), e.get("collection"), e.get("collection_name")) == (fields.get("tag"), fields.get("collection"), fields.get("collection_name")):
                 return e["id"]
         entry = _entry(kind, **fields)
         queue.append(entry)
@@ -99,12 +101,22 @@ def pending() -> list[dict]:
     return [e for e in _load() if not e.get("done") and not e.get("failed")]
 
 
+def _drop_file(entry: dict) -> None:
+    """An attach entry's PDF is the server's copy only until the plugin has it, or the entry has failed."""
+    name = entry.get("file")
+    if entry.get("kind") == "attach" and isinstance(name, str) and FILE_NAME.match(name):
+        (inbox() / name).unlink(missing_ok=True)
+
+
 def done(ids: object) -> None:
     ids = {i for i in ids if isinstance(i, str)} if isinstance(ids, list) else set()
     with _lock:
         queue = _load()
         if any(e["id"] in ids for e in queue):
             _save([e for e in queue if e["id"] not in ids])
+            for e in queue:
+                if e["id"] in ids:
+                    _drop_file(e)
 
 
 def attempt(entry_id: str, message: str = "") -> dict | None:
@@ -118,6 +130,8 @@ def attempt(entry_id: str, message: str = "") -> dict | None:
                 if e["attempts"] >= MAX_ATTEMPTS:
                     e["failed"] = True
                 _save(queue)
+                if e.get("failed"):
+                    _drop_file(e)
                 return e
     return None
 
@@ -149,7 +163,8 @@ def apply_now(ids: list[str]) -> dict[str, dict]:
 def _outcome(entry_id: str, applied: dict[str, dict]) -> dict:
     result = applied.get(entry_id)
     if result and result.get("ok"):
-        return {"status": "added", "id": entry_id, **({"key": result["key"]} if result.get("key") else {})}
+        return {"status": "added", "id": entry_id, **({"key": result["key"]} if result.get("key") else {}),
+                **({"already": True} if result.get("already") else {})}
     return {"status": "queued", "id": entry_id}
 
 
@@ -196,8 +211,12 @@ def _add_online(account, papers: list, tag: str | None) -> list[dict]:
     return results
 
 
-def add_papers(papers: list, collection: str | None = None, tag: str | None = None) -> list[dict]:
+def add_papers(papers: list, collection: str | None = None, tag: str | None = None,
+               collection_name: str | None = None) -> list[dict]:
+    """`collection` is a local collection's key; `collection_name` a top-level collection the plugin finds by name or
+    makes ("To classify" for liked papers, spec 027 follow-up). Online libraries get the tag only."""
     collection = collection or None
+    collection_name = (collection_name or "").strip()[:200] or None
     tag = (tag or "").strip() or None
     account = default_account()
     if account is not None:  # local collection keys mean nothing online, so `collection` is not sent
@@ -208,7 +227,8 @@ def add_papers(papers: list, collection: str | None = None, tag: str | None = No
         if not isinstance(paper, dict) or not str(paper.get("title") or "").strip():
             results.append({"status": "failed", "message": "a paper needs a title"})
             continue
-        entry_id = _queue_entry("add", paper=paper, doi=paper.get("doi"), title=paper["title"], collection=collection, tag=tag)
+        extra = {"collection_name": collection_name} if collection_name else {}
+        entry_id = _queue_entry("add", paper=paper, doi=paper.get("doi"), title=paper["title"], collection=collection, tag=tag, **extra)
         ids.append(entry_id)
         results.append({"id": entry_id})
     applied = apply_now(ids)
@@ -301,3 +321,67 @@ def annotate(key: object, annotation: object) -> dict:
             _save(queue)
             entry_id = entry["id"]
     return _outcome(entry_id, apply_now([entry_id]))
+
+
+# ---------------------------------------------------------------- a publisher's PDF from a Browse tab (spec 027 G3)
+
+MAX_PDF = 200 * 1024 * 1024
+NOT_A_PDF = "The site sent a page, not the PDF (sign in first?)"
+LOCAL_ONLY = "Saving PDFs works with a local Zotero library for now"
+ENTRY_ID = re.compile(r"^[0-9a-f]{16}$")
+FILE_NAME = re.compile(r"^[0-9a-f]{16}\.pdf$")
+
+
+def inbox() -> Path:
+    """Beside the web app's folder, not in it: everything in WEB_DIR is served at /app/ without a token."""
+    return web_app.WEB_DIR.parent / "pdf-inbox"
+
+
+def attach_pdf(body: bytes, doi: object, title: object, url: object) -> dict:
+    """Keeps the PDF and queues it for the Zotero plugin, which attaches it to the paper's item (found by DOI, else by
+    title; made from the DOI's metadata when missing). {status: added | queued | failed, id?, key?, already?, message?}.
+    The same file for the same paper, saved twice, is queued once."""
+    if not body.startswith(b"%PDF-"):
+        return {"status": "failed", "message": NOT_A_PDF}
+    if len(body) > MAX_PDF:
+        return {"status": "failed", "message": "The PDF is larger than 200 MB"}
+    if default_account() is not None:
+        return {"status": "failed", "message": LOCAL_ONLY}
+    doi = norm_doi(doi)
+    title = str(title or "").strip()
+    url = str(url or "").strip()
+    if not doi and not title:
+        return {"status": "failed", "message": "The page has no DOI or title to file the PDF under"}
+    md5 = hashlib.md5(body).hexdigest()
+    with _lock:
+        queue = _load()
+        same = next((e for e in queue if e["kind"] == "attach" and not e.get("done") and not e.get("failed")
+                     and e.get("md5") == md5 and e.get("doi") == doi), None)
+        if same:
+            entry_id = same["id"]
+        else:
+            entry = _entry("attach", doi=doi, title=title, url=url, md5=md5)
+            entry["file"] = entry["id"] + ".pdf"
+            inbox().mkdir(parents=True, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=inbox(), prefix=".in-", suffix=".tmp")
+            try:
+                with os.fdopen(fd, "wb") as f:
+                    f.write(body)
+                os.replace(tmp, inbox() / entry["file"])
+                queue.append(entry)
+                _save(queue)
+            except BaseException:
+                Path(tmp).unlink(missing_ok=True)
+                (inbox() / entry["file"]).unlink(missing_ok=True)
+                raise
+            entry_id = entry["id"]
+    return _outcome(entry_id, apply_now([entry_id]))
+
+
+def attach_file(entry_id: str) -> Path:
+    """The kept PDF of an open attach entry, for the plugin (FileNotFoundError when gone or not an attach)."""
+    if ENTRY_ID.match(entry_id or ""):
+        entry = next((e for e in _load() if e["id"] == entry_id and e["kind"] == "attach"), None)
+        if entry and FILE_NAME.match(str(entry.get("file"))) and (inbox() / entry["file"]).is_file():
+            return inbox() / entry["file"]
+    raise FileNotFoundError("no such PDF")

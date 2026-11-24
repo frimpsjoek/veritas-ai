@@ -76,7 +76,7 @@ export async function runHomeChecks(browser, port, outDir) {
         label: document.querySelector('.sbw-today-banner .sbw-cover-label')?.textContent,
         line: document.querySelector('.sbw-today-banner .sbw-cover-line')?.textContent,
         papers: [...document.querySelectorAll('.sbw-paper-title')].map((p) => p.textContent),
-        heads: [...document.querySelectorAll('.sbw-papers-head')].map((x) => x.textContent),
+        heads: [...document.querySelectorAll('.sbw-papers-head')].map((x) => x.firstChild.textContent),
         shelves: [...document.querySelectorAll('.sbw-shelf')].map((sh) => [sh.querySelector('.sbw-shelf-title')?.textContent, sh.querySelector('.sbw-shelf-count')?.textContent]),
         hrefs: document.querySelectorAll('.sb-home-view a[href]').length,
         links: document.querySelectorAll('.sb-home-view a[role="link"][tabindex="0"]').length,
@@ -84,12 +84,27 @@ export async function runHomeChecks(browser, port, outDir) {
       }));
       check(`${tag}: Today shows today's radar issue and its papers, with the Worth reading group`, home.label === "Today's reading radar" && home.line === '5 new papers'
         && JSON.stringify(home.papers) === '["Burrow microclimates in field voles","Seed caching under snow","A classic of vole ecology"]' && JSON.stringify(home.heads) === '["Worth reading"]', home);
-      check(`${tag}: the shelves are Research reports, Chats and Earlier issues, counted`, JSON.stringify(home.shelves) === '[["Research reports","1"],["Chats","10"],["Earlier issues","1"]]', home.shelves);
-      check(`${tag}: no link carries an href; each is a keyboard-reachable link the host opens`, home.hrefs === 0 && home.links > 10, { hrefs: home.hrefs, links: home.links });
+      check(`${tag}: the shelves are Research reports and Earlier issues, counted (no Chats shelf)`, JSON.stringify(home.shelves) === '[["Research reports","1"],["Earlier issues","1"]]', home.shelves);
+      check(`${tag}: no link carries an href; each is a keyboard-reachable link the host opens`, home.hrefs === 0 && home.links > 4, { hrefs: home.hrefs, links: home.links });
       check(`${tag}: the graphical abstract was asked for through host.json`, home.json.includes('/paper-figure?doi=10.1%2Fvole'), home.json);
 
+      // spec 029 R13 in the plugins: a paper's picture opens the full-screen viewer (its sheet is in Home's), not the paper
+      await page.locator('.sbw-paper-figure-box.is-viewable').first().click();
+      await page.waitForSelector('.sb-iv.is-ready');
+      const viewer = await page.evaluate(() => {
+        const iv = document.querySelector('.sb-iv');
+        const cs = getComputedStyle(iv);
+        const r = iv.getBoundingClientRect();
+        return { position: cs.position, covers: r.width === innerWidth && r.height === innerHeight, dark: cs.backgroundColor, level: iv.querySelector('.sb-iv-level')?.textContent, opened: window.__sbHome.opened.length };
+      });
+      check(`${tag}: a paper's picture opens full screen over Home (fixed, dark, with its zoom level), not the paper`, viewer.position === 'fixed' && viewer.covers && viewer.dark.startsWith('rgba(8, 10, 12') && /%$/.test(viewer.level ?? '') && viewer.opened === 0, viewer);
+      await page.locator('.sb-iv-original').click();
+      const original = await opened(page);
+      check(`${tag}: the viewer's Open original goes to the host's open() with the picture's address`, original.length === 1 && original[0].to === 'url' && /^(data:|https?:)/.test(original[0].url), original.map((o) => ({ ...o, url: String(o.url).slice(0, 40) })));
+      await page.keyboard.press('Escape');
+      check(`${tag}: Escape closes the viewer`, (await page.locator('.sb-iv').count()) === 0);
       const before = await page.evaluate(() => location.href);
-      await page.locator('.sbw-shelf').filter({ hasText: 'Chats' }).locator('.sbw-cover').first().click();
+      await page.locator('.sbw-shelf').filter({ hasText: 'Research reports' }).locator('.sbw-cover').first().click();
       const fromCover = await opened(page);
       const bannerIsLink = await page.evaluate(() => document.querySelector('.sbw-today-banner').tagName === 'A');
       await page.locator('.sbw-today-chat:not([hidden])').click();
@@ -105,7 +120,7 @@ export async function runHomeChecks(browser, port, outDir) {
       await page.locator('.sbw-today-chat:not([hidden])').click();
       const issueChat = await opened(page);
       const after = await page.evaluate(() => ({ href: location.href, hash: location.hash, pages: window.history.length }));
-      check(`${tag}: clicking a chat cover calls the host's open() with that session and leaves location.hash alone`, JSON.stringify(fromCover) === '[{"to":"session","id":"c1"}]' && after.href === before && after.hash === '', { fromCover, before, after });
+      check(`${tag}: clicking a report cover calls the host's open() with that session and leaves location.hash alone`, JSON.stringify(fromCover) === '[{"to":"session","id":"c5"}]' && after.href === before && after.hash === '', { fromCover, before, after });
       check(`${tag}: the Today banner is a picture, not a way into the chat; "Chat about this issue" opens its chat through the host`, !bannerIsLink && JSON.stringify(fromBanner) === '[{"to":"session","id":"c4"}]', { bannerIsLink, fromBanner });
       check(`${tag}: a paper title opens its DOI through the host, not by navigating`, JSON.stringify(fromTitle) === '[{"to":"url","url":"https://doi.org/10.1/vole"}]' && page.url() === before, { fromTitle, url: page.url() });
       check(`${tag}: Enter on an earlier issue opens it on Home as a list (not the chat), with Today › back; its chat is one link away`, JSON.stringify(fromKey) === '[]' && issueShown.newer === 'Today ›' && JSON.stringify(issueChat) === '[{"to":"session","id":"c6"}]', { fromKey, issueShown, issueChat });
@@ -123,7 +138,7 @@ export async function runHomeChecks(browser, port, outDir) {
   const { page, errors } = await open('tokens=obsidian&routines=none', 900);
   await page.waitForSelector('.sbw-sources.is-intro .sbw-chip');
   const intro = await page.evaluate(() => ({ today: document.querySelectorAll('.sbw-today-banner').length, chats: [...document.querySelectorAll('.sbw-shelf-title')].map((x) => x.textContent) }));
-  check('first run: Home opens on the Sources intro instead of Today, the shelves still below', intro.today === 0 && intro.chats.includes('Chats'), intro);
+  check('first run: Home opens on the Sources intro instead of Today, the shelves still below', intro.today === 0 && intro.chats.includes('Research reports'), intro);
   await page.evaluate(() => window.__sbHome.refresh());
   const kept = await page.evaluate(() => document.querySelectorAll('.sbw-sources.is-intro').length);
   check('refresh() repaints Home in place', kept === 1 && errors.length === 0, { kept, errors });

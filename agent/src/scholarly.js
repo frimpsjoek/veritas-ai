@@ -6,7 +6,7 @@
 
 export const SOURCES = ['openalex', 'semanticscholar', 'arxiv', 'crossref', 'europepmc', 'biorxiv', 'chemrxiv'];
 
-export const OPENALEX_FIELDS = 'id,doi,ids,display_name,publication_year,publication_date,authorships,primary_location,cited_by_count,best_oa_location,type,abstract_inverted_index,keywords';
+export const OPENALEX_FIELDS = 'id,doi,ids,display_name,publication_year,publication_date,authorships,primary_location,cited_by_count,best_oa_location,type,abstract_inverted_index,keywords,primary_topic';
 const CHEMRXIV_SOURCE_ID = 'S4393918830';
 
 async function getJSON(fetchFn, url, headers = {}) {
@@ -29,11 +29,14 @@ const plain = (text) => String(text ?? '').replace(/<[^>]+>/g, ' ').replace(/\s+
 
 export function fromOpenAlex(work) {
   const arxiv = /arxiv\.org\/abs\/([^\s?#v]+)/i.exec(work.primary_location?.landing_page_url ?? '')?.[1] ?? null;
+  const named = (work.authorships ?? []).filter((a) => a.author?.display_name);
   return {
     doi: (work.doi ?? '').replace(/^https?:\/\/doi\.org\//i, '') || null,
     arxiv,
     title: work.display_name ?? '',
-    authors: (work.authorships ?? []).map((a) => a.author?.display_name).filter(Boolean),
+    authors: named.map((a) => a.author.display_name),
+    // The radar matches a followed author by id where both sides have one (radar-score.js sameAuthor); one per name.
+    ...(named.some((a) => a.author.id) ? { authorIds: named.map((a) => String(a.author.id ?? '').replace(/^https?:\/\/openalex\.org\//, '') || null) } : {}),
     year: work.publication_year ?? null,
     venue: work.primary_location?.source?.display_name ?? '',
     cites: work.cited_by_count ?? 0,
@@ -43,6 +46,7 @@ export function fromOpenAlex(work) {
     date: /^\d{4}-\d{2}-\d{2}$/.test(work.publication_date ?? '') ? work.publication_date : null,
     openalexId: String(work.id ?? '').replace(/^https?:\/\/openalex\.org\//, '') || null,
     kind: work.type || null,
+    ...(work.primary_topic?.field?.display_name ? { field: String(work.primary_topic.field.display_name) } : {}),
     ...((work.keywords ?? []).length ? { keywords: work.keywords.map((k) => k?.display_name).filter(Boolean).slice(0, 8) } : {}),
   };
 }
@@ -57,12 +61,35 @@ export function openAlexWorks(fetchFn, filter, limit = 50) {
   return openAlex(fetchFn, `/works?filter=${filter}&sort=publication_date:desc&per_page=${limit}&select=${OPENALEX_FIELDS}`);
 }
 
+/** Every OpenAlex work for a raw filter, newest first, read by cursor pages of `perPage` until the filter's works run
+ *  out or `cap` are read. `total` is OpenAlex's count for the filter. A page that fails after the first ends the list
+ *  there and says why in `stopped` (the first page's failure throws, as openAlexWorks does).
+ *  @param {typeof fetch} fetchFn @param {string} filter @param {{ cap: number, perPage: number }} opts
+ *  @returns {Promise<{ works: any[], total: number, stopped: string | null }>} */
+export async function openAlexPaged(fetchFn, filter, { cap, perPage }) {
+  const works = [];
+  let cursor = /** @type {string | null} */ ('*'), total = 0, stopped = null;
+  while (cursor && works.length < cap) {
+    let data;
+    try { data = await getJSON(fetchFn, `https://api.openalex.org/works?filter=${filter}&sort=publication_date:desc&per_page=${perPage}&cursor=${encodeURIComponent(cursor)}&select=${OPENALEX_FIELDS}`); } catch (e) {
+      if (!works.length) throw e;
+      stopped = String(/** @type {any} */ (e)?.message ?? e);
+      break;
+    }
+    const page = data.results ?? [];
+    total = Number.isFinite(data.meta?.count) ? data.meta.count : total;
+    works.push(...page.map(fromOpenAlex));
+    cursor = page.length ? data.meta?.next_cursor ?? null : null;
+  }
+  return { works: works.slice(0, cap), total: Math.max(total, works.length), stopped };
+}
+
 /** `since` is a YYYY-MM-DD date; anything else is ignored, so a bad value can never break a search. */
 const validSince = (since) => (typeof since === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(since) ? since : null);
 
 async function arxiv(fetchFn, query, limit, since = /** @type {string | null} */ (null)) {
   const STOP = new Set('the and for with from into between about over under using use how what which why when does can are was were this that these those its their our your via of in on to by at an as is be or not'.split(' '));
-  const words = query.toLowerCase().replace(/[^\p{L}\p{N}\s-]/gu, ' ').split(/\s+/).filter((w) => w.length > 2 && !STOP.has(w)).slice(0, 5);
+  const words = query.toLowerCase().replace(/[^\p{L}\p{N}\s-]/gu, ' ').split(/\s+/).filter((w) => w.length > 1 && !STOP.has(w)).slice(0, 5); // "GW" and "AI" are words here
   if (!words.length) return [];
   const range = since ? `+AND+submittedDate:[${since.replace(/-/g, '')}0000+TO+209912312359]` : '';
   const url = `https://export.arxiv.org/api/query?search_query=${words.map((w) => `all:${encodeURIComponent(w)}`).join('+AND+')}${range}&max_results=${limit}&sortBy=relevance`;
@@ -99,6 +126,7 @@ function arxivEntries(xml) {
       url: `https://arxiv.org/abs/${id}`, abstract: tag(entry, 'summary'), source: 'arXiv',
       date: /^\d{4}-\d{2}-\d{2}/.test(published) ? published.slice(0, 10) : null, openalexId: null, kind: 'preprint',
       category: entry.match(/<arxiv:primary_category[^>]*term="([^"]+)"/)?.[1] ?? null,
+      categories: [...entry.matchAll(/<category[^>]*term="([^"]+)"/g)].map((m) => m[1]),
     };
   });
 }
@@ -138,6 +166,18 @@ export async function arxivCategoryOf(fetchFn, title) {
   const hits = await arxivQuery(fetchFn, words.map((w) => `ti:${encodeURIComponent(w)}`).join('+AND+'), 3, 'relevance');
   const norm = (/** @type {string} */ t) => t.toLowerCase().replace(/[^a-z0-9]+/g, '');
   return hits.find((h) => norm(h.title) === norm(title))?.category ?? null;
+}
+
+/** Every arXiv category of a paper found by its title (primary first, then where it is cross-listed); none when it is not
+ *  there. Words joined by OR with the exact title checked: all of them in the title, as above, misses papers arXiv spells
+ *  a little differently. @param {typeof fetch} fetchFn @param {string} title @returns {Promise<string[]>} */
+export async function arxivCategoriesOf(fetchFn, title) {
+  const words = title.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter((w) => w.length > 3).slice(0, 8);
+  if (words.length < 2) return [];
+  const hits = await arxivQuery(fetchFn, words.map((w) => `all:${encodeURIComponent(w)}`).join('+OR+'), 5, 'relevance');
+  const norm = (/** @type {string} */ t) => t.toLowerCase().replace(/[^a-z0-9]+/g, '');
+  const hit = hits.find((h) => norm(h.title) === norm(title));
+  return hit ? [...new Set([hit.category, ...hit.categories].filter((c) => c != null))] : [];
 }
 
 /** Crossref gives [y, m, d] with the tail missing for a coarse date; only a full date is a date. */
@@ -228,6 +268,68 @@ export async function abstractsByDoi(fetchFn, dois) {
     } catch { /* best effort */ }
   }
   return found;
+}
+
+/** A paper no free source had an abstract for is asked again after this many days (publishers deposit late). */
+export const ABSTRACT_RETRY_DAYS = 30;
+const ABSTRACT_MIN = 80;
+const DAY_MS = 86_400_000;
+
+/**
+ * Abstracts for papers that came without one, from sources that need no key: OpenAlex first (50 DOIs a request; it
+ * withholds some publishers' abstracts, and may be rate-limited without a key), then per paper the arXiv API for an
+ * arXiv id, Crossref's own record of the DOI (where publishers deposit a JATS abstract) and Semantic Scholar. A paper
+ * judged on its title alone matches anything sharing one noun phrase, so the radar asks before it ranks.
+ * `cache` ("doi:<doi>" or "arxiv:<id>" -> { text, at }) is updated in place: a found abstract is kept, a paper every
+ * source answered for without one is not asked again for ABSTRACT_RETRY_DAYS; a refusal or a network error is not
+ * remembered. At most `lookups` papers are looked up one by one. Never throws.
+ * @param {typeof fetch} fetchFn should space its requests per host (radar-sources.js politeFetch)
+ * @param {{ id: string, doi: string | null, arxiv: string | null }[]} papers
+ * @param {{ cache?: Record<string, { text: string, at: number }>, now?: number, lookups?: number }} [opts]
+ * @returns {Promise<Map<string, string>>} paper id -> abstract
+ */
+export async function fillAbstracts(fetchFn, papers, opts = {}) {
+  const cache = opts.cache ?? {}, now = opts.now ?? Date.now();
+  let lookups = opts.lookups ?? 20;
+  const doiOf = (/** @type {string | null} */ d) => String(d ?? '').trim().toLowerCase().replace(/^https?:\/\/(dx\.)?doi\.org\//, '');
+  const keyOf = (/** @type {{ doi: string | null, arxiv: string | null }} */ p) => (p.arxiv ? `arxiv:${p.arxiv}` : doiOf(p.doi) ? `doi:${doiOf(p.doi)}` : null);
+  /** @type {Map<string, string>} */
+  const found = new Map();
+  const ask = [];
+  for (const p of papers) {
+    const key = keyOf(p);
+    if (!key) continue;
+    const hit = cache[key];
+    if (hit?.text) found.set(p.id, hit.text);
+    else if (!hit || now - hit.at > ABSTRACT_RETRY_DAYS * DAY_MS) ask.push({ ...p, key });
+  }
+  const dois = ask.filter((p) => !p.arxiv && doiOf(p.doi)).map((p) => doiOf(p.doi));
+  const openAlex = dois.length ? await abstractsByDoi(fetchFn, dois) : new Map();
+  for (const p of ask) {
+    let text = p.arxiv ? '' : openAlex.get(doiOf(p.doi)) ?? '';
+    let answered = true;
+    if (!text && lookups > 0) {
+      lookups -= 1;
+      const tries = p.arxiv
+        ? [async () => arxivSummary(fetchFn, /** @type {string} */ (p.arxiv))]
+        : [async () => plain((await getJSON(fetchFn, `https://api.crossref.org/works/${encodeURIComponent(doiOf(p.doi))}`)).message?.abstract),
+           async () => plain((await getJSON(fetchFn, `https://api.semanticscholar.org/graph/v1/paper/DOI:${encodeURIComponent(doiOf(p.doi))}?fields=abstract`)).abstract)];
+      for (const one of tries) {
+        try { text = await one(); } catch (e) { text = ''; if (!/HTTP 404/.test(String(/** @type {any} */ (e)?.message))) answered = false; }
+        if (text.length > ABSTRACT_MIN) break;
+      }
+    } else if (!text) continue; // over the budget: not looked up, so nothing to remember
+    if (text.length > ABSTRACT_MIN) { found.set(p.id, text); cache[p.key] = { text, at: now }; }
+    else if (answered) cache[p.key] = { text: '', at: now };
+  }
+  return found;
+}
+
+/** @param {typeof fetch} fetchFn @param {string} id */
+async function arxivSummary(fetchFn, id) {
+  const response = await fetchFn(`https://export.arxiv.org/api/query?id_list=${encodeURIComponent(id)}`);
+  if (!response.ok) throw new Error(`export.arxiv.org: HTTP ${response.status}`);
+  return (/<summary>([\s\S]*?)<\/summary>/.exec(await response.text())?.[1] ?? '').replace(/\s+/g, ' ').trim();
 }
 
 /**

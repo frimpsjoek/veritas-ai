@@ -15,12 +15,15 @@ function fakeProvider({ questions = [], seen = [], candidates = null, beforeCand
     async *turn(req) {
       seen.push(req.input.split('\n')[0]);
       let json;
-      if (/^A researcher wants a literature report/.test(req.input)) json = { questions };
+      if (/^A researcher asked for a literature report from inside a conversation/.test(req.input)) json = { question: 'Which papers study reproducing agent-made performance optimizations in WEST?' };
+      else if (/^A researcher wants a literature report/.test(req.input)) json = { questions };
       else if (/^Plan a literature review/.test(req.input)) json = { subQuestions: [{ id: 'sq1', question: 'part 1', strategy: 's', sources: ['papers'] }], criteria: [], columns: [{ name: 'Main findings', instruction: 'f' }], assumed: [] };
       else if (/finding papers for one sub-question/.test(req.input)) { if (beforeCandidates) yield* beforeCandidates(); json = { candidates: candidates ?? [cand(1), cand(2)], searchLog: [{ query: 'q', source: 'papers', results: 2 }] }; }
       else if (/^You extract data/.test(req.input)) {
         const ids = [...req.input.matchAll(/### Paper (\S+)/g)].map((m) => m[1]);
-        json = { rows: ids.map((row) => ({ row, cells: [{ column: 'main_findings', status: 'found', value: 'helped', quotes: ['Spaced practice helped'] }] })) };
+        // a screening turn asks for the plan's criteria (spec 030 R9 adds one to a report on a paper set): they say yes
+        const criteria = [...req.input.matchAll(/^- (criterion_\d+) /gm)].map((m) => ({ column: m[1], status: 'found', value: 'yes', quotes: [] }));
+        json = { rows: ids.map((row) => ({ row, cells: criteria.length ? criteria : [{ column: 'main_findings', status: 'found', value: 'helped', quotes: ['Spaced practice helped'] }] })) };
       } else json = { title: 'A report', scope: 's', method: 'm', themes: [], evidence: [{ claim: 'It helps', sources: ['k1'], strength: 'strong', cells: [{ row: 'p:k1', column: 'main_findings' }] }], disagreements: '', gaps: '' };
       yield { type: 'final', text: JSON.stringify(json), json, usage: {} };
     },
@@ -33,7 +36,7 @@ async function runtime(fs, opts) {
   const library = { async search() { return []; }, async read() { return null; }, async related() { return []; }, async resolve() { return new Map(); }, ...(opts?.library ?? {}) };
   const published = [];
   const notes = { async publish(note) { published.push(note); return { path: `ai_notes/${note.title}.md` }; } };
-  const ai = await createLocalRuntime({ platform: { fs }, library, notes, dataDir: '/data', providers: new Map([['fake', fakeProvider(opts)]]), gateway, getRoleModel: async () => ({ provider: 'fake', model: 'm1' }) });
+  const ai = await createLocalRuntime({ platform: { fs, ...(opts?.fetch ? { fetch: opts.fetch } : {}) }, library, notes, dataDir: '/data', providers: new Map([['fake', fakeProvider(opts)]]), gateway, getRoleModel: async () => ({ provider: 'fake', model: 'm1' }) });
   return { ai, published };
 }
 
@@ -204,4 +207,90 @@ test('researcher activity shows in the running Searching line while the search i
   assert.match(seen.items[0], /OpenAlex/);
   assert.ok(seen.detail, 'with a summary detail');
   await until(ai, id, 'done');
+});
+
+test('spec 031 R1-R4: a report on a paper set fills a missing abstract, reads a free copy of a kept outside paper, and says what each was read from', async () => {
+  const fs = memoryFs();
+  const asked = [];
+  // fake connectors: OpenAlex has the missing abstract (batch lookup) and a free PDF for 10.9/open
+  const fetchFn = async (input) => {
+    const url = new URL(String(input));
+    asked.push(url.href);
+    if (url.host === 'api.openalex.org' && url.searchParams.get('filter')?.startsWith('doi:')) {
+      return new Response(JSON.stringify({ results: [{ doi: 'https://doi.org/10.9/empty', abstract_inverted_index: { Spaced: [0], practice: [1], helped: [2], learners: [3], retain: [4], words: [5], across: [6], many: [7], weeks: [8], in: [9], this: [10], long: [11], trial: [12], of: [13], adults: [14], at: [15], school: [16] } }] }), { status: 200 });
+    }
+    if (url.host === 'api.openalex.org' && url.pathname.includes('10.9')) {
+      // the publisher's copy refuses programs (the server answers null, as for a 403); the repository copy reads
+      return new Response(JSON.stringify(url.pathname.includes('open') ? { best_oa_location: { is_oa: true, pdf_url: 'https://publisher.example/blocked.pdf' }, locations: [{ is_oa: true, pdf_url: 'https://repo.example/open.pdf' }] } : {}), { status: 200 });
+    }
+    return new Response('', { status: 404 });
+  };
+  const reads = [];
+  const library = { async paperText(q) { reads.push(q); return q.url === 'https://repo.example/open.pdf' ? 'Spaced practice helped in the full text of the open paper.' : null; } };
+  const { ai } = await runtime(fs, { fetch: fetchFn, library });
+  const session = await ai.conversations.create('chat');
+  const out = (doi, abstract) => ({ id: `doi:${doi}`, ref: { kind: 'web', url: `https://doi.org/${doi}` }, inLibrary: false, title: doi, authors: [], year: 2020, venue: '', doi, url: null, abstract, citations: null, fullText: false, pdfUrl: null, studyType: null, foundBy: ['crossref'] });
+  const rows = [out('10.9/open', 'Spaced practice helped, the abstract says.'), out('10.9/empty', ''), out('10.9/closed', 'Spaced practice helped closed learners.')];
+  const summary = await ai.sessions.put(session, { kind: 'import', from: 'selection', label: 'x' }, { kind: 'papers', title: 'Set', query: null, rows, columns: [], cells: {}, screening: null, summary: null, from: [], change: '' });
+  const id = await ai.reviews.start({ ...REQUEST, autoApprove: true, session, on: summary.ref });
+  await until(ai, id, 'done');
+  const candidates = JSON.parse(await fs.read(`/data/reviews/${id}/candidates.json`));
+  assert.match(candidates.rows.find((r) => r.doi === '10.9/empty').abstract, /^Spaced practice helped learners/, 'R1: the empty abstract was filled before screening');
+  const table = JSON.parse(await fs.read(`/data/reviews/${id}/table.json`));
+  const byDoi = Object.fromEntries(table.rows.map((r) => [r.doi, r]));
+  assert.deepEqual([byDoi['10.9/open'].access, byDoi['10.9/open'].pdfUrl, byDoi['10.9/open'].pdfAlternates], ['open', 'https://publisher.example/blocked.pdf', ['https://repo.example/open.pdf']], 'R2');
+  assert.equal(byDoi['10.9/closed'].access, 'publisher');
+  assert.deepEqual(reads, [{ url: 'https://publisher.example/blocked.pdf', key: 'doi:10.9/open' }, { url: 'https://repo.example/open.pdf', key: 'doi:10.9/open' }], 'R3: only free copies are downloaded, the next one when the first is refused');
+  assert.equal(table.cells['doi:10.9/open'].main_findings.quotes[0].from, 'full_text');
+  assert.deepEqual(Object.fromEntries(table.rows.map((r) => [r.doi, r.readFrom])), { '10.9/open': 'open_access', '10.9/empty': 'abstract', '10.9/closed': 'abstract' }, 'R4');
+});
+
+test('spec 032: papers.keep looks the free copies up and hands them, in order, to the server; no copy, no addresses', async () => {
+  const fs = memoryFs();
+  const fetchFn = async (input) => {
+    const url = new URL(String(input));
+    if (url.host === 'api.openalex.org' && url.pathname.includes('10.9')) {
+      return new Response(JSON.stringify(url.pathname.includes('open') ? { best_oa_location: { pdf_url: 'https://publisher.example/a.pdf' }, locations: [{ pdf_url: 'https://repo.example/a.pdf' }] } : {}), { status: 200 });
+    }
+    return new Response('', { status: 404 });
+  };
+  const kept = [];
+  const library = { async paperKeep(q) { kept.push(q); return { status: 'kept', where: 'folder', path: 'Papers/A.pdf', downloaded: true }; } };
+  const { ai } = await runtime(fs, { fetch: fetchFn, library });
+  const got = await ai.papers.keep({ title: 'A', doi: '10.9/open', authors: ['Chen, A'], year: 2021, pdfUrl: null });
+  assert.deepEqual(kept[0], { paper: { title: 'A', doi: '10.9/open', authors: ['Chen, A'], year: 2021 }, urls: ['https://publisher.example/a.pdf', 'https://repo.example/a.pdf'] });
+  assert.deepEqual([got.where, got.path, got.access.access], ['folder', 'Papers/A.pdf', 'open']);
+  await ai.papers.keep({ title: 'B', doi: '10.9/closed' });
+  assert.deepEqual(kept[1].urls, []);
+});
+
+test('spec 030 R12: a report asked in a chat reads the conversation: its message becomes a standalone question before planning', async () => {
+  const fs = memoryFs();
+  const seen = [];
+  const { ai } = await runtime(fs, { seen });
+  const session = await ai.conversations.create('chat');
+  for await (const _ of ai.conversations.send(session, { text: 'What themes run through my library?' })) { /* the fake answers */ }
+  // the earlier answer named the topic; the report's own message leans on it
+  const records = await ai.conversations.load(session);
+  assert.ok(records.some((r) => r.type === 'assistant'));
+  const id = await ai.reviews.start({ ...REQUEST, question: 'i need more papers on this', session, autoApprove: true });
+  await until(ai, id, 'done');
+  const request = JSON.parse(await fs.read(`/data/reviews/${id}/request.json`));
+  assert.equal(request.asked, 'i need more papers on this');
+  assert.equal(request.question, 'Which papers study reproducing agent-made performance optimizations in WEST?');
+  assert.match(request.thread, /User: What themes run through my library\?/);
+  assert.ok(seen.some((l) => /^A researcher asked for a literature report from inside a conversation/.test(l)), 'the rewrite turn ran');
+  assert.ok(seen.findIndex((l) => /^A researcher asked for a literature report from inside/.test(l)) < seen.findIndex((l) => /^Plan a literature review/.test(l)), 'before the plan');
+});
+
+test('spec 030 R12: a report started outside a thread is not rewritten', async () => {
+  const fs = memoryFs();
+  const seen = [];
+  const { ai } = await runtime(fs, { seen });
+  const id = await ai.reviews.start({ ...REQUEST, autoApprove: true });
+  await until(ai, id, 'done');
+  const request = JSON.parse(await fs.read(`/data/reviews/${id}/request.json`));
+  assert.equal(request.thread, undefined);
+  assert.equal(request.question, REQUEST.question);
+  assert.ok(!seen.some((l) => /from inside a conversation/.test(l)));
 });

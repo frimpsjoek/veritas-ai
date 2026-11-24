@@ -15,12 +15,13 @@ import time
 from pathlib import Path
 from urllib.parse import quote
 
+import sources
 import zotero
 from web_app import Refused
 
 KEY = re.compile(r"[A-Z0-9]{8}")
 CHUNK = 64 * 1024
-PROFILES_DIR = Path.home() / "Library" / "Application Support" / "Zotero"
+PROFILES_DIR = sources.zotero_app_dir()  # the folder with profiles.ini, per system
 BASE_PREF = re.compile(r'user_pref\("extensions\.zotero\.baseAttachmentPath",\s*"((?:[^"\\]|\\.)*)"\)')
 _base_cache: list = []
 RANGE = re.compile(r"bytes=(\d*)-(\d*)")

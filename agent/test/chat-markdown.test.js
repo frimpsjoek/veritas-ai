@@ -99,3 +99,17 @@ test('chatMarkdown: a crafted created date or id cannot leave the chats folder',
   assert.ok(!md.name.includes('/') && !md.name.includes('\\') && !md.name.includes('..'), md.name);
   assert.match(md.name, /^undated /);
 });
+
+test('chat mirror: appends to a chat whose name is unchanged do not list the chats folder again', async () => {
+  const fs = memoryFs();
+  let lists = 0;
+  const counting = { ...fs, async list(path) { if (path === '/notes/chats') lists++; return fs.list(path); } };
+  const store = conversationStore(counting, '/data/chats', { mirrorDir: '/notes/chats' });
+  await store.append(ID, meta);
+  const first = lists;
+  await store.append(ID, user);
+  await store.append(ID, assistant);
+  assert.equal(lists, first);
+  await store.append(ID, { type: 'rename', title: 'Why GW', at: '2026-10-22T10:00:00Z' });
+  assert.equal((await fs.list('/notes/chats')).length, 1); // a rename still clears the old name
+});

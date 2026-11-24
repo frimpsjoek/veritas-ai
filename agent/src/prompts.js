@@ -249,6 +249,24 @@ export const SYSTEMATIC_CAPS = /** @type {const} */ ({
 });
 
 /** The lead's clarify turn: zero, one or two questions. Zero means the question is clear enough to plan. */
+/** Spec 030 R12: a report asked inside a chat; its message may lean on the conversation ("more papers on this"). */
+export const STANDALONE_SCHEMA = {
+  type: 'object',
+  properties: { question: { type: 'string' } },
+  required: ['question'],
+  additionalProperties: false,
+};
+
+/** @param {string} asked @param {string} thread */
+export function standalonePrompt(asked, thread) {
+  return [
+    'A researcher asked for a literature report from inside a conversation. Their message may refer to the conversation ("this", "these papers", "more on that").',
+    `The conversation so far (oldest first):\n${thread}`,
+    `Their message: "${asked}"`,
+    'Write the research question the report should answer, as one standalone sentence that needs none of the conversation to be understood: name the topic, system or method the conversation is about. Keep the researcher\'s own aim ("more papers on", "compare", "what is known about"). If the message already stands alone, return it unchanged. Do not answer it.',
+  ].join('\n');
+}
+
 export const CLARIFY_SCHEMA = {
   type: 'object',
   properties: {
@@ -424,7 +442,8 @@ export function writerPrompt2(request, table, counts) {
     `Write a literature review report on: "${request.question}"`,
     `Scope: ${scopeText(request.scope)}.`,
     'Base every sentence only on the table below (one row per included paper, with the extracted value per column). Do not add outside knowledge.',
-    'Every evidence entry names the papers it rests on: "sources" is the citekeys (skip a paper with no citekey) and "cells" lists the exact table cells behind the claim, each as the row id and the column id copied from the table. Never cite a cell that is empty or "not found".',
+    'Every evidence entry names the papers it rests on: "sources" is the row ids of those papers, copied from the table ("id"), and "cells" lists the exact table cells behind the claim, each as the row id and the column id copied from the table. Never cite a cell that is empty or "not found".',
+    'A paper outside the library (its "citekey" is null) is as citable as one in it: its row id names it. Do not leave a finding out, or call it uncitable, because a paper has no citekey.',
     'Write: a short title; one sentence describing the scope; a method paragraph (say only what the counts below allow; the search log and counts are rendered separately); 2-5 themes, each a heading and a paragraph; an evidence entry per major claim with its sources, cells and a strength rating; a short disagreements paragraph (say "None found." if the papers do not conflict); a short gaps-and-future-work paragraph.',
     `Counts: ${counts.candidates} candidates found, ${counts.excluded} screened out, ${counts.included} included, ${counts.extracted} extracted.`,
     `Table:\n${JSON.stringify(table)}`,

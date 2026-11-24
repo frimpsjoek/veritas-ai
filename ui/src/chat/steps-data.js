@@ -99,14 +99,16 @@ export const artifactsWord = (n) => `${n} ${n === 1 ? 'artifact' : 'artifacts'}`
 /**
  * What the history lists, once each. A saved Find search whose JSON carries a `session` that exists is replaced by that
  * session (a Find or an imported search); the session row opens the search (`search` is set on it). Everything else
- * stays as it was.
- * @param {{ id: string, mode: string, title: string, updated: string, artifacts?: number, kind?: string }[]} conversations
- * @param {{ id: string, query: string, at: string, count: number, session?: string | null }[]} searches
+ * stays as it was. A reading radar's run is an issue, not a chat: Home's today block and Earlier issues reach it, so the
+ * history leaves it out.
+ * @param {{ id: string, mode: string, title: string, updated: string, artifacts?: number, kind?: string, cover?: { kind?: string } }[]} conversations
+ * @param {{ id: string, query: string, at: string, count: number, session?: string | null, inThread?: boolean }[]} searches `inThread` (spec 030 R2): run as a later step of a thread
  * @returns {{ sessions: { conversation: any, search: any | null }[], searches: any[] }}
  */
 export function historyEntries(conversations, searches) {
-  const chats = conversations.filter((c) => c.mode === 'chat');
-  const bySession = new Map(searches.filter((s) => s.session).map((s) => [s.session, s]));
+  const chats = conversations.filter((c) => c.mode === 'chat' && c.cover?.kind !== 'radar');
+  // spec 030 R2: a search run as a later step of a thread is that thread's, never what its row opens as
+  const bySession = new Map(searches.filter((s) => s.session && !s.inThread).map((s) => [s.session, s]));
   const ids = new Set(chats.map((c) => c.id));
   return {
     sessions: chats.map((conversation) => ({ conversation, search: bySession.get(conversation.id) ?? null })),
@@ -114,10 +116,27 @@ export function historyEntries(conversations, searches) {
   };
 }
 
+/** Spec 030: what a report's question line says in a thread, live and reopened alike (from its request).
+ *  @param {{ fromTable?: boolean, systematic?: boolean }} request */
+export const reportStepLabel = (request) => (request?.fromTable ? 'Report from this table' : request?.systematic ? 'Systematic review' : 'Research report');
+
+/** Spec 030 R6: the reviews the history lists on their own: not one that is a step of a session the history lists (that
+ *  session's row stands for it). @template {{ session?: string }} R @param {R[]} reviews @param {{ conversation: { id: string } }[]} sessions */
+export function sessionlessReviews(reviews, sessions) {
+  const listed = new Set(sessions.map((e) => e.conversation.id));
+  return reviews.filter((r) => !(r.session && listed.has(r.session)));
+}
+
 /** The cards of the empty state: the three most recent sessions, newest first (context suggestions follow as pills).
  *  @template T @param {T[]} sessionsNewestFirst @param {number} [max] */
 export function cardSplit(sessionsNewestFirst, max = 3) {
   return sessionsNewestFirst.slice(0, max);
+}
+
+/** The recent chats the start page lists (spec 029 R5): none where the chat list is already on screen beside it (it
+ *  would only repeat it), else the newest few. @template T @param {T[]} sessionsNewestFirst @param {boolean} listOnScreen */
+export function startPageRecent(sessionsNewestFirst, listOnScreen, max = 3) {
+  return listOnScreen ? [] : cardSplit(sessionsNewestFirst, max);
 }
 
 /** @param {string} title */

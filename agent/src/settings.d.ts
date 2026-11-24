@@ -25,6 +25,8 @@ export interface Settings {
   local: LocalSettings;
   /** The user's free OpenAlex key (openalex.org/settings/api); null = the shared free limit. `limitUntil` is status only, filled by the runtime's settings.get. */
   openalex: { apiKey: string | null; limitUntil?: string | null };
+  /** Spec 031 D3: the contact email Unpaywall asks for with each request (kept on this computer). */
+  papers: { email: string | null };
   /** What a chat searches when the message does not say (Settings' Sources chips and the chat's source pills share it);
    *  `web` is on/off only; its mode is `webSearchDefault`. null = never chosen, read as DEFAULT_SOURCE_SWITCHES. A patch may name only some keys. */
   sources: SourceSwitches | null;

@@ -16,3 +16,14 @@ ui/dev/.perf-cache/
 server/perf/
 docs/specs/*/evidence/
 docs/specs/*/refs/
+
+# spec 033 R6: signing material never goes into the (public) repo
+/key
+/key.pub
+/sig
+/allowed
+*.key
+app/.keys/
+
+# spec 033 R4: made by packaging/bundle-plugins.sh for each build
+app/src-tauri/plugins/

@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <link href="http://arxiv.org/api/query?search_query%3D%26id_list%3D2607.25690%26start%3D0%26max_results%3D10" rel="self" type="application/atom+xml"/>
+  <title type="html">ArXiv Query: search_query=&amp;id_list=2607.25690&amp;start=0&amp;max_results=10</title>
+  <id>http://arxiv.org/api/cHxbiOdZaP56ODnBPIenZhzg5f8</id>
+  <updated>2026-10-28T00:00:00-04:00</updated>
+  <opensearch:totalResults xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">1</opensearch:totalResults>
+  <opensearch:startIndex xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">0</opensearch:startIndex>
+  <opensearch:itemsPerPage xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">10</opensearch:itemsPerPage>
+  <entry>
+    <id>http://arxiv.org/abs/2607.25690v2</id>
+    <updated>2026-10-25T19:07:31Z</updated>
+    <published>2026-07-28T13:05:32Z</published>
+    <title>First-Principles Wannier Representation of Proximity
+  Effects</title>
+    <summary>  Proximity effects in layered heterostructures are commonly represented by
+static parameters fitted to first-principles band structures, an approximation
+that usually discards the energy dependence of interlayer hybridization,
+momentum transfer, and spatial structure. We address this limitation by
+deriving a dynamical proximity operator directly from density functional theory
+by downfolding the heterostructure Kohn-Sham Hamiltonian onto a fixed
+low-energy target Wannier subspace. We demonstrate the method for three
+different graphene heterostructures coupled to magnetic and semiconducting
+substrates. Graphene/hBN/Co(0001) exhibits proximity-induced exchange
+resonances driven by hybridization with Co states. Graphene/PtSe$_2$ develops a
+sublattice-selective, intervalley-coherent, proximity-induced coupling. For
+graphene/WSe$_2$, we identify the spatial modulation of both Rashba and
+valley-Zeeman proximity-induced spin-orbit couplings. The method determines the
+full microscopic structure of the proximity coupling from first principles,
+providing input for transport and correlated-phase calculations.
+</summary>
+    <author>
+      <name>Yaroslav Zhumagulov</name>
+    </author>
+    <author>
+      <name>Johan F\'elisaz</name>
+    </author>
+    <author>
+      <name>Stepan S. Tsirkin</name>
+    </author>
+    <author>
+      <name>Denis Kochan</name>
+    </author>
+    <author>
+      <name>Oleg V. Yazyev</name>
+    </author>
+    <arxiv:comment xmlns:arxiv="http://arxiv.org/schemas/atom">14 pages, 9 figures</arxiv:comment>
+    <link href="http://arxiv.org/abs/2607.25690v2" rel="alternate" type="text/html"/>
+    <link title="pdf" href="http://arxiv.org/pdf/2607.25690v2" rel="related" type="application/pdf"/>
+    <arxiv:primary_category xmlns:arxiv="http://arxiv.org/schemas/atom" term="cond-mat.mes-hall" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cond-mat.mes-hall" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cond-mat.mtrl-sci" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="physics.comp-ph" scheme="http://arxiv.org/schemas/atom"/>
+  </entry>
+</feed>

@@ -1,0 +1,43 @@
+[package]
+name = "veritas"
+version = "0.54.0"
+description = "Veritas AI desktop app: the Veritas server and web app in a window of their own"
+license = "MIT"
+repository = "https://github.com/frimpsjoek/veritas-ai"
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png", "unstable"] }
+tauri-plugin-autostart = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-window-state = "2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# spec 033 R3: the updater waits between checks (Tauri already runs on tokio)
+tokio = { version = "1", features = ["time"] }
+getrandom = "0.3"
+base64 = "0.22"
+url = "2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# Browse (spec 027): WebKit's content rules and a tab's history state
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSError", "NSURL"] }
+objc2-web-kit = { version = "0.3", features = ["WKContentRuleList", "WKContentRuleListStore", "WKUserContentController", "WKWebViewConfiguration", "WKWebView", "block2"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

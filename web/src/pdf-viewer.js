@@ -53,9 +53,9 @@ function textOffset(layer, range) {
 
 /**
  * @param {Document} doc @param {Window} win
- * @param {{ src: string, data?: ArrayBuffer | Promise<ArrayBuffer>, title: string, openRaw?: () => void, marks: Mark[], save?: (json: HighlightJSON) => Promise<SaveResult>, failed: (message: string) => void }} o
+ * @param {{ src: string, data?: ArrayBuffer | Promise<ArrayBuffer>, title: string, openRaw?: () => void, marks: Mark[], save?: (json: HighlightJSON) => Promise<SaveResult>, failed: (message: string) => void, tools?: HTMLElement | null }} o
  *   `data`: the PDF's bytes, read instead of `src` (a server on another origin, where PDF.js's own requests carry no
- *   sign-in); `src` is then only the "Open PDF" link's address.
+ *   sign-in); `src` is then only the "Open PDF" link's address. `tools`: more for the bar, beside "Open PDF".
  * @returns {{ el: HTMLElement, ready: Promise<void> }}
  */
 export function PdfViewer(doc, win, o) {
@@ -67,7 +67,7 @@ export function PdfViewer(doc, win, o) {
   raw.href = o.src;
   raw.rel = 'noopener';
   raw.addEventListener('click', (event) => { if (!o.openRaw) return; event.preventDefault(); o.openRaw(); });
-  bar.append(status, h(doc, 'span', 'sbw-spacer-x'), raw);
+  bar.append(status, h(doc, 'span', 'sbw-spacer-x'), ...(o.tools ? [o.tools] : []), raw);
   const pagesEl = h(doc, 'div', 'sbw-pdf-pages');
   pagesEl.setAttribute('aria-label', o.title);
   el.append(bar, pagesEl);
@@ -81,7 +81,7 @@ export function PdfViewer(doc, win, o) {
 
   const say = () => {
     const waiting = marks.filter((m) => m.waiting).length;
-    status.textContent = waiting ? `${waiting} highlight${waiting === 1 ? '' : 's'} waiting for Zotero` : 'Select text to highlight it.';
+    status.textContent = waiting ? `${waiting} highlight${waiting === 1 ? '' : 's'} waiting for Zotero` : o.save ? 'Select text to highlight it.' : 'Highlights need the paper in Zotero';
   };
 
   const drawMarks = (/** @type {number} */ index) => {

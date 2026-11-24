@@ -1,0 +1,223 @@
+{
+  "_note": "Made-up papers for the retrieval benchmark tests (server/bench.py). Every title, name, DOI and sentence here is invented; DOIs use the 10.5555 test prefix.",
+  "collections": [
+    {"key": "SPEC", "name": "Spectroscopy", "parent": null},
+    {"key": "XAS", "name": "X-ray absorption", "parent": "SPEC"},
+    {"key": "GW", "name": "Many-body methods", "parent": null},
+    {"key": "BAT", "name": "Batteries", "parent": null}
+  ],
+  "papers": [
+    {
+      "key": "FX01",
+      "title": "Core-hole screening in titanium dioxide K-edge spectra from first principles",
+      "authors": ["José Núñez", "Priya Ramanathan"],
+      "year": "2021",
+      "venue": "Journal of Invented Spectroscopy",
+      "doi": "10.5555/jis.2021.0101",
+      "citekey": "nunez2021corehole",
+      "collections": ["XAS"],
+      "abstract": "We compute the titanium K-edge of rutile and anatase TiO2 with a supercell core-hole approach. The pre-edge peaks shift by half an electronvolt when the excited electron is allowed to relax. Screening lengths converge for cells larger than one hundred atoms. Our spectra agree with measured X-ray absorption data within the experimental resolution.",
+      "body": [
+        "The absorbing titanium atom carries a full 1s core hole and the remaining electrons relax self-consistently. We use a plane-wave basis with norm-conserving pseudopotentials and a 4x4x6 supercell for rutile. The K-edge onset is aligned to the measured value by a single rigid shift that is the same for both polymorphs.",
+        "Quadrupole transitions into the empty d states give the first two pre-edge features. The dipole part dominates above the rising edge, where p states hybridised with oxygen 2p orbitals carry most of the weight. Removing the core hole moves the main peak by almost two electronvolts toward higher energy."
+      ],
+      "references": [
+        "Lindqvist, A. and Moreau, B. Pre-edge features in transition metal oxides. Invented Phys. Rev. 12, 345 (2015).",
+        "Okafor, C. et al. Supercell convergence for core-level spectra. J. Made-up Chem. 7, 88 (2018)."
+      ]
+    },
+    {
+      "key": "FX02",
+      "title": "Quasiparticle band gaps of layered MoS2 with G0W0 and self-consistent vertex corrections",
+      "authors": ["Søren Ødegård", "Mei Takahashi", "Luca Bianchi"],
+      "year": "2019",
+      "venue": "Imaginary Review B",
+      "doi": "10.5555/irb.2019.0202",
+      "citekey": "odegard2019quasiparticle",
+      "collections": ["GW"],
+      "abstract": "Single-shot G0W0 calculations underestimate the band gap of monolayer MoS2 by a few tenths of an electronvolt. Including a vertex in both the polarisability and the self-energy brings the gap close to the measured value. The correction depends weakly on the starting density-functional approximation. We discuss the role of substrate screening for supported layers.",
+      "body": [
+        "The direct gap at the K point is sensitive to the number of empty bands in the Green's function. We extrapolate the gap with respect to the plane-wave cutoff of the dielectric matrix and report converged values to within twenty millielectronvolts. Spin-orbit coupling splits the valence band maximum by about one hundred and fifty millielectronvolts.",
+        "Second-order Møller-Plesset theory gives a similar trend for the isolated layer. A Hartree-Fock starting point opens the gap too much, whereas a semilocal one closes it. The vertex-corrected scheme removes most of this starting-point dependence. Excitonic effects are left for future work with the Bethe-Salpeter equation."
+      ],
+      "references": [
+        "Hedström, L. Self-energy of the electron gas. Invented Phys. Rev. 139, 796 (1965).",
+        "Varga, P. and Silva, R. Vertex corrections in practice. J. Made-up Chem. 21, 4410 (2014)."
+      ]
+    },
+    {
+      "key": "FX03",
+      "title": "Lithium diffusion barriers in olivine LiFePO4 cathodes under strain",
+      "authors": ["Amara Okonkwo", "Henrik Lund"],
+      "year": "2020",
+      "venue": "Fictional Energy Materials",
+      "doi": "10.5555/fem.2020.0303",
+      "citekey": "okonkwo2020lithium",
+      "collections": ["BAT"],
+      "abstract": "Tensile strain along the b axis lowers the migration barrier of lithium ions in LiFePO4 by about fifty millielectronvolts. Compressive strain has the opposite effect and blocks one-dimensional channels. Nudged elastic band calculations reveal a curved migration path between neighbouring octahedral sites. These results suggest strain engineering as a route to faster charging.",
+      "body": [
+        "Antisite defects in which iron occupies a lithium site block the channel and raise the effective barrier for long-range transport. We place one antisite in a 1x2x2 supercell and repeat the nudged elastic band search. The barrier for a hop next to the defect rises to almost one electronvolt.",
+        "Hubbard-corrected DFT+U with U equal to four electronvolts on iron reproduces the measured open-circuit voltage. Without the correction the voltage is underestimated by more than half a volt, which shows the importance of localised d electrons."
+      ],
+      "references": [
+        "Petrov, I. Olivine cathodes revisited. Invented Energy Lett. 3, 12 (2012)."
+      ]
+    },
+    {
+      "key": "FX04",
+      "title": "Machine-learned interatomic potentials for amorphous silicon at high pressure",
+      "authors": ["Clara Weiß", "Ana María Gómez"],
+      "year": "2022",
+      "venue": "Computational Fiction",
+      "doi": "10.5555/cf.2022.0404",
+      "citekey": "weiss2022machinelearned",
+      "collections": [],
+      "abstract": "We train a neural network potential on twelve thousand density-functional snapshots of amorphous silicon. The model reproduces radial distribution functions and the pressure-induced transition to a high-density phase. Errors in forces stay below one hundred millielectronvolts per angstrom. Molecular dynamics with the potential reaches nanosecond timescales for ten thousand atoms.",
+      "body": [
+        "Active learning selects new configurations whenever the committee disagreement exceeds a threshold. Most selected structures contain five-fold coordinated atoms that the initial dataset barely sampled. After four rounds the disagreement falls below the threshold for every trajectory.",
+        "Under compression the coordination number rises gradually rather than abruptly. A sharp change appears only above twelve gigapascals, which marks the onset of the high-density amorphous phase. Slow decompression recovers the low-density network with a small hysteresis."
+      ],
+      "references": [
+        "Brenner, K. Empirical potentials for silicon. Invented Phys. Rev. 31, 5262 (1985)."
+      ]
+    },
+    {
+      "key": "FX05",
+      "title": "Halide perovskite nanocrystals: surface ligands and photoluminescence quantum yield",
+      "authors": ["François Lefèvre", "Yuki Morimoto"],
+      "year": "2023",
+      "venue": "Nano Invention",
+      "doi": "10.5555/ni.2023.0505",
+      "citekey": "lefevre2023halide",
+      "collections": ["SPEC"],
+      "abstract": "Cesium lead bromide CsPbBr3 nanocrystals lose brightness when oleylamine ligands desorb during purification. Replacing them with zwitterionic ligands keeps the photoluminescence quantum yield above ninety percent after five washing cycles. Time-resolved spectroscopy shows that trap-assisted recombination is suppressed. The treated crystals remain stable in air for several weeks.",
+      "body": [
+        "Surface bromide vacancies create shallow traps that capture holes within a few picoseconds. Ligand exchange passivates these vacancies, as shown by the longer average photoluminescence lifetime. Nuclear magnetic resonance confirms that the zwitterionic head groups bind to the crystal surface.",
+        "The emission peak stays at five hundred and twelve nanometres with a narrow linewidth. Small blue shifts appear for crystals smaller than eight nanometres because of quantum confinement."
+      ],
+      "references": [
+        "Ivanova, D. and Chen, W. Ligand chemistry of lead halide nanocrystals. Made-up Mater. 9, 101 (2019)."
+      ]
+    },
+    {
+      "key": "FX06",
+      "title": "Excitons in hexagonal boron nitride from the Bethe-Salpeter equation",
+      "authors": ["Søren Ødegård", "Fatima Zahra"],
+      "year": "2019",
+      "venue": "Imaginary Review B",
+      "doi": "10.5555/irb.2019.0606",
+      "citekey": "odegard2019excitons",
+      "collections": ["GW", "SPEC"],
+      "abstract": "Bound excitons dominate the optical absorption of hexagonal boron nitride below the quasiparticle gap. We solve the Bethe-Salpeter equation on top of quasiparticle energies and find a binding energy close to seven hundred millielectronvolts for the lowest bright exciton. Stacking order changes the dark-bright splitting. Our results explain the strong luminescence reported for bulk crystals.",
+      "body": [
+        "The electron-hole kernel includes the screened direct term and the bare exchange term. Convergence of the binding energy requires a dense k-point grid of at least thirty by thirty points in the plane. The lowest exciton is doubly degenerate and localised over a few lattice constants.",
+        "Changing the interlayer stacking breaks the degeneracy and shifts oscillator strength to a dark state. This dark state brightens with phonon assistance, which accounts for the observed temperature dependence."
+      ],
+      "references": [
+        "Rohde, M. and Lange, S. Electron-hole excitations in semiconductors. Invented Phys. Rev. 62, 4927 (2000)."
+      ]
+    },
+    {
+      "key": "FX07",
+      "title": "Oxygen vacancy polarons in reduced rutile probed by resonant photoemission",
+      "authors": ["Priya Ramanathan", "Tomás Quiroga"],
+      "year": "2018",
+      "venue": "Surface Fiction Letters",
+      "doi": "10.5555/sfl.2018.0707",
+      "citekey": "ramanathan2018oxygen",
+      "collections": ["SPEC"],
+      "abstract": "Removing oxygen from rutile leaves excess electrons that localise on titanium sites as small polarons. Resonant photoemission at the Ti L-edge isolates the in-gap state about one electronvolt below the conduction band. Hybrid functional calculations reproduce the energy of this state only when lattice distortion is allowed. Annealing in oxygen removes the signal.",
+      "body": [
+        "The large Fröhlich polaron of the bulk gives way to a small polaron at the surface. The polaron hops between neighbouring titanium atoms with an activation energy near one hundred and fifty millielectronvolts. Subsurface sites are preferred over surface sites by a small margin. Our two-dimensional maps of the in-gap intensity follow the vacancy density measured by scanning tunnelling microscopy.",
+        "Ti3+ ions carry one unpaired d electron each. Electron paramagnetic resonance detects these centres at low temperature, confirming the magnetic character of the polarons."
+      ],
+      "references": [
+        "Dubois, C. Defects in titanium oxide surfaces. Made-up Surf. Sci. 48, 53 (2003)."
+      ]
+    },
+    {
+      "key": "FX08",
+      "title": "Thermal conductivity of skutterudite thermoelectrics with rattling guest atoms",
+      "authors": ["Hannah Schäfer", "Rui Costa"],
+      "year": "2017",
+      "venue": "Applied Invention",
+      "doi": "10.5555/ai.2017.0808",
+      "citekey": "schafer2017thermal",
+      "collections": [],
+      "abstract": "Filling the cages of CoSb3 with ytterbium guest atoms lowers the lattice thermal conductivity by a factor of three. Anharmonic lattice dynamics shows that low-frequency rattling modes scatter heat-carrying acoustic phonons. The electrical conductivity is barely affected, so the figure of merit rises above one at seven hundred kelvin.",
+      "body": [
+        "Third-order force constants are computed with finite displacements in a 2x2x2 supercell. The phonon Boltzmann equation is solved iteratively, which matters below room temperature where normal processes dominate. Four-phonon scattering lowers the conductivity by a further ten percent at high temperature.",
+        "Partial filling gives the lowest conductivity because disorder adds point-defect scattering. Full filling stiffens the lattice and recovers part of the heat transport."
+      ],
+      "references": [
+        "Nolas, G. Cage compounds for thermoelectrics. Invented Appl. Phys. 15, 77 (1999)."
+      ]
+    },
+    {
+      "key": "FX09",
+      "title": "Copper K-edge X-ray absorption of carbon dioxide reduction intermediates",
+      "authors": ["Wen Li", "José Núñez"],
+      "year": "2024",
+      "venue": "Journal of Invented Spectroscopy",
+      "doi": "10.5555/jis.2024.0909",
+      "citekey": "li2024copper",
+      "collections": ["XAS"],
+      "abstract": "Adsorbed carbon monoxide and formate change the copper K-edge of oxide-derived catalysts in distinct ways. Simulated spectra for surface clusters show that the white line grows with the number of oxygen neighbours. Operando measurements under reducing potential match a mixture of metallic and singly oxidised copper. We propose spectral markers for each intermediate.",
+      "body": [
+        "We follow the screening scheme of Núñez and co-workers for the copper absorber. Multiple-scattering simulations use a cluster radius of eight angstroms around the absorbing copper atom. The core hole is screened within the random phase approximation, and the edge is aligned to a copper foil reference. Spectra are averaged over symmetry-inequivalent surface sites.",
+        "Carbon monoxide on top sites shifts the edge by less than half an electronvolt, whereas bridging formate shifts it by almost one electronvolt. These shifts are larger than the noise of the operando data, so the two intermediates can be told apart."
+      ],
+      "references": [
+        "Okafor, C. et al. Supercell convergence for core-level spectra. J. Made-up Chem. 7, 88 (2018).",
+        "Haldane, T. Operando spectroscopy of electrocatalysts. Invented Catal. 4, 210 (2020)."
+      ]
+    },
+    {
+      "key": "FX10",
+      "title": "Copper K-edge X-ray absorption of carbon dioxide reduction intermediates",
+      "authors": ["Wen Li", "José Núñez"],
+      "year": "2024",
+      "venue": "Journal of Invented Spectroscopy",
+      "doi": "10.5555/jis.2024.0909",
+      "citekey": "li2024coppera",
+      "collections": ["BAT"],
+      "abstract": "Adsorbed carbon monoxide and formate change the copper K-edge of oxide-derived catalysts in distinct ways. Simulated spectra for surface clusters show that the white line grows with the number of oxygen neighbours. Operando measurements under reducing potential match a mixture of metallic and singly oxidised copper. We propose spectral markers for each intermediate.",
+      "body": [],
+      "references": []
+    },
+    {
+      "key": "FX11",
+      "title": "Superconducting gap anisotropy in iron selenide monolayers on strontium titanate",
+      "authors": ["Mei Takahashi"],
+      "year": "2021",
+      "venue": "Imaginary Review B",
+      "doi": "",
+      "citekey": "takahashi2021superconducting",
+      "collections": [],
+      "abstract": "Monolayer FeSe grown on SrTiO3 superconducts far above the bulk critical temperature. Angle-resolved photoemission resolves a nodeless gap with a fourfold modulation around the electron pockets. Interfacial phonons from the substrate couple to the electrons and enhance pairing. The anisotropy follows the symmetry of the substrate lattice.",
+      "body": [
+        "Replica bands appear about one hundred millielectronvolts below the main bands, which is the signature of forward-scattering electron-phonon coupling. Their intensity falls quickly with distance from the interface.",
+        "Annealing the film in vacuum dopes it with electrons and raises the gap from ten to fifteen millielectronvolts."
+      ],
+      "references": [
+        "Bardeen, J. Theory of pairing in metals. Invented Phys. Rev. 108, 1175 (1957)."
+      ]
+    },
+    {
+      "key": "FX12",
+      "title": "Sourdough fermentation kinetics with wild yeast and lactic bacteria",
+      "authors": ["Giulia Rossi"],
+      "year": "2016",
+      "venue": "Bakery Science Imagined",
+      "doi": "10.5555/bsi.2016.1212",
+      "citekey": "rossi2016sourdough",
+      "collections": [],
+      "abstract": "We follow the rise of sourdough starters over forty-eight hours with time-lapse imaging. The dough volume doubles fastest at twenty-six degrees, where yeast and bacteria grow in balance. Acidity limits the final rise once the pH drops below four. Rye flour supports faster fermentation than wheat flour.",
+      "body": [
+        "Starters are fed every twelve hours with equal masses of flour and water. Gas production is measured with a pressure sensor sealed inside each jar. Lactic bacteria dominate the population after the third feeding.",
+        "A cooler kitchen slows both organisms, but the bacteria slow less, so the bread tastes more sour."
+      ],
+      "references": []
+    }
+  ]
+}

@@ -4,8 +4,10 @@
 // "Widths"). Cells are text first: the value, then quiet grey citation chips after the sentence, "+N" for more than
 // one (spec 005's chip). A chip opens a small popover with the quote, where it came from, an "Unverified" mark when
 // the quote check failed, and Open. Pending cells are skeleton bars. Row ticks feed the panel's Download.
+import { setPaperText } from '../paper-text.js';
 import { h } from '../dom.js';
 import { outsideButton } from '../links.js';
+import { paperMenuOn } from '../paper-menu.js';
 import { cellRefs, cellQuotes, refKey, authorsShort } from '../export/common.js';
 import { isUnverified } from './artifact-data.js';
 import { keyOf } from './radar-digest-data.js';
@@ -149,6 +151,7 @@ export function renderCell(ctx, cell, rowId, columnId) {
 function openPaper(ctx, row) {
   const p = row.paper;
   if (!p) return;
+  ctx.radar?.viewed(p); // a radar paper opened is one less paper of news
   if (p.ref.kind === 'paper') openCitation(ctx, p.ref);
   else if (p.doi) ctx.host.openLink(`https://doi.org/${p.doi}`);
   else if (p.url) ctx.host.openLink(p.url);
@@ -159,7 +162,7 @@ function openPaper(ctx, row) {
 function paperCell(ctx, row) {
   const p = /** @type {NonNullable<GridRow["paper"]>} */ (row.paper);
   const box = h(ctx.doc, 'div', 'sb-art-paper');
-  const title = h(ctx.doc, 'a', 'sb-art-title', p.title);
+  const title = setPaperText(h(ctx.doc, 'a', 'sb-art-title'), p.title); // arXiv titles come in TeX (paper-text.js)
   title.setAttribute('role', 'link');
   title.setAttribute('tabindex', '0');
   title.title = p.inLibrary ? 'Show in your library' : p.doi ? `Open https://doi.org/${p.doi}` : '';
@@ -181,7 +184,7 @@ function paperCell(ctx, row) {
     const doi = h(ctx.doc, 'a', 'sb-art-doi', 'DOI');
     doi.setAttribute('role', 'link');
     doi.title = `https://doi.org/${p.doi}`;
-    doi.addEventListener('click', () => ctx.host.openLink(`https://doi.org/${p.doi}`));
+    doi.addEventListener('click', () => { ctx.radar?.viewed(p); ctx.host.openLink(`https://doi.org/${p.doi}`); });
     tags.append(doi);
     const out = outsideButton(ctx.doc, ctx.host, `https://doi.org/${p.doi}`);
     if (out) tags.append(out);
@@ -284,6 +287,7 @@ export function renderTable(ctx, grid, rows) {
       tr.append(td);
     }
     ctx.radar?.mark(tr, row.paper);
+    if (row.paper) paperMenuOn(tr, row.paper, ctx.host);
     tbody.append(tr);
   }
   table.append(thead, tbody);
@@ -316,6 +320,7 @@ export function renderCards(ctx, grid, rows) {
       card.append(field);
     }
     ctx.radar?.mark(card, row.paper);
+    if (row.paper) paperMenuOn(card, row.paper, ctx.host);
     list.append(card);
   }
   return list;

@@ -123,7 +123,7 @@ export async function paintPaper(into, ctx, route) {
   const ask = /** @type {HTMLButtonElement} */ (h(doc, 'button', 'sb-button is-primary', 'Ask about this'));
   ask.setAttribute('type', 'button');
   ask.addEventListener('click', () => {
-    host.setContext([{ attachment: { kind: 'zoteroItem', citekey: item.citekey || route.key }, label: chipLabel({ key: route.key, title: item.title, authors: parts.authors, year: Number.parseInt(item.year, 10) || null, venue: '', citekey: '' }), why: 'reading' }]);
+    host.setContext([{ attachment: { kind: 'zoteroItem', citekey: item.citekey || route.key }, label: chipLabel({ key: route.key, title: item.title, authors: parts.authors, year: Number.parseInt(item.year, 10) || null, venue: '', citekey: '', doi: '' }), why: 'reading' }]);
     go({ view: 'chat' });
   });
   bar.append(back, h(doc, 'span', 'sbw-spacer-x'), openZotero, toggle, ask);

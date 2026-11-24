@@ -239,3 +239,13 @@ test('read_result: an `on` turn gets abstracts with the rows; a plain turn only 
   assert.match(got.asked, /Abstract: Abstract of Delta/);
   assert.match(got.paged, /\[more rows: call read_result again with offset 500\]/);
 });
+
+test('spec 030 R11: a plain turn of a thread that cites a paper of its Find search by DOI link is not flagged unknown; an invented link still is', async () => {
+  const { ai, id } = await setup(() => 'Gamma is outside. https://doi.org/10.9999/INV.3 and https://example.org/invented');
+  const events = await send(ai, id, { text: 'One line: what is gamma?' });
+  const done = events.find((e) => e.type === 'done');
+  const byUrl = Object.fromEntries(done.answer.citations.map((c) => [c.ref.url, c]));
+  assert.equal(byUrl['https://doi.org/10.9999/INV.3'].status, 'resolved');
+  assert.equal(byUrl['https://doi.org/10.9999/INV.3'].title, 'Gamma widgets outside the library');
+  assert.equal(byUrl['https://example.org/invented'].status, 'unknown');
+});

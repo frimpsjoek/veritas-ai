@@ -121,3 +121,11 @@ test('stripUnknownCitations keeps allowed keys, including inside a group, and re
   assert.equal(stripUnknownCitations('X [@a; @ghost; @b].', allowed), 'X [@a; @b].');
   assert.equal(stripUnknownCitations('Y [@ghost; @nope].', allowed), 'Y.');
 });
+
+test('spec 030 R9: an evidence entry resting on a paper outside the library lists it by link in the exported note', () => {
+  const request = { question: 'Q', scope: { kind: 'library' }, sources: ['library'], years: { from: null, to: null }, depth: 'quick' };
+  const report = { title: 'Q', scope: 's', method: 'm', themes: [], disagreements: '', gaps: '', references: [],
+    evidence: [{ claim: 'Holes shift edges', strength: 'moderate', sources: ['k'], links: [{ url: 'https://doi.org/10.1107/s1', title: 'L-edge [XANES] of metals', year: 1999 }] }] };
+  const { markdown } = renderReport(/** @type {any} */ (report), request, { model: 'm', date: '2026-11-19' }, []);
+  assert.match(markdown, /\| Holes shift edges \| \[@k\], \[L-edge  XANES  of metals \(1999\)\]\(https:\/\/doi\.org\/10\.1107\/s1\) \| moderate \|/);
+});

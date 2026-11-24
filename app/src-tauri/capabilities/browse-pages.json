@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "browse-pages",
+  "description": "A page in a Browse tab may hand over the PDF of a Save press, and nothing else; without that press's token both commands refuse (spec 027 D3).",
+  "webviews": ["browse-*"],
+  "remote": { "urls": ["https://*/*", "http://*/*"] },
+  "permissions": ["allow-browse-pdf-info", "allow-browse-pdf-bytes"]
+}

@@ -40,7 +40,7 @@ const js = await build({
   logLevel: 'warning',
 });
 const loginJs = await build({ entryPoints: ['src/login.js'], nodePaths, bundle: true, format: 'esm', platform: 'browser', target: 'es2022', minify: true, write: false, logLevel: 'warning' });
-const css = [ui('styles/tokens-web.css'), ui('src/home/type.css'), ui('styles/ui.css'), ui('src/home/home.css'), 'src/shell.css', 'src/views.css', ui('src/sources/sources.css')].map((f) => readFileSync(f, 'utf8')).join('\n');
+const css = [ui('styles/tokens-web.css'), ui('src/home/type.css'), ui('styles/ui.css'), ui('src/home/home.css'), 'src/shell.css', 'src/views.css', ui('src/sources/sources.css'), ui('src/image-viewer.css')].map((f) => readFileSync(f, 'utf8')).join('\n');
 
 const jsName = hashed('app', 'js', js.outputFiles[0].contents);
 const cssName = hashed('app', 'css', css);

@@ -7,7 +7,7 @@ import { menuItem } from './chat/popover.js';
 
 export const OPEN_LINKS_PREF = 'openLinks';
 
-/** @typedef {{ openLink(url: string, opts?: { outside?: boolean }): void, can?: { linksInside?: boolean } }} LinkHost */
+/** @typedef {{ openLink(url: string, opts?: { outside?: boolean, reader?: boolean }): void, can?: { linksInside?: boolean } }} LinkHost */
 
 /** The user's choice (spec 016's Settings row writes it); anything but 'outside' means inside.
  *  @param {{ get<T>(key: string): T | undefined }} prefs @returns {'inside' | 'outside'} */
@@ -29,13 +29,33 @@ export function isPdfUrl(url) {
   } catch { return false; }
 }
 
-/** Where a link goes: 'inside' (the app's own browser), 'outside' (the system browser) or 'scheme' (zotero:, obsidian:
- *  and other non-web links, handed to the system). A link marked outside always goes outside; so does every link when
- *  the setting says so or the host has no browser to show. @param {string} url @param {{ outside?: boolean } | undefined} opts
- *  @param {{ mode: 'inside' | 'outside', hasBrowser: boolean }} where @returns {'inside' | 'outside' | 'scheme'} */
+/** A link to a paper (spec 027 G2): a DOI (doi.org or a publisher path with one), an arXiv paper, a ChemRxiv paper,
+ *  or a publisher's article page without a DOI in it (ACS's newer pages, Nature). @param {string} url */
+export function isPaperUrl(url) {
+  /** @type {URL} */ let u;
+  try { u = new URL(url); } catch { return false; }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') return false;
+  const host = u.hostname.toLowerCase().replace(/^www\./, '');
+  const path = decodeURIComponent(u.pathname);
+  if (/(^|\/)10\.\d{4,9}\/\S+/.test(path)) return true;
+  if (/(^|\.)arxiv\.org$/.test(host)) return /^\/(abs|pdf)\/\S+/.test(path);
+  if (host === 'chemrxiv.org') return /^\/engage\/chemrxiv\/article-details\/[0-9a-f]{24}/.test(path);
+  if (host === 'pubs.acs.org') return /^\/[a-z0-9]+\/article(-abstract)?\//.test(path);
+  if (host === 'nature.com') return /^\/articles\/\S+/.test(path);
+  return false;
+}
+
+/** Where a link goes: 'inside' (the app's own browser), 'outside' (the system browser), 'browse' (a Browse tab in the
+ *  desktop app, for papers) or 'scheme' (zotero:, obsidian: and other non-web links, handed to the system). A link
+ *  marked outside always goes outside; so does every link when the setting says so or the host has no browser to
+ *  show. A paper goes to Browse when there is one, unless the reader is asked for.
+ *  @param {string} url @param {{ outside?: boolean, reader?: boolean } | undefined} opts
+ *  @param {{ mode: 'inside' | 'outside', hasBrowser: boolean, hasBrowse?: boolean }} where @returns {'inside' | 'outside' | 'scheme' | 'browse'} */
 export function planOpen(url, opts, where) {
   if (!isWebUrl(url)) return 'scheme';
-  return opts?.outside || where.mode === 'outside' || !where.hasBrowser ? 'outside' : 'inside';
+  if (opts?.outside || where.mode === 'outside') return 'outside';
+  if (where.hasBrowse && !opts?.reader && isPaperUrl(url)) return 'browse';
+  return where.hasBrowser ? 'inside' : 'outside';
 }
 
 /** A modified click (⌘, Ctrl, Shift) means "somewhere else": the system browser. @param {MouseEvent} event */

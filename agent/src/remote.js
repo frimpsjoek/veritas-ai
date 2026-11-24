@@ -56,6 +56,7 @@ export function createRemoteRuntime(transport) {
       },
       async rename(id, title) { await transport.request('POST', '/conversations/rename', { id, title }); },
       async markSeen(id) { await transport.request('POST', '/conversations/seen', { id }); },
+      async markViewed(id, rows) { await transport.request('POST', '/conversations/viewed', { id, rows }); },
       async remove(id) { await transport.request('DELETE', '/conversations', { id }); },
       async cancel(id) { await transport.request('POST', '/conversations/cancel', { id }); },
       cursor: (id) => /** @type {any} */ (transport.request('GET', `/conversations/cursor${qs({ id })}`)),
@@ -184,6 +185,7 @@ export function createRemoteRuntime(transport) {
       create: (draft) => /** @type {any} */ (transport.request('POST', '/routines', draft)),
       update: (id, patch) => /** @type {any} */ (transport.request('POST', '/routines/update', { id, patch })),
       runNow: (id) => /** @type {any} */ (transport.request('POST', '/routines/run', { id })),
+      redo: (id) => /** @type {any} */ (transport.request('POST', '/routines/redo', { id })),
       pause: (id) => /** @type {any} */ (transport.request('POST', '/routines/pause', { id })),
       resume: (id) => /** @type {any} */ (transport.request('POST', '/routines/resume', { id })),
       archive: (id) => /** @type {any} */ (transport.request('POST', '/routines/archive', { id })),
@@ -198,6 +200,19 @@ export function createRemoteRuntime(transport) {
       forgetTopic: (routineId, text) => /** @type {any} */ (transport.request('POST', '/radar/forget', { routineId, text })),
       verdicts: (routineId) => /** @type {any} */ (transport.request('POST', '/radar/verdicts', { routineId })),
       feedback: (routineId, paperKey, verdict) => /** @type {any} */ (transport.request('POST', '/radar/feedback', { routineId, paperKey, verdict })),
+    },
+
+    readingList: {
+      list: () => /** @type {any} */ (transport.request('GET', '/reading-list')),
+      add: (paper) => /** @type {any} */ (transport.request('POST', '/reading-list/add', { paper })),
+      remove: (id) => /** @type {any} */ (transport.request('POST', '/reading-list/remove', { id })),
+      markRead: (id, read = true) => /** @type {any} */ (transport.request('POST', '/reading-list/read', { id, read })),
+    },
+
+    papers: {
+      access: (papers) => /** @type {any} */ (transport.request('POST', '/papers/access', { papers })),
+      textCache: (opts) => /** @type {any} */ (transport.request('POST', '/papers/text-cache', { clear: Boolean(opts?.clear) })),
+      keep: (paper) => /** @type {any} */ (transport.request('POST', '/papers/keep', { paper })),
     },
 
     scholarly: {

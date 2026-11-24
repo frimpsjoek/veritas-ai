@@ -51,6 +51,8 @@ Run `./check.sh` to build and test everything.
 
 ## Install
 
+**Desktop app (macOS, Windows, Linux):** download it from the [latest release](https://github.com/frimpsjoek/veritas-ai/releases/latest) and see [Install the desktop app](docs/guide/install-desktop.md).
+
 **Homebrew (macOS and Linux):**
 
 ```sh
@@ -89,13 +91,19 @@ Open http://localhost:27182/app/. Veritas finds a Zotero library in `~/Zotero` b
 Download from the [latest release](https://github.com/frimpsjoek/veritas-ai/releases/latest) (they talk to the
 Veritas server above):
 
-- **Zotero 7:** [veritas-zotero-0.53.0.xpi](https://github.com/frimpsjoek/veritas-ai/releases/latest/download/veritas-zotero-0.53.0.xpi).
+- **Zotero 7:** [veritas-zotero-0.54.8.xpi](https://github.com/frimpsjoek/veritas-ai/releases/latest/download/veritas-zotero-0.54.8.xpi).
   In Zotero: Tools > Plugins > gear > Install Plugin From File, and pick the `.xpi`.
-- **Obsidian:** [veritas-obsidian-0.53.0.zip](https://github.com/frimpsjoek/veritas-ai/releases/latest/download/veritas-obsidian-0.53.0.zip).
+- **Obsidian:** [veritas-obsidian-0.54.8.zip](https://github.com/frimpsjoek/veritas-ai/releases/latest/download/veritas-obsidian-0.54.8.zip).
   Unzip it into `<your vault>/.obsidian/plugins/`, then enable **Veritas** under Settings > Community plugins.
 
 To build them yourself: `cd zotero && npm ci && ./build.sh` (writes `zotero/dist/*.xpi`), and
 `cd obsidian && npm ci && npx tsc -p . && node esbuild.config.mjs`.
+
+### Updating
+
+Homebrew: `brew upgrade veritas && brew services restart veritas` (your data stays in `$(brew --prefix)/var/veritas`).
+Zotero updates the plugin by itself; for Obsidian, unzip the new release over the old copy. Source installs, the
+desktop app and cutting a release: [docs/guide/updating.md](docs/guide/updating.md).
 
 ## Use
 

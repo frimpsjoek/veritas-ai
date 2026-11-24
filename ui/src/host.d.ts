@@ -40,6 +40,17 @@ export interface OutsidePaper {
 /** Spec 008 Z1/Z4: one row of the Zotero collection tree, for the "Where to look" picker. `parent` is the
  *  parent's key, or null at the root; `count` is the collection's own item count, not its descendants' rolled up
  *  (the tree component sums those itself when it needs one). */
+/** A paper opened from a radar issue, for the reader: how to judge it there. The verdicts are the issue's own. */
+export interface RadarLink {
+  routine: string;
+  key: string;
+  paper: OutsidePaper;
+  verdict(): "added" | "later" | "liked" | "dismissed" | null;
+  tell(verdict: "added" | "later" | "liked" | "dismissed" | "undo"): Promise<"added" | "later" | "liked" | "dismissed" | null>;
+  /** Spec 028 R6: the paper was opened in the reader, so it is no longer news on its issue (told once; true when told). */
+  viewed?(): Promise<boolean>;
+}
+
 export interface CollectionNode { key: string; name: string; parent: string | null; count: number }
 
 export interface UiHost {
@@ -98,7 +109,7 @@ export interface UiHost {
   /** Spec 015: every web link goes through here. `outside: true` is the system browser whatever the setting says;
    *  otherwise the host decides (the web app's browser panel, Obsidian's Web viewer, or, in Zotero, the system browser).
    *  The `openLinks` pref ('inside' | 'outside') is read by the host; see links.js. */
-  openLink(url: string, opts?: { outside?: boolean }): void;
+  openLink(url: string, opts?: { outside?: boolean; radar?: RadarLink; reader?: boolean }): void;
   revealFile(path: string): void;
   openInTab?(): void;
 
@@ -107,11 +118,13 @@ export interface UiHost {
   /** `items` is parallel to `papers` (index-for-index), `null` where that one failed, so a caller — find-view.js's
    *  table, ticking several at once — can mark exactly the rows that made it in, the way the pre-005 code mutated
    *  each row's `.key`/`.citekey` in place as `discover.add()` finished it. */
-  addToLibrary?(papers: OutsidePaper[]): Promise<{ items: ({ key: string; citekey: string } | null)[] }>;
+  addToLibrary?(papers: OutsidePaper[], options?: { collection?: string | null; tag?: string; collectionName?: string }): Promise<{ items: ({ key: string; citekey: string } | null)[] }>;
 
   // --- small chrome
   notice(text: string): void;           // Zotero: progress window; Obsidian: Notice
   logError(error: unknown): void;       // Zotero.logError / console.error
+  /** Spec 028 R7 (optional): a radar paper stopped being news (markViewed); the web app reads its rail badge again. */
+  newsChanged?(): void;
   /** The document and style injection point: Zotero adds sb-ui.css to each chrome document once; Obsidian does
    *  nothing (styles.css already has it). */
   mount(root: HTMLElement): void;
