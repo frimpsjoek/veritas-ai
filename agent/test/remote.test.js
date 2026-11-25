@@ -153,6 +153,41 @@ test('ask: a scope survives the HTTP wire and reaches the ToolContext', async ()
   assert.deepEqual(seen[0], { kind: 'tag', name: 'important' });
 });
 
+test('remote Ask preserves provided sources and their no-retrieval context across agentd', async () => {
+  const turns = [], contexts = [];
+  const provider = {
+    id: 'fake', caps: {},
+    async status() { return null; }, async models() { return []; }, async dispose() {},
+    async *turn(req) {
+      turns.push(req);
+      yield { type: 'final', text: JSON.stringify({ status: 'answered', markdown: 'Wire answer [S1].' }), json: null, usage: {} };
+    },
+  };
+  const gateway = {
+    open(ctx) { contexts.push(ctx); return { specs: [], async call() { return { ok: true, text: '' }; }, mcp: { url: '', token: 't' }, seen: () => [], close() {} }; },
+    mcpServers: { async reports() { return []; } }, async dispose() {},
+  };
+  const library = Object.fromEntries(['search', 'read', 'related', 'resolve'].map((method) => [method, async () => {
+    throw new Error(`library ${method} must not be called`);
+  }]));
+  const service = await createLocalRuntime({
+    platform: { fs: memoryFs() }, library, notes: {}, dataDir: 'data',
+    providers: new Map([['fake', provider]]), gateway,
+    getRoleModel: async () => ({ provider: 'fake', model: null }), limits: { total: 6 },
+  });
+  const remote = createRemoteRuntime(loopbackTransport(service));
+  const events = await collect(remote.ask('Question over the wire', {
+    providedSources: [{ title: 'Private wire title', text: 'Private wire evidence' }],
+  }));
+  assert.equal(events.at(-1).answer.structured.markdown, 'Wire answer [S1].');
+  assert.equal(turns.length, 1);
+  assert.match(turns[0].input, /Private wire title/);
+  assert.match(turns[0].input, /Private wire evidence/);
+  assert.deepEqual(turns[0].history, []);
+  assert.equal(contexts[0].none, true);
+  assert.deepEqual(contexts[0].sources, { papers: false, notes: false, scholarly: false, web: false });
+});
+
 test('a remote client reconnecting mid-turn (after > 0) still gets the rest, then stops at done', async () => {
   const service = await makeService();
   const remote = createRemoteRuntime(loopbackTransport(service));

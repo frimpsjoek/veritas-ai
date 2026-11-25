@@ -115,7 +115,7 @@ export function routes() {
       ),
     },
 
-    { method: 'POST', path: '/ask', call: (svc, { question, web, scope, sources }, ctx) => collectAsync(svc.ask(question, { web, scope, sources, signal: ctx.signal })) },
+    { method: 'POST', path: '/ask', call: (svc, { question, web, scope, sources, providedSources }, ctx) => collectAsync(svc.ask(question, { web, scope, sources, providedSources, signal: ctx.signal })) },
 
     { method: 'GET', path: '/reviews', call: (svc) => svc.reviews.list() },
     { method: 'POST', path: '/reviews/estimate', call: (svc, body) => svc.reviews.estimate(body) },

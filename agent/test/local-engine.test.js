@@ -123,6 +123,26 @@ test('Ask on a local model: the not-found result is a typed not_found, and an an
   assert.equal(answered.passages.length, 2);
 });
 
+test('Ask with provided sources bypasses retrieval-first handling for no-tool local models', async () => {
+  const { ai, gw, library, provider } = await runtime({ provider: localLike({ answer: 'Only the supplied result [S1].' }) });
+  library.search = async () => { throw new Error('library search must not run'); };
+  library.read = async () => { throw new Error('library read must not run'); };
+  library.related = async () => { throw new Error('library related must not run'); };
+  library.resolve = async () => { throw new Error('library resolve must not run'); };
+  const events = [];
+  for await (const event of ai.ask('What changed?', { providedSources: [{ title: 'Private experiment', text: 'Recall improved.' }] })) events.push(event);
+  const done = events.find((event) => event.type === 'done');
+  assert.deepEqual(done.answer.structured, { status: 'answered', markdown: 'Only the supplied result [S1].' });
+  assert.equal(events.some((event) => event.type === 'activity'), false);
+  assert.equal(library.searches.length, 0);
+  assert.equal(provider.seen.length, 1);
+  assert.match(provider.seen[0].input, /Private experiment/);
+  assert.match(provider.seen[0].input, /Recall improved\./);
+  assert.match(provider.seen[0].instructions, /answering only from the supplied evidence JSON/);
+  assert.deepEqual(provider.seen[0].tools.specs, []);
+  assert.equal(gw.opened[0].none, true);
+});
+
 test('a short follow-up borrows the previous question; an attached paper is read into the passages first', async () => {
   const lib = makeLibrary();
   const { ai, provider } = await runtime({ provider: localLike(), library: lib });
