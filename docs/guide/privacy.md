@@ -20,7 +20,9 @@ Zotero itself (adding a paper, saving a highlight) go through the Zotero plugin,
 the code from Settings > Server and phone. Requests from other websites are refused. Independent Globus sign-in is also
 available on a configured public reverse proxy. Its per-user chats, model choices and preferences stay in tenant data
 directories, separate from the legacy administrator runtime and other Globus users. Ordinary library sources/admin
-settings remain an administrator trust domain rather than writable tenant data.
+settings remain an administrator trust domain rather than writable tenant data. The operator's Zotero library and
+indexed Zotero records are administrator-only: they are not included in Globus or tenant-agent search, reading or
+radar results.
 
 **Optional Zotero WebDAV attachments:** metadata continues to use Zotero's own service. If the operator enables hosted
 file sync, desktop Zotero sends personal-library attachment ZIP/property files directly to Veritas over HTTPS using a

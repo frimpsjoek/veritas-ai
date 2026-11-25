@@ -56,6 +56,26 @@ test('tenant composition isolates settings, conversations, secrets and private o
   await second.service.dispose();
 });
 
+test('tenant composition scopes shared-library calls to its verified identity', async () => {
+  const fs = memoryFs();
+  const net = platform(fs);
+  const calls = [];
+  net.fetch = async (url, opts) => {
+    calls.push({ url: String(url), opts });
+    return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  const runtime = await createTenantRuntime({
+    platform: net, tenantRoot: 'users', tenant: A,
+    kbBaseUrl: 'http://127.0.0.1:27182', agentSecret: 'sidecar-secret', port: 39000,
+  });
+  await runtime.library.search({ text: 'notes', scope: { kind: 'library' } });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].opts.headers.Authorization, 'Bearer sidecar-secret');
+  assert.equal(calls[0].opts.headers['X-Veritas-Tenant'], A);
+  assert.equal(calls[0].opts.headers['X-KB-Client'], 'agent');
+  await runtime.service.dispose();
+});
+
 test('persisted custom endpoints and stdio configs are neutralized before reconstruction', async () => {
   const fs = memoryFs();
   const net = platform(fs);

@@ -95,8 +95,9 @@ port with the Tailscale host name in the Host header. `request_class` sorts ever
 So a web page cannot use the API, through DNS rebinding or otherwise, and a tailnet device without the token gets
 nothing. No CORS headers are sent. POST /a2a always requires its independent data/a2a-token, including on loopback.
 The only cross-site navigation exception is exact GET /auth/globus/callback, which still consumes one-use state and a
-browser-binding cookie. Globus `vg_session` requests get read-only shared-library routes plus private interactive
-workspaces; the sidecar proxy derives tenant from that verified session, never from an inbound tenant header.
+browser-binding cookie. Globus `vg_session` requests get read-only non-Zotero shared-note routes plus private
+interactive workspaces; the sidecar proxy derives tenant from that verified session, never from an inbound tenant
+header. Tenant library calls additionally prove the sidecar capability. Operator Zotero records stay administrator-only.
 Native `/webdav/` traffic is dispatched separately, before this ordinary gate, and still uses the foreign-origin
 refusal. It requires its own route-scoped random Basic credential even on loopback; no cookie/admin/A2A fallback is
 allowed. Native credential issuance is separately limited to the existing verified Globus principal, and the whole
@@ -181,14 +182,14 @@ GLOBUS_LOGIN_COOKIE = "vg_login"
 GLOBUS_AUTH: globus_auth.GlobusAuth | None = None
 AUTH_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache", "Referrer-Policy": "no-referrer"}
 
-# Slice 1 admits Globus identities only to shared-library reads. The sidecar and
-# every mutation remain administrator-only until per-user workspaces are wired.
+# Globus identities may read shared non-Zotero notes and their own interactive
+# workspaces. The operator's Zotero library, its indexed records and source paths
+# remain administrator-only. Every mutation is administrator-only as well.
 GLOBUS_READ_ROUTES = {
-    "/ping", "/status", "/sources", "/search", "/related", "/links", "/recent", "/note",
-    "/zotero", "/zotero/pdf", "/zotero/items", "/zotero/collections", "/zotero/status",
-    "/paper-note", "/paper-note/body", "/paper-figure", "/file", "/folder-file", "/site-icon",
-    "/web/state", "/web/page", "/web/pdf",
+    "/ping", "/status", "/search", "/related", "/links", "/recent", "/note",
+    "/paper-figure", "/file", "/folder-file", "/site-icon", "/web/state", "/web/page", "/web/pdf",
 }
+VISITOR_IDENTITIES = {"globus", "globus-agent"}
 
 
 GLOBUS_AGENT_ROUTES = ("/ping", "/conversations", "/events", "/ask", "/providers", "/sessions", "/skills",
@@ -244,6 +245,18 @@ def bearer_ok(headers: Mapping[str, str]) -> bool:
     return bool(sent) and hmac.compare_digest(sent.encode(), token().encode())
 
 
+def sidecar_principal(headers: Mapping[str, str]) -> dict | None:
+    """A tenant library call authenticated by the sidecar, never by an inbound tenant header alone."""
+    secret = getattr(AGENT_SIDECAR, "secret", "")
+    scheme, _, supplied = (headers.get("Authorization") or "").partition(" ")
+    tenant = headers.get("X-Veritas-Tenant") or ""
+    if (scheme.lower() != "bearer" or not re.fullmatch(r"[0-9a-f]{64}", tenant)
+            or not isinstance(secret, str) or not secret
+            or not hmac.compare_digest(supplied.encode(), secret.encode())):
+        return None
+    return {"kind": "globus-agent", "tenant": tenant}
+
+
 def _cookie(headers: Mapping[str, str], name: str) -> str:
     try:
         morsel = SimpleCookie(headers.get("Cookie") or "").get(name)
@@ -262,6 +275,8 @@ def globus_principal(headers: Mapping[str, str]) -> dict | None:
 def principal(headers: Mapping[str, str]) -> dict | None:
     if bearer_ok(headers):
         return {"kind": "admin"}
+    if (tenant_agent := sidecar_principal(headers)) is not None:
+        return tenant_agent
     # A deliberate Globus sign-in is the account switch. An invalid/revoked
     # Globus cookie fails closed rather than silently reusing a legacy admin cookie.
     if _cookie(headers, GLOBUS_SESSION_COOKIE):
@@ -336,6 +351,20 @@ def _storage_status(identity: dict | None) -> dict:
             status["error"] = "Zotero file storage is unavailable"
         return status
     return ZOTERO_STORAGE.status(tenant)
+
+
+def hidden_paths(agent: bool, identity: dict) -> set[str]:
+    """Private notes plus every operator Zotero record for a signed-in visitor or their agent."""
+    visitor = identity.get("kind") in VISITOR_IDENTITIES
+    hidden = kb.private_paths() if agent or visitor else set()
+    if visitor:
+        hidden = set(hidden)  # never add visitor-only paths to privacy.json's shared cache
+        db = kb.connect()
+        try:
+            hidden.update(path for (path,) in db.execute("SELECT path FROM notes WHERE source='zotero'"))
+        finally:
+            db.close()
+    return hidden
 
 
 def searcher() -> kb.Searcher:
@@ -768,9 +797,9 @@ class Handler(BaseHTTPRequestHandler):
         route, q = urlparse(self.path).path, self._query()
         agent = self._agent()
         identity = getattr(self, "_identity", None) or {}
-        restricted = agent or identity.get("kind") == "globus"
+        restricted = agent or identity.get("kind") in VISITOR_IDENTITIES
         rules = kb.privacy() if restricted else {}
-        hidden = kb.private_paths() if restricted else set()
+        hidden = hidden_paths(agent, identity)
 
         def guard(path: str) -> str:
             rel = kb.note_path(path)
@@ -1033,6 +1062,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         route = urlparse(self.path).path
         agent = self._agent()
+        identity = getattr(self, "_identity", None) or {}
 
         def handle() -> None:
             if agent and route not in AGENT_ROUTES:
@@ -1180,9 +1210,9 @@ class Handler(BaseHTTPRequestHandler):
                 body = self._body()
                 with LOCK:
                     result = searcher().similar_to_text(body.get("text", ""), body.get("path"), int(body.get("limit", 8)))
+                hidden = hidden_paths(agent, identity)
+                result = [r for r in result if r["path"] not in hidden]
                 if agent:
-                    hidden = kb.private_paths()
-                    result = [r for r in result if r["path"] not in hidden]
                     audit(route, {"text": body.get("text", "")[:80]}, result)
                 self._send(200, result)
             elif route == "/paper/text":
@@ -1202,7 +1232,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, paper_text.clear(PAPER_TEXT_CACHE) if body.get("clear") else paper_text.stats(PAPER_TEXT_CACHE))
             elif route in ("/radar/score", "/radar/profile", "/radar/fulltext", "/radar/calibrate"):
                 body = self._body(limit=8_000_000)
-                hidden = kb.private_paths() if agent else set()
+                hidden = hidden_paths(agent, identity)
                 try:
                     if route == "/radar/score":
                         result = radar_api.score(searcher(), body, LOCK, hidden)

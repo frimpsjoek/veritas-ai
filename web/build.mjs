@@ -94,8 +94,13 @@ writeFileSync(`${out}/login.html`, `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f0f10" media="(prefers-color-scheme: dark)">
+<meta name="description" content="Sign in to Veritas.">
 <title>Sign in · Veritas</title>
 <link rel="icon" href="veritas-mark-180.png" type="image/png">
+<link rel="preload" href="inter.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fraunces.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="${cssName}">
 </head>
 <body>

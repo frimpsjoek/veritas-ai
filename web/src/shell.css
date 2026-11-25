@@ -14,6 +14,109 @@ body { background: var(--sb-ui-bg); color: var(--sb-ui-text); font: 15px/1.45 va
 .sbw-login-form label { display: flex; flex-direction: column; gap: var(--sbw-s1); }
 .sbw-login-form input { font-size: 16px; padding: var(--sbw-s2) var(--sbw-s3); } /* 16 px: iOS zooms smaller fields */
 .sbw-login-form .sb-button { padding: var(--sbw-s3) var(--sbw-s4); font-size: var(--sbw-t-body); }
+
+/* The hosted sign-in (login.js): one column in the app's own token system, so the front door and the app behind it
+   are the same design. Four neutrals and one accent, no gradients (spec 013 ledger 6, 11), the 4/8/12/16/24/40 space
+   scale and the 13/15/24 type scale (ledger 1, 13), and light or dark with the system like every other page. */
+.sbw-login.sbw-auth {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: none;
+  min-height: 100vh;
+  min-height: 100dvh;
+  margin: 0;
+  padding: var(--sbw-s6) var(--sbw-s5) calc(var(--sbw-s6) + env(safe-area-inset-bottom));
+  background: var(--sb-ui-bg);
+  color: var(--sb-ui-text);
+  font-family: var(--sbw-sans);
+}
+.sbw-auth button, .sbw-auth input, .sbw-auth a { font-family: inherit; }
+.sbw-auth :focus-visible { outline: 2px solid var(--sb-ui-accent); outline-offset: 2px; }
+.sbw-auth-col { box-sizing: border-box; width: min(100%, 352px); }
+
+/* Head: the mark, the task, and one plain line saying what this is. */
+.sbw-auth-head { padding-bottom: var(--sbw-s5); border-bottom: 1px solid var(--sb-ui-line); }
+.sbw-auth-mark { display: block; width: 40px; height: 40px; border-radius: var(--sbw-r2); }
+.sbw-auth-heading { margin: var(--sbw-s4) 0 0; font: 400 var(--sbw-t-title)/1.25 var(--sbw-serif); letter-spacing: -.01em; }
+.sbw-auth-sub { max-width: 34ch; margin: var(--sbw-s2) 0 0; color: var(--sb-ui-muted); font-size: var(--sbw-t-small); line-height: 1.5; }
+
+/* Globus is the hosted way in, so it comes first and carries the accent. */
+.sbw-auth-globus-slot[hidden] { display: none; }
+.sbw-auth-globus {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-height: 44px;
+  margin-top: var(--sbw-s5);
+  padding: var(--sbw-s2) var(--sbw-s4);
+  border: 1px solid transparent;
+  border-radius: var(--sbw-r1);
+  background: var(--sb-ui-accent);
+  color: var(--sb-ui-on-accent);
+  text-decoration: none;
+  font-size: var(--sbw-t-body);
+  font-weight: 600;
+}
+.sbw-auth-globus-note { margin: var(--sbw-s2) 0 0; color: var(--sb-ui-muted); font-size: var(--sbw-t-small); }
+.sbw-auth-divider { display: flex; align-items: center; gap: var(--sbw-s3); margin-top: var(--sbw-s5); color: var(--sb-ui-faint); font-size: var(--sbw-t-small); }
+.sbw-auth-divider::before, .sbw-auth-divider::after { content: ""; flex: 1; height: 1px; background: var(--sb-ui-line); }
+
+/* The access code: a labelled field, its one line of provenance, and the form's own button. */
+.sbw-login.sbw-auth .sbw-login-form { gap: var(--sbw-s4); margin-top: var(--sbw-s5); }
+.sbw-login.sbw-auth .sbw-login-form[hidden] { display: none; }
+.sbw-auth .sbw-login-form .sbw-auth-code-label { display: flex; flex-direction: column; gap: var(--sbw-s2); }
+.sbw-auth-label-text { font-size: var(--sbw-t-small); font-weight: 600; }
+.sbw-auth-label-note { color: var(--sb-ui-muted); font-size: var(--sbw-t-small); }
+.sbw-login.sbw-auth .sbw-login-form .sbw-auth-code-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+  padding: var(--sbw-s2) var(--sbw-s3);
+  border: 1px solid var(--sb-ui-line);
+  border-radius: var(--sbw-r1);
+  outline: 0;
+  background: var(--sb-ui-bg);
+  color: var(--sb-ui-text);
+  font: 16px/1.4 var(--sbw-sans); /* 16 px: iOS zooms smaller fields */
+}
+.sbw-auth-code-input:focus { border-color: var(--sb-ui-accent); box-shadow: 0 0 0 3px var(--sb-ui-accent-tint); }
+.sbw-auth-code-input[aria-invalid="true"] { border-color: var(--sb-ui-danger); }
+.sbw-login.sbw-auth .sbw-login-form .sbw-auth-code-submit {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-height: 44px;
+  padding: var(--sbw-s2) var(--sbw-s4);
+  border: 1px solid var(--sb-ui-line);
+  border-radius: var(--sbw-r1);
+  background: var(--sb-ui-control);
+  color: var(--sb-ui-text);
+  font-size: var(--sbw-t-body);
+  font-weight: 600;
+}
+.sbw-login.sbw-auth .sbw-login-form .sbw-auth-code-submit:hover:not(:disabled) { background: var(--sb-ui-hover); }
+/* No Globus on this server: the access code is the way in, so it takes the accent. */
+.sbw-auth[data-globus="off"] .sbw-login-form .sbw-auth-code-submit { border-color: transparent; background: var(--sb-ui-accent); color: var(--sb-ui-on-accent); }
+.sbw-auth[data-globus="off"] .sbw-login-form .sbw-auth-code-submit:hover:not(:disabled) { background: var(--sb-ui-accent); }
+.sbw-login.sbw-auth .sbw-login-form .sbw-auth-code-submit:disabled { opacity: .5; cursor: default; }
+.sbw-auth-status { margin: var(--sbw-s3) 0 0; color: var(--sb-ui-muted); font-size: var(--sbw-t-small); line-height: 1.5; }
+.sbw-auth-status:empty { display: none; }
+.sbw-auth-status[data-tone="error"] { color: var(--sb-ui-danger); }
+.sbw-auth-help { margin: var(--sbw-s5) 0 0; padding-top: var(--sbw-s4); border-top: 1px solid var(--sb-ui-line); color: var(--sb-ui-muted); font-size: var(--sbw-t-small); line-height: 1.5; }
+
+@media (max-width: 480px) {
+  .sbw-login.sbw-auth {
+    align-items: flex-start;
+    padding: calc(var(--sbw-s5) + env(safe-area-inset-top)) var(--sbw-s4) calc(var(--sbw-s5) + env(safe-area-inset-bottom));
+  }
+}
+
 /* setup-view.js: saved servers above the add form; the https warning stands out */
 .sbw-setup .sbw-setup-servers { margin-bottom: var(--sbw-s4); }
 .sbw-setup .sbw-row { align-items: center; }

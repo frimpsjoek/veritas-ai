@@ -109,13 +109,17 @@ export function createHttpSkillSource(fetchFn, opts) {
 
 /**
  * @param {typeof fetch} fetchFn
- * @param {{ baseUrl: string, token?: string | null, searchTimeoutMs?: number, timeoutMs?: number, slowFetch?: typeof fetch }} opts
+ * @param {{ baseUrl: string, token?: string | null, tenant?: string | null, searchTimeoutMs?: number, timeoutMs?: number, slowFetch?: typeof fetch }} opts
  *   `slowFetch`: for the whole-paper and calibration calls, which hold one request for many minutes while the server
  *   reads PDFs; Node's own fetch gives up when a reply's headers take over 300 s (node/platform.mjs has one that waits).
  * @returns {import("./tools").LibraryBackend}
  */
 export function createHttpLibraryBackend(fetchFn, opts) {
-  const headers = { 'X-KB-Client': 'agent', ...(opts.token ? { Authorization: `Bearer ${opts.token}` } : {}) };
+  const headers = {
+    'X-KB-Client': 'agent',
+    ...(opts.token ? { Authorization: `Bearer ${opts.token}` } : {}),
+    ...(opts.tenant ? { 'X-Veritas-Tenant': opts.tenant } : {}),
+  };
   const searchTimeoutMs = opts.searchTimeoutMs ?? SEARCH_TIMEOUT_MS;
   const timeoutMs = opts.timeoutMs ?? READ_TIMEOUT_MS;
 

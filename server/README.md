@@ -50,8 +50,9 @@ Recall with Zotero included: hit@5 9/11, hit@1 6/11 (the old code on the same in
 ## Privacy: what agents and Globus users may see
 
 `privacy.json` controls this.
-- **Private notes:** a note in a listed folder, tagged `#private` or `#no-ai`, or with `private: true` / `ai: false` in its frontmatter is hidden from agent and Globus shared-library requests (search, related, links, recent) and refused on read.
-- **Size caps:** agent and Globus shared-library reads are capped at 12,000 characters per page (`offset` and `next_offset` page through the rest), and search returns at most 10 results.
+- **Private notes:** a note in a listed folder, tagged `#private` or `#no-ai`, or with `private: true` / `ai: false` in its frontmatter is hidden from agent and Globus shared-note requests (search, related, links, recent) and refused on read.
+- **Operator Zotero:** every `source='zotero'` record and all direct Zotero/item/PDF/collection/source-list routes are administrator-only for Globus users. The same exclusion applies inside each tenant agent's search, note, related, similar and radar calls. Owner/admin agents retain their existing `privacy.json` behavior.
+- **Size caps:** agent and Globus shared-note reads are capped at 12,000 characters per page (`offset` and `next_offset` page through the rest), and search returns at most 10 results.
 - **Audit:** every MCP agent request is logged to `data/agent-access.log`; `kb.py audit --days 1` summarises it.
 - **Scope:** the Obsidian plugin and legacy administrator browser sessions are not restricted. Claude Code's own file tools need permission deny rules to keep them out of private folders.
 

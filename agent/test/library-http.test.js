@@ -29,6 +29,18 @@ test('search: every request carries X-KB-Client: agent, and paths are mapped to 
   assert.equal(fetchFn.calls[0].headers['X-KB-Client'], 'agent');
 });
 
+test('tenant library requests carry only the sidecar capability and verified tenant', async () => {
+  const fetchFn = fakeFetch({ '/search': () => [] });
+  const tenant = 'a'.repeat(64);
+  const library = createHttpLibraryBackend(fetchFn, {
+    baseUrl: 'http://127.0.0.1:27182', token: 'sidecar-secret', tenant,
+  });
+  await library.search({ text: 'shared notes only', scope: { kind: 'library' } });
+  assert.equal(fetchFn.calls[0].headers.Authorization, 'Bearer sidecar-secret');
+  assert.equal(fetchFn.calls[0].headers['X-Veritas-Tenant'], tenant);
+  assert.equal(fetchFn.calls[0].headers['X-KB-Client'], 'agent');
+});
+
 test('search: a collections scope becomes ?collections=K1,K2, a tag scope ?tag=, a library scope neither', async () => {
   const fetchFn = fakeFetch({ '/search': () => [] });
   const library = createHttpLibraryBackend(fetchFn, { baseUrl: 'http://127.0.0.1:27182' });
