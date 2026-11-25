@@ -1,6 +1,7 @@
 // @ts-check
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { startLogin } from '../src/login.js';
 
 class FakeNode {
@@ -21,6 +22,8 @@ class FakeNode {
   replaceChildren(...nodes) { this.children = [...nodes]; }
   /** @param {string} name @param {string} value */
   setAttribute(name, value) { this.attributes[name] = value; }
+  /** @param {string} name */
+  getAttribute(name) { return this.attributes[name] ?? null; }
   /** @param {string} name @param {(...args: any[]) => any} callback */
   addEventListener(name, callback) { this.listeners[name] = callback; }
 }
@@ -58,7 +61,7 @@ function response(value, status = 200) {
 }
 
 function globusLink(nodes) {
-  return nodes.find((node) => node.tagName === 'a' && node.textContent === 'Sign in with Globus');
+  return nodes.find((node) => node.tagName === 'a' && node.textContent === 'Continue with Globus');
 }
 
 test('configured Globus login adds a same-origin independent sign-in link', async () => {
@@ -88,6 +91,40 @@ test('disabled or failed discovery leaves access-code login unchanged', async (c
       assert.equal(env.calls.length, 1);
     });
   }
+});
+
+test('empty access code explains what to enter without posting', async () => {
+  const env = environment(() => response({ enabled: false }));
+  await startLogin({ win: env.win, fetch: env.win.fetch });
+  const form = env.nodes().find((node) => node.tagName === 'form');
+  form.listeners.submit({ preventDefault() {} });
+  const message = env.nodes().find((node) => node.className === 'sbw-auth-status');
+  assert.match(message.textContent, /Enter the access code/);
+  assert.equal(message.getAttribute('data-tone'), 'error');
+  assert.equal(env.calls.filter(({ init }) => init.method === 'POST').length, 0);
+});
+
+// Why: the sign-in page once carried its own fixed palette, which made the front door a different product from the
+// app behind it (and broke dark mode). It has to stay on --sb-ui-*, the same four neutrals and one accent as the app.
+test('the sign-in sheet stays inside the app token system', () => {
+  const css = readFileSync(new URL('../src/shell.css', import.meta.url), 'utf8');
+  const start = css.indexOf('/* The hosted sign-in (login.js)');
+  const end = css.indexOf('/* setup-view.js', start);
+  assert.ok(start >= 0 && end > start, 'the sign-in block is still delimited in shell.css');
+  const block = css.slice(start, end);
+  assert.equal(block.match(/#[0-9a-fA-F]{3,8}\b/g), null, 'no literal colours: light and dark come from the tokens');
+  assert.equal(block.match(/gradient\(/g), null, 'spec 013 ledger 11: no gradients');
+  assert.ok(block.includes('background: var(--sb-ui-bg)'), 'the page sits on the app background');
+});
+
+test('the page names the task and the product in plain words', async () => {
+  const env = environment(() => response({ enabled: false }));
+  await startLogin({ win: env.win, fetch: env.win.fetch });
+  const nodes = env.nodes();
+  const headings = nodes.filter((node) => node.tagName === 'h1');
+  assert.equal(headings.length, 1);
+  assert.equal(headings[0].textContent, 'Sign in to Veritas');
+  assert.equal(nodes.find((node) => node.tagName === 'button').textContent, 'Sign in');
 });
 
 test('access-code submit still posts once to the existing login route', async () => {
