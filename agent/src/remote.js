@@ -104,7 +104,7 @@ export function createRemoteRuntime(transport) {
     },
 
     async *ask(question, opts = {}) {
-      const result = /** @type {any[]} */ (await transport.request('POST', '/ask', { question, web: opts.web, scope: opts.scope, sources: opts.sources }));
+      const result = /** @type {any[]} */ (await transport.request('POST', '/ask', { question, web: opts.web, scope: opts.scope, sources: opts.sources, providedSources: opts.providedSources }));
       for (const event of result) {
         yield event;
         if (opts.signal?.aborted) return;

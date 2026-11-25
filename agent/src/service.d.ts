@@ -17,6 +17,10 @@ import type { Settings } from "./settings";
  *  result only) and `read_source` for rows in it; search tools are off, regardless of `sources`. */
 export interface SendInput { text: string; /** spec 011 U3: skill names to run this turn with. */ skills?: string[]; attachments?: Attachment[]; web?: WebMode; scope?: Scope; sources?: Sources; on?: { result: ResultRef; rows: RowId[] | "all" } }
 
+/** Ephemeral evidence supplied by a server-mediated caller. IDs are assigned by normalizeProvidedSources. */
+export interface ProvidedSourceInput { title: string; text: string; citation?: string; uri?: string }
+export interface ProvidedSource extends ProvidedSourceInput { id: string }
+
 export interface AgentService {
   readonly where: "local" | "server";
 
@@ -52,7 +56,7 @@ export interface AgentService {
   };
 
   /** One question, one answer, not stored as a conversation. Used by the "Ask about selection" commands. */
-  ask(question: string, opts?: { attachments?: Attachment[]; web?: WebMode; scope?: Scope; sources?: Sources; signal?: AbortSignal }): AsyncIterable<AgentEvent<AskResult>>;
+  ask(question: string, opts?: { attachments?: Attachment[]; web?: WebMode; scope?: Scope; sources?: Sources; providedSources?: ProvidedSourceInput[]; signal?: AbortSignal }): AsyncIterable<AgentEvent<AskResult>>;
 
   reviews: {
     /** Estimated model turns for a report at this depth (typical, and a low-high range); spec 011 U1. */

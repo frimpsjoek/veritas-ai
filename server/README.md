@@ -62,6 +62,34 @@ Veritas publishes its A2A 0.3.0 Agent Card at `/.well-known/agent-card.json`. Re
 
 Requests accept text parts and return Markdown in an A2A `Message`. Invalid requests and runtime failures return JSON-RPC errors without filesystem details. Requests are bounded to 200,000 decoded question characters and have a slightly larger JSON envelope cap.
 
+### Provided-sources extension (default off)
+
+A trusted server such as Trinity can supply passages that Veritas must synthesize **without reading the shared Veritas library**. Set `VERITAS_A2A_PROVIDED_SOURCES_ENABLED=1` to advertise and accept the optional extension; without that explicit operator setting, knowing its URI does not enable it. Legacy text-only A2A behavior is unchanged.
+
+Activate `https://trinityscience.org/extensions/veritas/provided-sources/v1` in `X-A2A-Extensions` and send exactly one text part and one data part:
+
+```json
+{
+  "jsonrpc": "2.0", "id": "request-1", "method": "message/send",
+  "params": {"message": {
+    "role": "user", "kind": "message", "messageId": "message-1",
+    "parts": [
+      {"kind": "text", "text": "What changed?"},
+      {"kind": "data", "data": {"sources": [{
+        "title": "Invented experiment", "text": "Recall improved by 12 percent.",
+        "citation": "Notebook 7, page 4", "uri": "https://example.org/private/item"
+      }]}}
+    ]
+  }}
+}
+```
+
+Each source requires nonblank `title` and `text`; `citation` and HTTP(S) `uri` are optional. No caller IDs or other fields are accepted. Limits are 16 sources, 512 title characters, 16,384 characters per source, 128,000 aggregate source-text characters, 4,096 citation characters, and 2,048 URI characters, inside the normal body cap. Veritas assigns `S1…Sn`. Missing, empty, malformed, or disabled evidence returns `-32602` before invoking Ask; it never falls back to shared-library retrieval.
+
+Answers in this mode must be **plain Markdown prose**, and the answer is discarded if it is not. Headings, lists, emphasis, block quotes and tables are allowed. `[S#]` tokens assigned for that request are the only square brackets permitted anywhere in the answer, and an answered result needs at least one of them on a line the reader sees as prose — four columns of indentation, measured again after each block-quote or list marker, is code; `not_found` needs none. Code spans and fences, indented blocks, raw HTML and comments, HTML entities, links and images, URLs, bare `www.` hosts, email addresses, bracket lookalikes, invisible or bidi control characters, and a parenthesis, bracket or colon after a citation (a link reference definition inside any container block would otherwise turn a later citation into a link) are all refused. The rule is intentionally broader than the constructs that can actually hide a citation or render an outside link, so a hidden or forged citation cannot ride on a renderer difference; a well-formed answer that breaks the grammar fails closed rather than being repaired.
+
+The result remains one Markdown text part. Extension metadata contains `status` and source `id`/`title`/`citation`/`uri`, but never source text; activated success and error responses are `no-store`. Veritas neither fetches supplied URIs nor persists evidence or creates conversation history in this mode. Callers must treat those URIs as inert identifiers, not automatic fetch instructions. This is evidence synthesis, **not end-user attribution**: Veritas does not authenticate a Trinity user or select that user's personal index; the trusted caller remains responsible for authentication, per-user retrieval, source minimization, and authorization.
+
 To revoke and rotate the A2A credential, stop Veritas, delete `data/a2a-token` (or `$VERITAS_DATA/a2a-token`), and start Veritas again. Give the newly generated credential only to the remote agent hub. The card and error responses never contain the credential.
 
 ## Independent Globus sign-in

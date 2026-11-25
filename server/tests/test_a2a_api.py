@@ -5,6 +5,7 @@ import concurrent.futures
 import http.client
 import json
 import threading
+from email.message import Message
 from http.server import ThreadingHTTPServer
 
 import pytest
@@ -16,6 +17,7 @@ import http_api
 
 PROXIED = {"Host": "veritas.trinityscience.org", "X-Forwarded-Proto": "https"}
 AUTH = {"Authorization": "Bearer a2a-secret"}
+EXTENSION = "https://trinityscience.org/extensions/veritas/provided-sources/v1"
 
 
 def request(*, method="message/send", parts=None, context=None):
@@ -31,7 +33,23 @@ def request(*, method="message/send", parts=None, context=None):
     return {"jsonrpc": "2.0", "id": "request-1", "method": method, "params": {"message": message}, "metadata": {"trace": "allowed"}}
 
 
-def call(port, method, path, headers=None, body=None, *, local=False):
+def provided_parts(sources=None, *, question="What changed?", extra_data=None):
+    if sources is None:
+        sources = [{
+            "title": "Private experiment",
+            "text": "Recall improved by 12 percent.",
+            "citation": "Notebook 7, page 4",
+            "uri": "https://example.org/private/item",
+        }]
+    data = {"sources": sources, **(extra_data or {})}
+    return [{"kind": "text", "text": question}, {"kind": "data", "data": data}]
+
+
+def provided_headers(extension=EXTENSION):
+    return {**AUTH, "X-A2A-Extensions": extension}
+
+
+def call(port, method, path, headers=None, body=None, *, local=False, include_headers=False):
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
     data = json.dumps(body).encode() if body is not None else None
     base = {"Host": f"127.0.0.1:{port}"} if local else PROXIED
@@ -41,8 +59,9 @@ def call(port, method, path, headers=None, body=None, *, local=False):
     conn.request(method, path, body=data, headers=request_headers)
     response = conn.getresponse()
     result = response.status, response.getheader("Set-Cookie"), response.read()
+    headers_out = dict(response.getheaders()) if include_headers else None
     conn.close()
-    return result
+    return (*result, headers_out) if include_headers else result
 
 
 def call_raw(port, raw):
@@ -63,6 +82,7 @@ def seen():
 
 @pytest.fixture
 def server(tmp_path, monkeypatch, seen):
+    monkeypatch.delenv("VERITAS_A2A_PROVIDED_SOURCES_ENABLED", raising=False)
     monkeypatch.setattr(http_api, "TOKEN_FILE", tmp_path / "api-token")
     monkeypatch.setattr(http_api, "SESSIONS_FILE", tmp_path / "web" / "sessions.json")
     monkeypatch.setattr(a2a_api, "TOKEN_FILE", tmp_path / "a2a-token")
@@ -144,6 +164,152 @@ def test_message_send_accepts_the_trinity_wire_shape_and_joins_text_parts(server
     assert body["result"]["contextId"] == "room-7"
     assert body["result"]["parts"] == [{"kind": "text", "text": "Grounded answer"}]
     assert seen == ["first\n\nsecond"]
+
+
+def test_provided_sources_is_default_off_for_discovery_and_activation(server, seen):
+    port, _ = server
+    status, _, raw = call(port, "GET", "/.well-known/agent-card.json")
+    card = json.loads(raw)
+    assert status == 200
+    assert all(item.get("uri") != EXTENSION for item in card["capabilities"].get("extensions", []))
+
+    status, _, raw, headers = call(port, "POST", "/a2a", provided_headers(), request(parts=provided_parts()), include_headers=True)
+    assert status == 200 and json.loads(raw)["error"]["code"] == -32602
+    assert headers["Cache-Control"] == "no-store"
+    assert headers["X-A2A-Extensions"] == EXTENSION
+    assert seen == []
+
+
+def test_activated_provided_sources_forwards_bounded_evidence_and_safe_metadata(server, monkeypatch):
+    port, _ = server
+    monkeypatch.setenv("VERITAS_A2A_PROVIDED_SOURCES_ENABLED", "1")
+    calls = []
+
+    def fake_ask(_sidecar, question, *, provided_sources=None):
+        calls.append((question, provided_sources))
+        return [{"type": "done", "answer": {"structured": {"status": "answered", "markdown": "Improved [S1]."}, "text": "ignored"}}]
+
+    monkeypatch.setattr(agent_api, "ask", fake_ask)
+    _, _, card_raw = call(port, "GET", "/.well-known/agent-card.json")
+    extensions = json.loads(card_raw)["capabilities"]["extensions"]
+    assert any(extension["uri"] == EXTENSION and extension["required"] is False for extension in extensions)
+    status, _, raw, headers = call(port, "POST", "/a2a", provided_headers(), request(parts=provided_parts(), context="shared-context"), include_headers=True)
+    body = json.loads(raw)
+    assert status == 200 and "error" not in body, body
+    assert calls == [("What changed?", [{
+        "title": "Private experiment",
+        "text": "Recall improved by 12 percent.",
+        "citation": "Notebook 7, page 4",
+        "uri": "https://example.org/private/item",
+    }])]
+    result = body["result"]
+    assert result["parts"] == [{"kind": "text", "text": "Improved [S1]."}]
+    assert result["extensions"] == [EXTENSION] and result["contextId"] == "shared-context"
+    metadata = result["metadata"][EXTENSION]
+    assert metadata == {
+        "status": "answered",
+        "sources": [{
+            "id": "S1",
+            "title": "Private experiment",
+            "citation": "Notebook 7, page 4",
+            "uri": "https://example.org/private/item",
+        }],
+    }
+    assert "12 percent" not in json.dumps(metadata)
+    assert headers["Cache-Control"] == "no-store"
+    assert headers["X-A2A-Extensions"] == EXTENSION
+
+
+def test_provided_source_calls_do_not_reuse_context_or_evidence(server, monkeypatch):
+    port, _ = server
+    monkeypatch.setenv("VERITAS_A2A_PROVIDED_SOURCES_ENABLED", "1")
+    calls = []
+
+    def fake_ask(_sidecar, question, *, provided_sources=None):
+        calls.append((question, provided_sources))
+        return [{"type": "done", "answer": {"structured": {"status": "answered", "markdown": "Answer [S1]."}}}]
+
+    monkeypatch.setattr(agent_api, "ask", fake_ask)
+    for marker in ("marker-A", "marker-B"):
+        sources = [{"title": marker, "text": f"Private evidence {marker}"}]
+        status, _, raw = call(port, "POST", "/a2a", provided_headers(), request(parts=provided_parts(sources), context="same-context"))
+        assert status == 200 and "result" in json.loads(raw)
+    assert [call_[1][0]["text"] for call_ in calls] == ["Private evidence marker-A", "Private evidence marker-B"]
+    assert "marker-B" not in json.dumps(calls[0])
+    assert "marker-A" not in json.dumps(calls[1])
+
+
+@pytest.mark.parametrize("parts, private_marker", [
+    ([{"kind": "text", "text": "Question without evidence"}], None),
+    (provided_parts([]), None),
+    (provided_parts({}), None),
+    (provided_parts([{"title": " ", "text": "Private title marker"}]), "Private title marker"),
+    (provided_parts([{"title": "Private unknown marker", "text": "Evidence", "id": "caller-controlled"}]), "Private unknown marker"),
+    (provided_parts([{"title": "Valid", "text": "Evidence", "uri": "javascript:private-uri-marker"}]), "private-uri-marker"),
+    (provided_parts([{"title": "Valid", "text": "Evidence", "uri": "https://example.org/private\nmarker"}]), "private\nmarker"),
+    (provided_parts([{"title": "Valid", "text": "Evidence", "uri": "https://example.org/private\n"}]), None),
+    (provided_parts([{"title": "Valid", "text": "Evidence", "uri": "https://:80/private"}]), None),
+    (provided_parts([{"title": "Valid", "text": "Evidence", "uri": "https://example.org:99999/private"}]), None),
+    (provided_parts([{"title": "Valid", "text": "Evidence", "uri": "https://%2F/item"}]), None),
+    (provided_parts([{"title": "Valid", "text": "Evidence", "uri": "https://exa mple.com/item"}]), None),
+    (provided_parts([{"title": "Valid", "text": "Evidence", "uri": "https://256.256.256.256/item"}]), None),
+    (provided_parts([{"title": "Valid", "text": "Evidence", "uri": "https://1.2.3.999/item"}]), None),
+    (provided_parts([{"title": "Valid", "text": "Evidence", "uri": "https://1.2.3.4.5/item"}]), None),
+    (provided_parts([{"title": "Valid", "text": "Evidence", "uri": "https://09.09.09.09/item"}]), None),
+    (provided_parts([{"title": "Valid", "text": "Evidence", "uri": "https://0x100000000/item"}]), None),
+    (provided_parts([{"title": "Valid", "text": "Evidence", "uri": "https://[v1.fe]/item"}]), None),
+    (provided_parts([{"title": "x" * 513, "text": "Evidence"}]), None),
+    (provided_parts([{"title": "Valid", "text": "x" * 16385}]), None),
+    (provided_parts([{"title": str(i), "text": "Evidence"} for i in range(17)]), None),
+    (provided_parts([{"title": str(i), "text": "x" * 16000} for i in range(8)] + [{"title": "last", "text": "x"}]), None),
+    (provided_parts(None, extra_data={"web": True}), None),
+    (provided_parts() + [{"kind": "data", "data": {"sources": [{"title": "Extra", "text": "Extra"}]}}], None),
+    ([{"kind": "text", "text": "one"}, {"kind": "text", "text": "two"}, *provided_parts()[1:]], None),
+    ([*provided_parts()[:1], {"kind": "file", "file": {"uri": "https://example.org/private"}}], None),
+])
+def test_invalid_provided_sources_fail_before_the_sidecar_without_echoing_evidence(server, seen, monkeypatch, parts, private_marker):
+    port, _ = server
+    monkeypatch.setenv("VERITAS_A2A_PROVIDED_SOURCES_ENABLED", "1")
+    status, _, raw, headers = call(port, "POST", "/a2a", provided_headers(), request(parts=parts), include_headers=True)
+    body = json.loads(raw)
+    assert status == 200 and body["error"] == {"code": -32602, "message": "Invalid params"}
+    assert private_marker is None or private_marker not in raw.decode()
+    assert headers["Cache-Control"] == "no-store" and headers["X-A2A-Extensions"] == EXTENSION
+    assert seen == []
+
+
+@pytest.mark.parametrize("uri", ["https://127.0.0.1/item", "https://[::1]/item"])
+def test_provided_sources_accepts_strict_ip_uris(uri):
+    sources = a2a_api.parse_provided_sources({"sources": [{"title": "Network", "text": "Evidence", "uri": uri}]})
+    assert sources[0]["uri"] == uri
+
+
+@pytest.mark.parametrize("header, accepted", [
+    (f"  {EXTENSION} , ,{EXTENSION} ", True),
+    (f"https://evil.example/?next={EXTENSION}", False),
+    (EXTENSION.upper(), False),
+])
+def test_provided_source_activation_uses_exact_header_tokens(server, seen, monkeypatch, header, accepted):
+    port, _ = server
+    monkeypatch.setenv("VERITAS_A2A_PROVIDED_SOURCES_ENABLED", "1")
+
+    def fake_ask(_sidecar, question, *, provided_sources=None):
+        seen.append(question)
+        return [{"type": "done", "answer": {"structured": {"status": "answered", "markdown": "Answer [S1]."}}}]
+
+    monkeypatch.setattr(agent_api, "ask", fake_ask)
+    status, _, raw = call(port, "POST", "/a2a", provided_headers(header), request(parts=provided_parts()))
+    assert status == 200
+    assert ("result" in json.loads(raw)) is accepted
+    if not accepted:
+        assert seen == []
+
+
+def test_repeated_extension_header_lines_are_parsed_as_a_token_list():
+    headers = Message()
+    headers["X-A2A-Extensions"] = "https://example.org/unrelated-extension"
+    headers["X-A2A-Extensions"] = EXTENSION
+    assert a2a_api.provided_sources_requested(headers)
 
 
 @pytest.mark.parametrize("body, code", [

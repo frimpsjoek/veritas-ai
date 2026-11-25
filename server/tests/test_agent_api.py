@@ -288,6 +288,40 @@ def test_ask_sends_question_to_the_sidecar():
         server.server_close()
 
 
+def test_ask_sends_provided_sources_to_the_sidecar():
+    sources = [{"title": "Private note", "text": "Only this evidence", "citation": "Page 4"}]
+
+    class AskHandler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            assert self.path == "/ask"
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            assert body == {"question": "What changed?", "providedSources": sources}
+            data = json.dumps([{"type": "done", "answer": {"structured": {"markdown": "An answer [S1]"}}}]).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *args):
+            pass
+
+    server = socketserver.TCPServer(("127.0.0.1", 0), AskHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        sidecar = agent_api.Sidecar(node=Path("/usr/bin/node"), secret="topsecret", port=server.server_address[1])
+        events = agent_api.ask(sidecar, "What changed?", provided_sources=sources)
+        assert events[0]["answer"]["structured"]["markdown"] == "An answer [S1]"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_ask_rejects_empty_provided_sources_instead_of_entering_evidence_mode():
+    with pytest.raises(ValueError, match="provided_sources must not be empty"):
+        agent_api.ask(None, "Question", provided_sources=[])
+
+
 def test_ask_rejects_oversized_sidecar_response_before_json_parsing(monkeypatch):
     monkeypatch.setattr(agent_api, "MAX_AGENT_RESPONSE_BYTES", 8)
     reads, closed = [], []

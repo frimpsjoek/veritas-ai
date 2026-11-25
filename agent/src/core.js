@@ -38,8 +38,9 @@ import { createSettingsStore, DEFAULT_TURN_WALL_CLOCK_MS, DEFAULT_TOOL_CALL_BUDG
 import { createSecretStore } from './secrets.js';
 import { myPapers as findMyPapers, seedCategories, calibrateRadar } from './radar-seeds.js';
 import { rowIdFor, manifest, legacyView, isLegacy, nextStepId, nextResultId, manifestBlock, partialStepPath, subsetRows, chatPapersBlock, newsOf, viewedSince, threadText } from './sessions.js';
-import { CHAT_PAPERS_INSTRUCTIONS, LOCAL_INSTRUCTIONS, LOCAL_SMALL_TALK } from './prompts.js';
+import { CHAT_PAPERS_INSTRUCTIONS, LOCAL_INSTRUCTIONS, LOCAL_SMALL_TALK, PROVIDED_SOURCES_INSTRUCTIONS } from './prompts.js';
 import { retrievePassages, passagesFromSet, queryFor, passageBlock, notFoundAnswer, questionOf, isSmallTalk } from './local/retrieve.js';
+import { normalizeProvidedSources, providedSourcesInput, validProvidedSourceAnswer } from './provided-sources.js';
 import { selectTargets, estimateStep, extractBatches, textFor, versionCells, changeLine, cellKey, errorText, FULL_TEXT_CHARS } from './extract.js';
 import { compactActivities } from './activity.js';
 import { createReadingListStore, addEntry, removeEntry, markEntry, newestFirst, addLiked, likedPapers, removeLiked, shownPaper } from './reading-list.js';
@@ -182,7 +183,8 @@ export function createTurnRunner(deps) {
   /**
    * @param {import("./domain").Role} role
    * @param {{ sessionKey: string, instructions: string, history: import("./provider").HistoryMessage[], input: string,
-   *           tools: import("./tools").ToolContext, outputSchema?: object | null }} req
+   *           tools: import("./tools").ToolContext, outputSchema?: object | null,
+   *           providedSources?: import("./service").ProvidedSource[] }} req
    * @param {AbortSignal} signal
    * @returns {AsyncGenerator<import("./domain").AgentEvent<unknown>>}
    */
@@ -204,10 +206,11 @@ export function createTurnRunner(deps) {
     // spec 010 §4: a provider without tools (caps.tools === false) answers Chat and Ask retrieval-first: the engine
     // searches, the model reads. Report roles that are allowed keep their tools and take the normal path.
     const guarded = provider.caps?.tools === false && (provider.caps.roles ?? []).includes(role);
+    const provided = req.providedSources !== undefined;
 
     const limits = await getTurnLimits(role);
     const release = await deps.slots.acquire(role, signal);
-    const session = deps.gateway.open(guarded ? { ...req.tools, none: true } : req.tools, { key: req.sessionKey });
+    const session = deps.gateway.open(guarded || provided ? { ...req.tools, none: true } : req.tools, { key: req.sessionKey });
 
     // A turn's own generation or tool loop must not require a human to notice and hand-cancel it (T7.1:
     // evidence/p7-t71-criterion7-search-latency.txt -- a lead's plan turn streamed text for 16 minutes with no
@@ -235,12 +238,12 @@ export function createTurnRunner(deps) {
       let instructions = req.instructions;
       /** @type {import("./local/retrieve").Passage[] | null} */
       let retrieved = null;
-      if (guarded && !req.tools.session?.on && isSmallTalk(req.input)) {
+      if (guarded && !provided && !req.tools.session?.on && isSmallTalk(req.input)) {
         // "hi" searched as a question finds nothing worth reading, and the strict prompt then answers "the passages do
         // not answer the question"; a greeting gets a greeting instead.
         instructions = LOCAL_SMALL_TALK;
         retrieved = [];
-      } else if (guarded) {
+      } else if (guarded && !provided) {
         const on = req.tools.session?.on;
         const label = on ? 'Reading the papers in this set' : `Searching your papers for "${questionOf(req.input).slice(0, 80)}"`;
         const searchId = `retrieve:${ulid()}`;
@@ -321,7 +324,7 @@ export function createTurnRunner(deps) {
         }
       }
       const seen = retrieved ? retrieved.map((p) => p.ref) : session.seen();
-      let citations = await validateCitations(finalEvent.text, deps.library, seen);
+      let citations = provided ? [] : await validateCitations(finalEvent.text, deps.library, seen);
       // A guarded answer may cite only what it was given: a real library paper that was not among the passages is still unknown.
       if (retrieved) citations = citations.map((c) => (c.status === 'resolved' && c.retrievedThisTurn ? c : { ref: c.ref, status: 'unknown' }));
       const passages = retrieved ? retrieved.map((p) => ({ ref: p.ref, title: p.title, snippet: p.snippet })) : undefined;
@@ -1756,11 +1759,20 @@ export async function createLocalRuntime(deps) {
 
     async *ask(question, opts = {}) {
       const signal = opts.signal ?? new AbortController().signal;
-      const ctx = await defaultToolContext({ web: opts.web, scope: opts.scope, sources: opts.sources, audit: `ask:${ulid()}` });
-      for await (const ev of runner.stream('ask', { sessionKey: `ask:${ulid()}`, instructions: ASK_INSTRUCTIONS, history: [], input: withAttachments(question, opts.attachments, opts.scope), tools: ctx, outputSchema: ASK_SCHEMA }, signal)) {
+      const sources = opts.providedSources !== undefined ? normalizeProvidedSources(opts.providedSources) : undefined;
+      const provided = sources !== undefined;
+      const ctx = provided
+        ? { scope: /** @type {const} */ ({ kind: 'library' }), web: /** @type {const} */ ('off'), sources: { papers: false, notes: false, scholarly: false, web: false }, audit: `ask:${ulid()}`, none: true }
+        : await defaultToolContext({ web: opts.web, scope: opts.scope, sources: opts.sources, audit: `ask:${ulid()}` });
+      const instructions = provided ? PROVIDED_SOURCES_INSTRUCTIONS : ASK_INSTRUCTIONS;
+      const input = provided ? providedSourcesInput(question, sources) : withAttachments(question, opts.attachments, opts.scope);
+      for await (const ev of runner.stream('ask', {
+        sessionKey: `ask:${ulid()}`, instructions, history: [], input, tools: ctx, outputSchema: ASK_SCHEMA,
+        ...(provided ? { providedSources: sources } : {}),
+      }, signal)) {
         if (ev.type === 'done') {
           const result = parseAskResult(ev.answer.structured);
-          if (!result) {
+          if (!result || (provided && !validProvidedSourceAnswer(result, sources))) {
             yield { type: 'failed', error: { kind: 'bad_output', message: 'The answer did not match the expected shape.' } };
             return;
           }

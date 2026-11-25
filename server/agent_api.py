@@ -161,8 +161,10 @@ def shutdown(sidecar: Sidecar | None) -> None:
             proc.kill()
 
 
-def ask(sidecar: Sidecar | None, question: str) -> list[dict]:
-    """Run the existing stateless /ask operation and return its event list."""
+def ask(sidecar: Sidecar | None, question: str, *, provided_sources: list[dict] | None = None) -> list[dict]:
+    """Run stateless Ask; supplied evidence selects the isolated no-retrieval path."""
+    if provided_sources is not None and not provided_sources:
+        raise ValueError("provided_sources must not be empty")
     if sidecar is None:
         raise SidecarError("second brain ai is unavailable")
     with sidecar.lock:
@@ -170,8 +172,11 @@ def ask(sidecar: Sidecar | None, question: str) -> list[dict]:
     if port is None:
         raise SidecarError("the agent sidecar is (re)starting")
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=900)
+    payload = {"question": question}
+    if provided_sources is not None:
+        payload["providedSources"] = provided_sources
     try:
-        conn.request("POST", "/ask", body=json.dumps({"question": question}).encode(), headers={
+        conn.request("POST", "/ask", body=json.dumps(payload).encode(), headers={
             "Authorization": f"Bearer {sidecar.secret}", "Content-Type": "application/json",
         })
         response = conn.getresponse()

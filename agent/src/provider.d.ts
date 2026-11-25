@@ -56,7 +56,10 @@ export interface Provider {
 export interface TurnRunner {
   stream(
     role: import("./domain").Role,
-    req: { sessionKey: string; instructions: string; history: HistoryMessage[]; input: string; tools: import("./tools").ToolContext; outputSchema?: object | null },
+    req: {
+      sessionKey: string; instructions: string; history: HistoryMessage[]; input: string; tools: import("./tools").ToolContext;
+      outputSchema?: object | null; providedSources?: import("./service").ProvidedSource[];
+    },
     signal: AbortSignal,
   ): AsyncIterable<AgentEvent<unknown>>;
   structured(role: import("./domain").Role, prompt: string, schema: object, tools: import("./tools").ToolContext, signal: AbortSignal, onEvent?: (ev: any) => void, onNotice?: (ev: any) => void): Promise<unknown>;
