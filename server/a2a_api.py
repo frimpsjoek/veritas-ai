@@ -6,6 +6,7 @@ credential or a loopback exception; http_api owns that authentication gate.
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import math
 import os
 import secrets
@@ -177,6 +178,15 @@ def parse_provided_sources(data) -> list[dict]:
                 parsed = urlsplit(uri)
                 hostname = parsed.hostname
                 parsed.port
+                if hostname and ("[" in parsed.netloc or "]" in parsed.netloc):
+                    ipaddress.IPv6Address(hostname)
+                elif hostname:
+                    final_label = hostname.rstrip(".").rsplit(".", 1)[-1].lower()
+                    numeric = final_label.isascii() and final_label.isdigit()
+                    hexadecimal = final_label.startswith("0x") and all(
+                        character in "0123456789abcdef" for character in final_label[2:])
+                    if numeric or hexadecimal:
+                        ipaddress.IPv4Address(hostname)
             except ValueError:
                 raise RpcError(-32602, "Invalid params") from None
             if (parsed.scheme.lower() not in {"http", "https"} or not hostname or "%" in hostname

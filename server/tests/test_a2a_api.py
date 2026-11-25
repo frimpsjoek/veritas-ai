@@ -252,6 +252,12 @@ def test_provided_source_calls_do_not_reuse_context_or_evidence(server, monkeypa
     (provided_parts([{"title": "Valid", "text": "Evidence", "uri": "https://example.org:99999/private"}]), None),
     (provided_parts([{"title": "Valid", "text": "Evidence", "uri": "https://%2F/item"}]), None),
     (provided_parts([{"title": "Valid", "text": "Evidence", "uri": "https://exa mple.com/item"}]), None),
+    (provided_parts([{"title": "Valid", "text": "Evidence", "uri": "https://256.256.256.256/item"}]), None),
+    (provided_parts([{"title": "Valid", "text": "Evidence", "uri": "https://1.2.3.999/item"}]), None),
+    (provided_parts([{"title": "Valid", "text": "Evidence", "uri": "https://1.2.3.4.5/item"}]), None),
+    (provided_parts([{"title": "Valid", "text": "Evidence", "uri": "https://09.09.09.09/item"}]), None),
+    (provided_parts([{"title": "Valid", "text": "Evidence", "uri": "https://0x100000000/item"}]), None),
+    (provided_parts([{"title": "Valid", "text": "Evidence", "uri": "https://[v1.fe]/item"}]), None),
     (provided_parts([{"title": "x" * 513, "text": "Evidence"}]), None),
     (provided_parts([{"title": "Valid", "text": "x" * 16385}]), None),
     (provided_parts([{"title": str(i), "text": "Evidence"} for i in range(17)]), None),
@@ -270,6 +276,12 @@ def test_invalid_provided_sources_fail_before_the_sidecar_without_echoing_eviden
     assert private_marker is None or private_marker not in raw.decode()
     assert headers["Cache-Control"] == "no-store" and headers["X-A2A-Extensions"] == EXTENSION
     assert seen == []
+
+
+@pytest.mark.parametrize("uri", ["https://127.0.0.1/item", "https://[::1]/item"])
+def test_provided_sources_accepts_strict_ip_uris(uri):
+    sources = a2a_api.parse_provided_sources({"sources": [{"title": "Network", "text": "Evidence", "uri": uri}]})
+    assert sources[0]["uri"] == uri
 
 
 @pytest.mark.parametrize("header, accepted", [

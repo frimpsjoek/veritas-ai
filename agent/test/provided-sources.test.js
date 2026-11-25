@@ -27,6 +27,9 @@ test('normalization assigns fresh canonical IDs and retains only supported metad
   assert.equal(normalizeProvidedSources([{ title: boundaryTitle, text: 'Evidence' }])[0].title, boundaryTitle);
   const aggregate = Array.from({ length: 8 }, () => ({ title: 'Unicode', text: '😀'.repeat(16000) }));
   assert.equal(normalizeProvidedSources(aggregate).length, 8, 'aggregate caps count code points, not UTF-16 units');
+  for (const uri of ['https://127.0.0.1/item', 'https://[::1]/item']) {
+    assert.equal(normalizeProvidedSources([{ title: 'Network', text: 'Evidence', uri }])[0].uri, uri);
+  }
 });
 
 test('normalization rejects empty, malformed, oversized, and unsafe evidence without echoing it', () => {
@@ -40,6 +43,12 @@ test('normalization rejects empty, malformed, oversized, and unsafe evidence wit
     [{ title: 'Valid', text: 'Evidence', uri: 'https://example.org:99999/private' }],
     [{ title: 'Valid', text: 'Evidence', uri: 'https://%2F/item' }],
     [{ title: 'Valid', text: 'Evidence', uri: 'https://exa mple.com/item' }],
+    [{ title: 'Valid', text: 'Evidence', uri: 'https://256.256.256.256/item' }],
+    [{ title: 'Valid', text: 'Evidence', uri: 'https://1.2.3.999/item' }],
+    [{ title: 'Valid', text: 'Evidence', uri: 'https://1.2.3.4.5/item' }],
+    [{ title: 'Valid', text: 'Evidence', uri: 'https://09.09.09.09/item' }],
+    [{ title: 'Valid', text: 'Evidence', uri: 'https://0x100000000/item' }],
+    [{ title: 'Valid', text: 'Evidence', uri: 'https://[v1.fe]/item' }],
     [{ title: 'x'.repeat(513), text: 'Evidence' }],
     [{ title: '😀'.repeat(513), text: 'Evidence' }],
     [{ title: 'Valid', text: 'x'.repeat(16385) }],
