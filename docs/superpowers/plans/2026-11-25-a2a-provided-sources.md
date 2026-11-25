@@ -122,6 +122,26 @@ providedSourcesInput(question, sources)
 validProvidedSourceAnswer(result, sources) // boolean, no I/O and no resolver
 ```
 
+**Revision after review rounds 1–5 (answer grammar).** The first implementation of
+`validProvidedSourceAnswer` stripped code, comments and HTML tags from the answer and scanned the
+remainder. Five review rounds each found another construct that the stripping missed — a citation
+hidden in a backtick run, an HTML comment, an attribute, an indented block, `<code>` — or that the
+stripping itself hid from the later checks, which is how an HTML `href` link became invisible to the
+outside-link rule. Those are not independent defects; the shape guarantees them, because the scanner
+never sees what the reader will.
+
+The validator is therefore inverted and nothing is stripped. A provided-source answer must be plain
+Markdown prose: the module holds one enumerated list of forbidden constructs (code spans and fences,
+indented blocks, raw HTML and comments, link reference definitions, inline and reference links, URL
+schemes, bare `www.` hosts, email addresses, HTML entities, bracket lookalikes, invisible and bidi
+controls), and the answer is refused if any of them appears. Citation checking then needs no parser:
+deleting this request's canonical `[S#]` tokens must leave no bracket character anywhere in the
+answer, and an answered result needs at least one canonical token on an unindented line. The rules
+are deliberately broader than the constructs that can actually hide a citation or render an outside
+link — refusing a well-formed answer is the safe direction, and the fixed instructions tell the model
+the format. Carried-forward findings F012 (indented and `<code>` citations) and F013 (HTML `href`
+links surviving tag stripping) are covered by negative tests in `agent/test/provided-sources.test.js`.
+
 - [ ] **Step 2: Run and observe failure because the module does not exist.**
 
 Run: `cd agent && node --test test/provided-sources.test.js`

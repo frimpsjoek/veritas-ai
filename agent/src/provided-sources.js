@@ -79,27 +79,62 @@ export function providedSourcesInput(question, sources) {
   ].join('\n\n');
 }
 
-/** Remove code and non-rendered HTML markup; neither supports a claim nor counts as a citation. */
-function renderedProse(markdown) {
-  return markdown
-    .replace(/```[\s\S]*?(?:```|$)/g, ' ')
-    .replace(/~~~[\s\S]*?(?:~~~|$)/g, ' ')
-    .replace(/(`+)[\s\S]*?\1/g, ' ')
-    .replace(/<!--[\s\S]*?(?:-->|$)/g, ' ')
-    .replace(/<\/?[A-Za-z][A-Za-z0-9-]*(?:\s+[^<>]*?)?\s*\/?>/g, ' ');
+/**
+ * Markup an answer may not contain. Earlier revisions took the opposite shape — strip code, comments and
+ * tags, then scan whatever survived — and every round of review found either a construct the stripper missed
+ * (a citation hidden from the reader) or one the stripping itself created (a link hidden from the checker).
+ * Nothing is stripped here. A provided-source answer is plain Markdown prose: every construct that can hide
+ * text, render a link, or produce a bracket the scanner never saw is refused outright, so what reaches the
+ * citation check needs no parser and no ordering between passes. Rejections are deliberately broad; the
+ * prompt tells the model to write plain prose, and refusing a well-formed answer is the safe direction.
+ */
+const FORBIDDEN_MARKUP = Object.freeze([
+  /`/,                                                  // code spans and backtick fences hide text from the reader
+  /~~~/,                                                // tilde fences do the same
+  /<[A-Za-z!/?]/,                                       // raw HTML tags, comments, declarations, and autolinks
+  /^ {0,3}\[[^\]\n]*\]:/m,                              // a link reference definition turns a later citation into a link
+  /\]\s*\(/,                                            // inline links, including the spaced form some renderers accept
+  /\]\[/,                                               // full and collapsed reference links; `[S1] [S2]` stays prose
+  /[A-Za-z][A-Za-z0-9+.-]*:\/\//,                       // any URL scheme, linkified by renderers or not
+  /(?:^|[^A-Za-z0-9+.-])www\.[A-Za-z0-9-]/i,            // GFM autolinks a bare www host
+  /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z0-9-]/,      // GFM autolinks a bare email address
+  /&(?:#[0-9]{1,7}|#[Xx][0-9A-Fa-f]{1,6}|[A-Za-z][A-Za-z0-9]{1,31});/, // entities render characters never scanned here
+  /[［］﹇﹈⁅⁆⟦⟧❲❳⦋⦌【】〚〛]/, // bracket lookalikes
+  /[​-‏‪-‮⁠-⁤⁦-⁩﻿]/, // invisible and bidi controls: rendered text would differ
+]);
+
+/** CommonMark indentation, tabs advancing to the next four-column stop. Four columns in is never rendered prose. */
+function proseLine(line) {
+  let column = 0;
+  for (const character of line) {
+    if (character === ' ') column += 1;
+    else if (character === '\t') column += 4 - (column % 4);
+    else return true;
+    if (column >= 4) return false;
+  }
+  return false; // a blank or all-whitespace line carries no citation
 }
 
 /**
- * Validate the already-parsed Ask result without resolving anything through a backend. An answered result
- * needs at least one canonical citation in prose; not_found may plainly state that evidence was insufficient.
+ * Validate the already-parsed Ask result without resolving anything through a backend. Every bracket in the
+ * answer must be one of this turn's server-assigned `[S#]` tokens, and an answered result needs at least one
+ * of them on a line the reader sees as prose; not_found may plainly state that the evidence was insufficient.
  * @param {import('./domain').AskResult} result @param {import('./service').ProvidedSource[]} sources
  */
 export function validProvidedSourceAnswer(result, sources) {
   if (!result || !['answered', 'not_found'].includes(result.status) || typeof result.markdown !== 'string') return false;
-  const prose = renderedProse(result.markdown);
-  if (/\[\[|\[\@|\[\^|[a-z][a-z0-9+.-]*:\/\/|<[a-z][a-z0-9+.-]*:[^>]*>|\[[^\]\n]*\]\s*\(/i.test(prose)) return false;
-  const citations = [...prose.matchAll(/\[[^\]\n]*\]/g)].map((match) => match[0]);
-  const allowed = new Set(sources.map((source) => `[${source.id}]`));
-  if (citations.some((citation) => !allowed.has(citation))) return false;
-  return result.status === 'not_found' || citations.length > 0;
+  const markdown = result.markdown;
+  if (FORBIDDEN_MARKUP.some((pattern) => pattern.test(markdown))) return false;
+  const allowed = sources.map((source) => `[${source.id}]`);
+  // Deleting the canonical tokens must leave an answer with no bracket at all: anything else — an unknown ID,
+  // a malformed one, a different case, half of a citation split across lines — survives as a stray bracket.
+  let residue = markdown;
+  for (const token of allowed) residue = residue.split(token).join(' ');
+  if (/[[\]]/.test(residue)) return false;
+  let cited = 0;
+  for (const line of markdown.split('\n')) {
+    if (!proseLine(line)) continue;
+    for (const token of allowed) cited += line.split(token).length - 1;
+  }
+  return result.status === 'not_found' || cited > 0;
 }
