@@ -83,6 +83,7 @@ test('citation validation accepts only known provided IDs in rendered prose', ()
   assert.equal(validProvidedSourceAnswer({ status: 'not_found', markdown: 'The supplied evidence does not answer this.' }, sources), true);
   assert.equal(validProvidedSourceAnswer(answered('```js\nconst id = "[S1]";\n```\nReal citation [S1].'), sources), true);
   assert.equal(validProvidedSourceAnswer(answered('Real citation [S1]. <!-- Unknown [S2] -->'), sources), true);
+  assert.equal(validProvidedSourceAnswer(answered('<span>Visible citation [S1]</span>'), sources), true);
   for (const markdown of [
     'Unsupported evidence [S2].',
     'Malformed [S0] and [S01].',
@@ -93,8 +94,12 @@ test('citation validation accepts only known provided IDs in rendered prose', ()
     'Paper citation [@paper].',
     'Footnote citation [^1].',
     'Outside citation https://evil.example/.',
+    'Outside FTP citation ftp://external.example/item [S1].',
+    'Outside FTP autolink <ftp://external.example/item> [S1].',
     'Linked citation [S1](https://evil.example/).',
     'Code-only citation: `[S1]`',
+    'Double-backtick code-only citation: ``[S1]``',
+    'HTML attribute-only citation <span data-ref="[S1]"></span>',
     '```text\n[S1]\n```',
     'Unsupported claim. <!-- [S1] -->',
     'Unsupported claim. <!-- [S1]',

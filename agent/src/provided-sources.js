@@ -79,13 +79,14 @@ export function providedSourcesInput(question, sources) {
   ].join('\n\n');
 }
 
-/** Remove inline/fenced code before checking citations: code neither supports a claim nor counts as one. */
+/** Remove code and non-rendered HTML markup; neither supports a claim nor counts as a citation. */
 function renderedProse(markdown) {
   return markdown
     .replace(/```[\s\S]*?(?:```|$)/g, ' ')
     .replace(/~~~[\s\S]*?(?:~~~|$)/g, ' ')
-    .replace(/`[^`\n]*`/g, ' ')
-    .replace(/<!--[\s\S]*?(?:-->|$)/g, ' ');
+    .replace(/(`+)[\s\S]*?\1/g, ' ')
+    .replace(/<!--[\s\S]*?(?:-->|$)/g, ' ')
+    .replace(/<\/?[A-Za-z][A-Za-z0-9-]*(?:\s+[^<>]*?)?\s*\/?>/g, ' ');
 }
 
 /**
@@ -96,7 +97,7 @@ function renderedProse(markdown) {
 export function validProvidedSourceAnswer(result, sources) {
   if (!result || !['answered', 'not_found'].includes(result.status) || typeof result.markdown !== 'string') return false;
   const prose = renderedProse(result.markdown);
-  if (/\[\[|\[\@|\[\^|https?:\/\/|\[[^\]\n]*\]\s*\(/i.test(prose)) return false;
+  if (/\[\[|\[\@|\[\^|[a-z][a-z0-9+.-]*:\/\/|<[a-z][a-z0-9+.-]*:[^>]*>|\[[^\]\n]*\]\s*\(/i.test(prose)) return false;
   const citations = [...prose.matchAll(/\[[^\]\n]*\]/g)].map((match) => match[0]);
   const allowed = new Set(sources.map((source) => `[${source.id}]`));
   if (citations.some((citation) => !allowed.has(citation))) return false;
