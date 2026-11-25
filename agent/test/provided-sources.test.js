@@ -83,6 +83,8 @@ test('answer grammar accepts plain prose citing canonical provided IDs', () => {
     'Repeated evidence [S1] [S1].',
     '## Finding\n\n- Recall improved [S1].\n- A second bullet restates it [S1].',
     '> Quoted claim [S1].',
+    '> - Nested but plain [S1].',
+    '1. Numbered claim [S1].',
     '**Bold** and *italic* claim [S1]; see page 4.',
     'Prose citation [S1].\n\n    An indented block that also mentions [S1].',
     'Math-like prose: 3 < 4 and R&D both stay plain [S1].',
@@ -117,6 +119,14 @@ test('answer grammar rejects uncited, noncanonical, hidden, manufactured, and li
     '~~~\n[S1]\n~~~',
     'Unsupported claim.\n\n    [S1]',
     'Unsupported claim.\n\n\t[S1]',
+    // Indented code keeps its meaning inside a container block, at any nesting depth.
+    'Unsupported claim.\n\n>     [S1]',
+    'Unsupported claim.\n\n> >     [S1]',
+    'Unsupported claim.\n\n> \t[S1]',
+    'Unsupported claim.\n\n-     [S1]',
+    'Unsupported claim.\n\n> -     [S1]',
+    'Unsupported claim.\n\n1.     [S1]',
+    'Unsupported claim.\n\n- Item\n\n      [S1]',
     'Manufactured inline citation [S`junk`1].',
     'Manufactured fenced citation [S```junk```1].',
     // Raw HTML can hide a citation, carry a link, or smuggle one in an attribute.

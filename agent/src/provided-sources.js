@@ -103,16 +103,28 @@ const FORBIDDEN_MARKUP = Object.freeze([
   /[​-‏‪-‮⁠-⁤⁦-⁩﻿]/, // invisible and bidi controls: rendered text would differ
 ]);
 
-/** CommonMark indentation, tabs advancing to the next four-column stop. Four columns in is never rendered prose. */
+/** A block quote or list marker, which opens a container whose content indentation starts again after it. */
+const CONTAINER_MARKER = /^(?:>|[-*+](?=[ \t])|\d{1,9}[.)](?=[ \t]))/;
+
+/**
+ * Whether a line is rendered prose rather than indented code. Indentation is measured in CommonMark columns
+ * (a tab advances to the next four-column stop) and restarts after each container marker, so `>     [S1]` is
+ * code inside a quote, not quoted prose. Misjudging prose as code only drops a citation, which fails closed.
+ */
 function proseLine(line) {
+  let index = 0;
   let column = 0;
-  for (const character of line) {
+  while (index < line.length) {
+    const character = line[index];
     if (character === ' ') column += 1;
     else if (character === '\t') column += 4 - (column % 4);
-    else return true;
+    else break;
     if (column >= 4) return false;
+    index += 1;
   }
-  return false; // a blank or all-whitespace line carries no citation
+  if (index >= line.length) return false; // a blank or all-whitespace line carries no citation
+  const marker = CONTAINER_MARKER.exec(line.slice(index));
+  return marker ? proseLine(line.slice(index + marker[0].length)) : true;
 }
 
 /**
