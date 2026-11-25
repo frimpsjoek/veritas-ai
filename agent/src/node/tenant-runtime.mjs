@@ -78,7 +78,11 @@ export async function createTenantRuntime(deps) {
     await settingsStore.update({ endpoints: [], mcp: [] });
   }
 
-  const httpLibrary = createHttpLibraryBackend(platform.fetch, { baseUrl: deps.kbBaseUrl });
+  // The Python server maps this sidecar-only capability back to the same verified tenant.
+  // Tenant agents can use non-Zotero shared notes, never the operator's Zotero library.
+  const httpLibrary = createHttpLibraryBackend(platform.fetch, {
+    baseUrl: deps.kbBaseUrl, token: deps.agentSecret, tenant,
+  });
   const privateLibrary = {
     ...httpLibrary,
     async writeDigest(file, text) {

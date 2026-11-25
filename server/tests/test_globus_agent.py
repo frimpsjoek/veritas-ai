@@ -115,6 +115,16 @@ def cookie(session, spoof=None):
     return {"Cookie": f"vg_session={session}", **({"X-Veritas-Tenant": spoof} if spoof else {})}
 
 
+def tenant_agent(tenant=TENANT_A):
+    """The capability the tenant sidecar must present to the shared Python library API."""
+    return {"Authorization": f"Bearer {SIDECAR_SECRET}", "X-Veritas-Tenant": tenant,
+            "X-KB-Client": "agent"}
+
+
+def operator_agent():
+    return {"Authorization": "Bearer admin-token", "X-KB-Client": "agent"}
+
+
 def json_call(*args, **kwargs):
     status, headers, body = call(*args, **kwargs)
     return status, headers, json.loads(body)
@@ -303,7 +313,7 @@ def library_server(tenant_server, monkeypatch):
         f"file:{zotero.root() / 'zotero.sqlite'}?mode=ro", uri=True))
     monkeypatch.setattr(http_api.kb, "LAYOUT", sources.Layout(
         root / "vault", False, main, [], [], [],
-        [sources.Folder("main", main, kind="zotero"), sources.Folder("lab", lab, kind="zotero")]))
+        [sources.Folder("main", main, detected="zotero"), sources.Folder("lab", lab, detected="zotero")]))
     monkeypatch.setattr(http_api.kb, "VAULT", root / "vault")
     (root / "vault").mkdir()
     monkeypatch.setattr(http_api.kb, "DB_PATH", root / "index.sqlite")
@@ -334,14 +344,18 @@ def test_pdf_checks_selected_library_parent_before_resolving(library_server, mon
 
 @pytest.mark.parametrize("library", ["", "&library=main", "&library=lab"])
 @pytest.mark.parametrize("admin", [False, True])
-def test_public_pdf_and_range_keep_working(library_server, library, admin):
+def test_operator_pdf_and_range_are_admin_only(library_server, library, admin):
     port, _, _, _ = library_server
     auth = {"Authorization": "Bearer admin-token"} if admin else cookie(SESSION_A)
     path = f"/zotero/pdf?key=PUBATT01{library}"
     status, _, body = call(port, "GET", path, auth)
+    status_range, headers, range_body = call(port, "GET", path, {**auth, "Range": "bytes=0-4"})
+    if not admin:
+        assert status == status_range == 403
+        assert b"fixture" not in body and b"fixture" not in range_body
+        return
     assert status == 200 and body == b"%PDF-1.7 fixture PUBATT01"
-    status, headers, body = call(port, "GET", path, {**auth, "Range": "bytes=0-4"})
-    assert status == 206 and body == b"%PDF-"
+    assert status_range == 206 and range_body == b"%PDF-"
     assert value(headers, "Content-Range") == "bytes 0-4/25"
 
 
@@ -388,7 +402,7 @@ def test_doi_private_copy_denied_before_file_resolution(library_server, monkeypa
 
 
 @pytest.mark.parametrize("private", [False, True])
-def test_linked_pdf_uses_same_parent_guard(library_server, monkeypatch, private):
+def test_linked_pdf_is_admin_only(library_server, monkeypatch, private):
     port, root, main, _ = library_server
     key, item_id = ("ATTACH01", 2) if private else ("PUBATT01", 4)
     linked = root / "linked.pdf"
@@ -398,25 +412,26 @@ def test_linked_pdf_uses_same_parent_guard(library_server, monkeypatch, private)
     db.commit()
     db.close()
     with monkeypatch.context() as patch:
-        if private:
-            patch.setattr(http_api.pdf_route, "_linked", lambda *a: pytest.fail("private linked file accessed"))
+        patch.setattr(http_api.pdf_route, "_linked", lambda *a: pytest.fail("visitor linked file accessed"))
         status, _, body = call(port, "GET", f"/zotero/pdf?key={key}", cookie(SESSION_A))
-        assert status == (403 if private else 200)
-        if not private:
-            assert body == b"%PDF-linked"
+        assert status == 403 and b"%PDF-linked" not in body
     status, _, body = call(port, "GET", f"/zotero/pdf?key={key}", {"Authorization": "Bearer admin-token"})
     assert status == 200 and body == b"%PDF-linked"
 
 
 @pytest.mark.parametrize("admin,doi", [(False, "public"), (True, "private")])
-def test_doi_public_and_admin_access(library_server, admin, doi):
+def test_doi_library_copies_are_admin_only(library_server, admin, doi):
     port, _, _, _ = library_server
     auth = {"Authorization": "Bearer admin-token"} if admin else cookie(SESSION_A)
     query = "?url=https://doi.org/10.1234/" + doi
     status, _, result = json_call(port, "GET", "/web/page" + query, auth)
+    status_pdf, _, data = call(port, "GET", "/web/pdf" + query, {**auth, "Range": "bytes=0-4"})
+    if not admin:
+        assert status == status_pdf == 403
+        assert b"%PDF-" not in data
+        return
     assert status == 200 and result["source"] == "library"
-    status, _, data = call(port, "GET", "/web/pdf" + query, {**auth, "Range": "bytes=0-4"})
-    assert status == 206 and data == b"%PDF-"
+    assert status_pdf == 206 and data == b"%PDF-"
 
 
 @pytest.mark.parametrize("route", ["/web/page", "/web/pdf"])
@@ -440,22 +455,25 @@ def test_doi_unknown_owner_fails_closed_without_private_entries(library_server, 
 
 
 @pytest.mark.parametrize("admin_first", [False, True])
-def test_status_filters_each_response_without_mutating_cache(library_server, admin_first):
+def test_status_is_admin_only_without_mutating_cache(library_server, admin_first):
     port, _, _, _ = library_server
     for admin in (admin_first, not admin_first, admin_first):
         auth = {"Authorization": "Bearer admin-token"} if admin else cookie(SESSION_A)
         status, _, result = json_call(port, "GET", "/zotero/status", auth)
-        assert status == 200
-        assert set(result["items"]) == ({"PARENT01", "PUBLIC01"} if admin else {"PUBLIC01"})
-        assert "PARENT01" in http_api._zotero_status["items"]
-        assert result["updated_at"] == http_api._zotero_status["at"]
+        if admin:
+            assert status == 200 and set(result["items"]) == {"PARENT01", "PUBLIC01"}
+            assert result["updated_at"] == http_api._zotero_status["at"]
+        else:
+            assert status == 403 and "items" not in result
+        if admin or http_api._zotero_status.get("items"):
+            assert set(http_api._zotero_status["items"]) == {"PARENT01", "PUBLIC01"}
 
 
 def test_attachment_guards_are_request_local(library_server):
     port, _, _, _ = library_server
     requests = [
         ("/zotero/pdf?key=ATTACH01&library=lab", cookie(SESSION_A), 403),
-        ("/zotero/pdf?key=PUBATT01&library=main", cookie(SESSION_B), 200),
+        ("/zotero/pdf?key=PUBATT01&library=main", cookie(SESSION_B), 403),
         ("/zotero/pdf?key=ATTACH01&library=lab", {"Authorization": "Bearer admin-token"}, 200),
     ] * 4
     def request(case):
@@ -468,7 +486,7 @@ def test_attachment_guards_are_request_local(library_server):
 @pytest.mark.parametrize("route", ["/paper-note", "/paper-note/body"])
 @pytest.mark.parametrize("private", [False, True])
 @pytest.mark.parametrize("in_papers", [False, True])
-def test_paper_note_guards_resolved_vault_path(library_server, monkeypatch, route, private, in_papers):
+def test_paper_notes_are_admin_only(library_server, monkeypatch, route, private, in_papers):
     port, root, _, _ = library_server
     rel = "Papers/linked.md" if in_papers else "linked.md"
     note = root / "vault" / rel
@@ -488,14 +506,13 @@ def test_paper_note_guards_resolved_vault_path(library_server, monkeypatch, rout
                 return read_text(path, *args, **kwargs)
             patch.setattr(Path, "read_text", checked_read)
         status, _, body = call(port, "GET", route + "?key=PUBLIC01", cookie(SESSION_A))
-        assert status == (403 if private else 200)
-        assert (b"Secret note body" in body) is not private
+        assert status == 403 and b"Secret note body" not in body
     status, _, body = call(port, "GET", route + "?key=PUBLIC01", {"Authorization": "Bearer admin-token"})
     assert status == 200 and b"Secret note body" in body
 
 
-@pytest.mark.parametrize("route,content_field", [("/paper-note", "my_notes"), ("/paper-note/body", "text")])
-def test_paper_note_scan_skips_private_candidate_before_public_match(library_server, monkeypatch, route, content_field):
+@pytest.mark.parametrize("route", ["/paper-note", "/paper-note/body"])
+def test_paper_note_denied_before_operator_library_scan(library_server, monkeypatch, route):
     port, root, _, _ = library_server
     papers = root / "vault" / "Papers"
     papers.mkdir()
@@ -528,15 +545,14 @@ def test_paper_note_scan_skips_private_candidate_before_public_match(library_ser
     monkeypatch.setattr(Path, "read_text", checked_read)
     status, _, result = json_call(port, "GET", route + "?key=PUBLIC01", cookie(SESSION_A))
 
-    assert enumerated == [private, public]
-    assert private not in reads and public in reads
-    assert status == 200 and result["path"] == "Papers/b.md"
-    assert result[content_field].strip() == "Requested public content"
+    assert enumerated == [] and private not in reads and public not in reads
+    assert status == 403
+    assert "Requested public content" not in json.dumps(result)
     assert "Private sentinel" not in json.dumps(result)
 
 
 @pytest.mark.parametrize("prefix", ["", "lab:/"])
-def test_paper_note_reference_enrichment_hides_private_papers(library_server, prefix):
+def test_paper_note_references_are_admin_only(library_server, prefix):
     port, root, _, _ = library_server
     papers = root / "vault" / "Papers"
     papers.mkdir()
@@ -562,9 +578,12 @@ def test_paper_note_reference_enrichment_hides_private_papers(library_server, pr
     for admin in (False, True):
         auth = {"Authorization": "Bearer admin-token"} if admin else cookie(SESSION_A)
         status, _, result = json_call(port, "GET", "/paper-note/body?key=PUBLIC01", auth)
+        if not admin:
+            assert status == 403 and "text" not in result
+            continue
         assert status == 200 and result["text"] == authored
         assert result["hash"] == http_api.paper_notes._hash(authored)
-        assert result["references"] == ([private_ref, public_ref, unknown_ref] if admin else [public_ref, unknown_ref])
+        assert result["references"] == [private_ref, public_ref, unknown_ref]
 
 
 def test_web_state_is_private_per_tenant(tenant_server):
@@ -646,3 +665,88 @@ def test_agent_token_error_is_safe(tenant_server, capsys):
     captured = capsys.readouterr()
     assert "access-A" not in captured.out + captured.err
     assert "access-A" not in body.decode()
+
+
+def test_tenant_library_identity_requires_the_current_sidecar_secret(tenant_server):
+    assert http_api.principal(tenant_agent()) == {"kind": "globus-agent", "tenant": TENANT_A}
+    assert http_api.principal(operator_agent()) == {"kind": "admin"}
+    for headers in (
+        {"X-Veritas-Tenant": TENANT_A, "X-KB-Client": "agent"},
+        {"Authorization": "Bearer wrong", "X-Veritas-Tenant": TENANT_A, "X-KB-Client": "agent"},
+        {"Authorization": f"Bearer {SIDECAR_SECRET}", "X-Veritas-Tenant": "invalid", "X-KB-Client": "agent"},
+    ):
+        assert http_api.principal(headers) is None
+
+
+def test_globus_operator_zotero_and_source_routes_are_admin_only(tenant_server):
+    port, _, _, _ = tenant_server
+    for path in ("/sources", "/zotero?key=PUBLIC01", "/zotero/pdf?key=PUBATT01",
+                 "/zotero/items", "/zotero/collections", "/zotero/status",
+                 "/paper-note?key=PUBLIC01", "/paper-note/body?key=PUBLIC01"):
+        assert call(port, "GET", path, cookie(SESSION_A))[0] == 403, path
+
+
+def test_globus_search_and_note_reads_hide_all_operator_zotero(library_server, monkeypatch):
+    port, _, _, _ = library_server
+    hits = [
+        {"path": "zotero/PUBLIC01", "title": "Operator paper"},
+        {"path": "public.md", "title": "Shared note"},
+    ]
+
+    class Results:
+        def search(self, *args, **kwargs):
+            return hits
+
+    monkeypatch.setattr(http_api, "searcher", lambda: Results())
+    monkeypatch.setattr(http_api.kb, "note_path", lambda path: path)
+    monkeypatch.setattr(http_api.kb, "read_note", lambda path, *args: {
+        "path": path, "title": "Operator paper", "text": "operator Zotero text",
+    })
+
+    status, _, body = json_call(port, "GET", "/search?q=paper", cookie(SESSION_A))
+    assert status == 200 and body == [hits[1]]
+    assert call(port, "GET", "/note?path=zotero/PUBLIC01", cookie(SESSION_A))[0] == 403
+
+    status, _, body = json_call(port, "GET", "/search?q=paper", {"Authorization": "Bearer admin-token"})
+    assert status == 200 and body == hits
+    assert call(port, "GET", "/note?path=zotero/PUBLIC01", {"Authorization": "Bearer admin-token"})[0] == 200
+
+
+def test_tenant_agent_cannot_reach_operator_zotero_but_operator_agent_can(library_server, monkeypatch):
+    port, _, _, _ = library_server
+    hits = [
+        {"path": "zotero/PUBLIC01", "title": "Operator paper"},
+        {"path": "public.md", "title": "Shared note"},
+    ]
+
+    class Results:
+        def search(self, *args, **kwargs):
+            return hits
+
+        def similar_to_text(self, *args, **kwargs):
+            return hits
+
+    results = Results()
+    results.db = http_api.kb.connect()
+    monkeypatch.setattr(http_api, "searcher", lambda: results)
+    monkeypatch.setattr(http_api.kb, "note_path", lambda path: path)
+    monkeypatch.setattr(http_api.kb, "read_note", lambda path, *args: {
+        "path": path, "title": "Operator paper", "text": "operator Zotero text",
+    })
+
+    for tenant in (TENANT_A, TENANT_B):
+        auth = tenant_agent(tenant)
+        status, _, body = json_call(port, "GET", "/search?q=paper", auth)
+        assert status == 200 and body == [hits[1]]
+        assert call(port, "GET", "/note?path=zotero/PUBLIC01", auth)[0] == 403
+        status, _, body = json_call(port, "GET", "/zotero/items", auth)
+        assert status == 200 and body == {"items": []}, body
+        status, _, body = json_call(port, "POST", "/similar", auth, {"text": "paper"})
+        assert status == 200 and body == [hits[1]]
+
+    status, _, body = json_call(port, "GET", "/search?q=paper", operator_agent())
+    assert status == 200 and body == hits
+    status, _, body = json_call(port, "GET", "/zotero/items", operator_agent())
+    assert status == 200 and {item["key"] for item in body["items"]} == {
+        "ATTACH01", "PUBLIC01", "lab:/zotero/PUBLIC01",
+    }

@@ -142,17 +142,20 @@ and can retry after active work finishes.
 
 ## Authorization boundary
 
-Globus users also retain the read-only shared-library routes, subject to the same `privacy.json` private-note hiding and
-read/search size caps as agent requests. They cannot mutate sources/index, write shared skills, use local-only sign-in
-links, select another tenant with a request header or inherit provider settings from the legacy runtime.
-Administrator/Bearer and loopback requests keep the existing global runtime and independent access-code session.
+Globus users retain read-only **non-Zotero** shared-note routes, subject to the same `privacy.json` private-note hiding
+and read/search size caps as agent requests. The operator's Zotero database, items, PDFs, collections and source-list
+paths are administrator-only. Indexed `source='zotero'` rows are also removed from visitors' search, related, recent,
+similar and radar results, and DOI/PDF fallback guards cannot reach a local Zotero attachment. This protects both the
+default library and named or online Zotero sources in the shared index.
 
-Local Zotero PDFs are authorized against their indexed parent in the selected library, not the attachment key.
-This also applies to local copies reached through DOI links in the web page/PDF panel. Unknown, unindexed or
-unreadable ownership fails closed for restricted callers, even when no items are marked private. Named aliases
-of the default library use its unprefixed index paths. Paper-note reads additionally check the resolved vault note
-before reading its content. Zotero status responses omit private item keys without changing the shared status cache;
-administrator reads and PDF Range support retain their existing behavior. Collection metadata policy is unchanged.
+A tenant runtime sends its sidecar secret and verified tenant on loopback library calls. Python accepts that pair only
+when it matches the current sidecar; a tenant header alone, another tenant's session, or a stolen browser cookie does
+not select an agent identity. Owner/admin and legacy loopback agents keep the existing global runtime and their normal
+`privacy.json` behavior, including administrator PDF Range reads.
+
+Globus users cannot mutate sources/index, write shared skills, use local-only sign-in links, select another tenant
+with a request header or inherit provider settings from the legacy runtime. Administrator/Bearer and loopback requests
+keep the existing global runtime and independent access-code session.
 
 ## Optional hosted Zotero WebDAV attachments
 
