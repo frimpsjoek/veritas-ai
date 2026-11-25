@@ -82,10 +82,10 @@ export function providedSourcesInput(question, sources) {
 /** Remove inline/fenced code before checking citations: code neither supports a claim nor counts as one. */
 function renderedProse(markdown) {
   return markdown
-    .replace(/```[\s\S]*?(?:```|$)/g, '')
-    .replace(/~~~[\s\S]*?(?:~~~|$)/g, '')
-    .replace(/`[^`\n]*`/g, '')
-    .replace(/<!--[\s\S]*?(?:-->|$)/g, '');
+    .replace(/```[\s\S]*?(?:```|$)/g, ' ')
+    .replace(/~~~[\s\S]*?(?:~~~|$)/g, ' ')
+    .replace(/`[^`\n]*`/g, ' ')
+    .replace(/<!--[\s\S]*?(?:-->|$)/g, ' ');
 }
 
 /**

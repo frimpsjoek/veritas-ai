@@ -39,6 +39,7 @@ test('normalization rejects empty, malformed, oversized, and unsafe evidence wit
     [{ title: 'Valid', text: 'Evidence', uri: 'https://:80/private' }],
     [{ title: 'Valid', text: 'Evidence', uri: 'https://example.org:99999/private' }],
     [{ title: 'Valid', text: 'Evidence', uri: 'https://%2F/item' }],
+    [{ title: 'Valid', text: 'Evidence', uri: 'https://exa mple.com/item' }],
     [{ title: 'x'.repeat(513), text: 'Evidence' }],
     [{ title: '😀'.repeat(513), text: 'Evidence' }],
     [{ title: 'Valid', text: 'x'.repeat(16385) }],
@@ -88,6 +89,9 @@ test('citation validation accepts only known provided IDs in rendered prose', ()
     '```text\n[S1]\n```',
     'Unsupported claim. <!-- [S1] -->',
     'Unsupported claim. <!-- [S1]',
+    'Manufactured inline citation [S`junk`1].',
+    'Manufactured fenced citation [S```junk```1].',
+    'Manufactured comment citation [S<!-- junk -->1].',
   ]) {
     assert.equal(validProvidedSourceAnswer(answered(markdown), sources), false, markdown);
   }

@@ -180,6 +180,7 @@ def parse_provided_sources(data) -> list[dict]:
             except ValueError:
                 raise RpcError(-32602, "Invalid params") from None
             if (parsed.scheme.lower() not in {"http", "https"} or not hostname or "%" in hostname
+                    or any(character.isspace() for character in hostname)
                     or any(ord(character) < 32 or ord(character) == 127 for character in uri)):
                 raise RpcError(-32602, "Invalid params")
         total_text += len(text)
