@@ -47,6 +47,8 @@ export function normalizeProvidedSources(input) {
     const title = sourceText(source, 'title', PROVIDED_SOURCE_CAPS.title, true);
     const text = sourceText(source, 'text', PROVIDED_SOURCE_CAPS.text, true);
     const citation = sourceText(source, 'citation', PROVIDED_SOURCE_CAPS.citation, false);
+    if (typeof source.uri === 'string'
+        && [...source.uri].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) invalid();
     const uri = sourceText(source, 'uri', PROVIDED_SOURCE_CAPS.uri, false);
     if (uri) {
       if ([...uri].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) invalid();
@@ -93,7 +95,7 @@ export function validProvidedSourceAnswer(result, sources) {
   if (!result || !['answered', 'not_found'].includes(result.status) || typeof result.markdown !== 'string') return false;
   const prose = renderedProse(result.markdown);
   if (/\[\[|\[\@|\[\^|https?:\/\/|\[[^\]\n]*\]\s*\(/i.test(prose)) return false;
-  const citations = [...prose.matchAll(/\[S[^\]\n]*\]/g)].map((match) => match[0]);
+  const citations = [...prose.matchAll(/\[[^\]\n]*\]/g)].map((match) => match[0]);
   const allowed = new Set(sources.map((source) => `[${source.id}]`));
   if (citations.some((citation) => !allowed.has(citation))) return false;
   return result.status === 'not_found' || citations.length > 0;

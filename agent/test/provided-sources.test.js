@@ -31,6 +31,9 @@ test('normalization rejects empty, malformed, oversized, and unsafe evidence wit
     [{ title: 'secret unknown', text: 'Evidence', id: 'S1' }],
     [{ title: 'Valid', text: 'Evidence', uri: 'javascript:secret-uri' }],
     [{ title: 'Valid', text: 'Evidence', uri: 'https://example.org/private\nmarker' }],
+    [{ title: 'Valid', text: 'Evidence', uri: 'https://example.org/private\n' }],
+    [{ title: 'Valid', text: 'Evidence', uri: 'https://:80/private' }],
+    [{ title: 'Valid', text: 'Evidence', uri: 'https://example.org:99999/private' }],
     [{ title: 'x'.repeat(513), text: 'Evidence' }],
     [{ title: 'Valid', text: 'x'.repeat(16385) }],
     Array.from({ length: 17 }, (_, i) => ({ title: String(i), text: 'Evidence' })),
@@ -66,6 +69,8 @@ test('citation validation accepts only known provided IDs in rendered prose', ()
   for (const markdown of [
     'Unsupported evidence [S2].',
     'Malformed [S0] and [S01].',
+    'Noncanonical [s1] alongside a valid citation [S1].',
+    'Unsupported label [note] alongside a valid citation [S1].',
     'No citation in this answered result.',
     'Library citation [[Notebook]].',
     'Paper citation [@paper].',

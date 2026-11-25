@@ -168,13 +168,18 @@ def parse_provided_sources(data) -> list[dict]:
         title = _source_text(source, "title", MAX_SOURCE_TITLE_CHARS, required=True)
         text = _source_text(source, "text", MAX_SOURCE_TEXT_CHARS, required=True)
         citation = _source_text(source, "citation", MAX_SOURCE_CITATION_CHARS, required=False)
+        raw_uri = source.get("uri")
+        if isinstance(raw_uri, str) and any(ord(character) < 32 or ord(character) == 127 for character in raw_uri):
+            raise RpcError(-32602, "Invalid params")
         uri = _source_text(source, "uri", MAX_SOURCE_URI_CHARS, required=False)
         if uri:
             try:
                 parsed = urlsplit(uri)
+                hostname = parsed.hostname
+                parsed.port
             except ValueError:
                 raise RpcError(-32602, "Invalid params") from None
-            if (parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc
+            if (parsed.scheme.lower() not in {"http", "https"} or not hostname
                     or any(ord(character) < 32 or ord(character) == 127 for character in uri)):
                 raise RpcError(-32602, "Invalid params")
         total_text += len(text)
