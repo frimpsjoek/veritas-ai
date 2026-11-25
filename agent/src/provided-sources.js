@@ -27,7 +27,8 @@ function sourceText(source, field, cap, required) {
     return '';
   }
   const trimmed = value.trim();
-  if ((required && !trimmed) || trimmed.length > cap) invalid();
+  const length = [...trimmed].length;
+  if ((required && !trimmed) || length > cap) invalid();
   return trimmed;
 }
 
@@ -56,7 +57,7 @@ export function normalizeProvidedSources(input) {
       try { parsed = new URL(uri); } catch { invalid(); }
       if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname) invalid();
     }
-    totalText += text.length;
+    totalText += [...text].length;
     if (totalText > PROVIDED_SOURCE_CAPS.totalText) invalid();
     normalized.push({
       id: `S${normalized.length + 1}`, title, text,
@@ -83,7 +84,8 @@ function renderedProse(markdown) {
   return markdown
     .replace(/```[\s\S]*?(?:```|$)/g, '')
     .replace(/~~~[\s\S]*?(?:~~~|$)/g, '')
-    .replace(/`[^`\n]*`/g, '');
+    .replace(/`[^`\n]*`/g, '')
+    .replace(/<!--[\s\S]*?(?:-->|$)/g, '');
 }
 
 /**

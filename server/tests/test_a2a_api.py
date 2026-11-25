@@ -250,6 +250,7 @@ def test_provided_source_calls_do_not_reuse_context_or_evidence(server, monkeypa
     (provided_parts([{"title": "Valid", "text": "Evidence", "uri": "https://example.org/private\n"}]), None),
     (provided_parts([{"title": "Valid", "text": "Evidence", "uri": "https://:80/private"}]), None),
     (provided_parts([{"title": "Valid", "text": "Evidence", "uri": "https://example.org:99999/private"}]), None),
+    (provided_parts([{"title": "Valid", "text": "Evidence", "uri": "https://%2F/item"}]), None),
     (provided_parts([{"title": "x" * 513, "text": "Evidence"}]), None),
     (provided_parts([{"title": "Valid", "text": "x" * 16385}]), None),
     (provided_parts([{"title": str(i), "text": "Evidence"} for i in range(17)]), None),

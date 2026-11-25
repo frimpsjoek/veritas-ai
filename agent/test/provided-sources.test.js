@@ -23,6 +23,10 @@ test('normalization assigns fresh canonical IDs and retains only supported metad
   assert.deepEqual(first, second);
   assert.notEqual(first, second);
   assert.notEqual(first[0], second[0], 'fresh objects avoid cross-call mutation');
+  const boundaryTitle = '😀'.repeat(512);
+  assert.equal(normalizeProvidedSources([{ title: boundaryTitle, text: 'Evidence' }])[0].title, boundaryTitle);
+  const aggregate = Array.from({ length: 8 }, () => ({ title: 'Unicode', text: '😀'.repeat(16000) }));
+  assert.equal(normalizeProvidedSources(aggregate).length, 8, 'aggregate caps count code points, not UTF-16 units');
 });
 
 test('normalization rejects empty, malformed, oversized, and unsafe evidence without echoing it', () => {
@@ -34,7 +38,9 @@ test('normalization rejects empty, malformed, oversized, and unsafe evidence wit
     [{ title: 'Valid', text: 'Evidence', uri: 'https://example.org/private\n' }],
     [{ title: 'Valid', text: 'Evidence', uri: 'https://:80/private' }],
     [{ title: 'Valid', text: 'Evidence', uri: 'https://example.org:99999/private' }],
+    [{ title: 'Valid', text: 'Evidence', uri: 'https://%2F/item' }],
     [{ title: 'x'.repeat(513), text: 'Evidence' }],
+    [{ title: '😀'.repeat(513), text: 'Evidence' }],
     [{ title: 'Valid', text: 'x'.repeat(16385) }],
     Array.from({ length: 17 }, (_, i) => ({ title: String(i), text: 'Evidence' })),
     [...Array.from({ length: 8 }, (_, i) => ({ title: String(i), text: 'x'.repeat(16000) })), { title: 'last', text: 'x' }],
@@ -66,6 +72,7 @@ test('citation validation accepts only known provided IDs in rendered prose', ()
   assert.equal(validProvidedSourceAnswer(answered('Repeated evidence [S1] [S1].'), sources), true);
   assert.equal(validProvidedSourceAnswer({ status: 'not_found', markdown: 'The supplied evidence does not answer this.' }, sources), true);
   assert.equal(validProvidedSourceAnswer(answered('```js\nconst id = "[S1]";\n```\nReal citation [S1].'), sources), true);
+  assert.equal(validProvidedSourceAnswer(answered('Real citation [S1]. <!-- Unknown [S2] -->'), sources), true);
   for (const markdown of [
     'Unsupported evidence [S2].',
     'Malformed [S0] and [S01].',
@@ -79,6 +86,8 @@ test('citation validation accepts only known provided IDs in rendered prose', ()
     'Linked citation [S1](https://evil.example/).',
     'Code-only citation: `[S1]`',
     '```text\n[S1]\n```',
+    'Unsupported claim. <!-- [S1] -->',
+    'Unsupported claim. <!-- [S1]',
   ]) {
     assert.equal(validProvidedSourceAnswer(answered(markdown), sources), false, markdown);
   }
