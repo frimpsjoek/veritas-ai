@@ -140,7 +140,14 @@ test('answer grammar rejects uncited, noncanonical, hidden, manufactured, and li
     'Relative linked citation [S1](/evil).',
     'Spaced link syntax [S1] (/evil).',
     'Reference link [S1][S1] in prose.',
+    // A link reference definition is visible to the whole document from inside any container block.
     '[S1]: /evil\n\nClaim [S1].',
+    '> [S1]: /evil\n\nClaim [S1].',
+    '- [S1]: /evil\n\nClaim [S1].',
+    '> - [S1]: /evil\n\nClaim [S1].',
+    '    [S1]: /evil\n\nClaim [S1].',
+    '[S1] : /evil\n\nClaim [S1].',
+    '[S1]\t: /evil\n\nClaim [S1].',
     'Image citation ![S1](/evil).',
     // Entities and lookalikes render characters the scanner never saw.
     'Entity citation &#91;S9&#93; beside [S1].',

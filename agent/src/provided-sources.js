@@ -92,7 +92,7 @@ const FORBIDDEN_MARKUP = Object.freeze([
   /`/,                                                  // code spans and backtick fences hide text from the reader
   /~~~/,                                                // tilde fences do the same
   /<[A-Za-z!/?]/,                                       // raw HTML tags, comments, declarations, and autolinks
-  /^ {0,3}\[[^\]\n]*\]:/m,                              // a link reference definition turns a later citation into a link
+  /\]\s*:/,                                             // a link reference definition, in any container block, turns a later citation into a link
   /\]\s*\(/,                                            // inline links, including the spaced form some renderers accept
   /\]\[/,                                               // full and collapsed reference links; `[S1] [S2]` stays prose
   /[A-Za-z][A-Za-z0-9+.-]*:\/\//,                       // any URL scheme, linkified by renderers or not
